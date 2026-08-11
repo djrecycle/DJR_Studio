@@ -16,7 +16,8 @@ const juce::String DJRStudioApplication::getApplicationName()
 
 const juce::String DJRStudioApplication::getApplicationVersion()
 {
-    return "0.1.0";
+    // Comes from CMake, which derives it from git; see DJR_VERSION_BASE.
+    return DJR_STUDIO_VERSION_STRING;
 }
 
 bool DJRStudioApplication::moreThanOneInstanceAllowed()
@@ -27,7 +28,7 @@ bool DJRStudioApplication::moreThanOneInstanceAllowed()
 void DJRStudioApplication::initialise(const juce::String& commandLine)
 {
     juce::ignoreUnused(commandLine);
-    Logger::write("Starting DJR_Studio 0.1.0");
+    Logger::write("Starting DJR_Studio " + getApplicationVersion());
     mainWindow = std::make_unique<MainWindow>(getApplicationName());
 }
 
