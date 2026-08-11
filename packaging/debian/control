@@ -1,0 +1,11 @@
+Package: djr-studio
+Version: 0.1.0
+Section: sound
+Priority: optional
+Architecture: amd64
+Maintainer: Rangga
+Depends: libasound2, libjack-jackd2-0, libfreetype6, libx11-6, libxext6, libxinerama1, libxcursor1, libxrandr2, libgl1, libcurl4
+Description: DJR_Studio Linux DAW prototype
+ DJR_Studio is a native JUCE-based DAW prototype for Linux with a modular
+ audio engine, MIDI tools, mixer, piano roll, step sequencer, VST3 host
+ foundation, project saving, recording, export, and Debian packaging.
