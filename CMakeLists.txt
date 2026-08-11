@@ -175,17 +175,25 @@ if(TARGET PkgConfig::JACK)
     target_link_libraries(djr_studio PRIVATE PkgConfig::JACK)
 endif()
 
+# Everything the app needs at runtime goes in one component. JUCE is pulled in
+# with FetchContent and brings its own install rules - headers, cmake config,
+# helper tools - which have no business in a user facing .deb, so the package is
+# limited to this component below.
 install(TARGETS djr_studio
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT runtime)
 
 install(FILES packaging/djr_studio.desktop
-    DESTINATION share/applications)
+    DESTINATION share/applications
+    COMPONENT runtime)
 
 install(FILES packaging/icons/djr_studio.png
-    DESTINATION share/icons/hicolor/256x256/apps)
+    DESTINATION share/icons/hicolor/256x256/apps
+    COMPONENT runtime)
 
 install(DIRECTORY resources/
-    DESTINATION share/djr_studio)
+    DESTINATION share/djr_studio
+    COMPONENT runtime)
 
 option(DJR_STUDIO_BUILD_TESTS "Build DJR_Studio unit smoke tests" OFF)
 if(DJR_STUDIO_BUILD_TESTS)
@@ -194,6 +202,10 @@ if(DJR_STUDIO_BUILD_TESTS)
 endif()
 
 set(CPACK_GENERATOR "DEB")
+# Package only our runtime files; see the install rules above for why.
+# CPACK_COMPONENTS_ALL alone is ignored by the monolithic DEB generator, so the
+# component has to be named here: "<build dir>;<project>;<component>;<subdir>".
+set(CPACK_INSTALL_CMAKE_PROJECTS "${CMAKE_BINARY_DIR};${PROJECT_NAME};runtime;/")
 set(CPACK_PACKAGE_NAME "djr-studio")
 set(CPACK_PACKAGE_VERSION "${DJR_VERSION_BASE}")
 # A tilde sorts *below* the plain version in Debian, which is exactly what a
