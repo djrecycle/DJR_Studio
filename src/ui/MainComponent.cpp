@@ -1,0 +1,1656 @@
+#include "MainComponent.h"
+
+#include "Theme.h"
+#include "utils/FileUtils.h"
+#include "utils/Logger.h"
+
+namespace djr
+{
+
+namespace
+{
+    constexpr int menuBarHeight = Metrics::menuBarHeight;
+    constexpr int transportHeight = Metrics::transportHeight;
+    constexpr int statusBarHeight = Metrics::statusBarHeight;
+    constexpr int bottomBrowserHeight = 170;
+    constexpr int gap = Metrics::gap;
+
+    const juce::String playlistPanelId = "playlist";
+    const juce::String editorPanelId = "editor";
+    const juce::String mixerPanelId = "mixer";
+    const juce::String pluginsPanelId = "plugins";
+    const juce::String insertPanelId = "inserts";
+}
+
+MainComponent::MainComponent()
+    : midiEngine(audioEngine.getDeviceManager(), audioEngine.getTransport()),
+      transportBar(audioEngine),
+      arrangementView(audioEngine.getMixer(), audioEngine.getTransport()),
+      editorPanel(pianoRollModel, audioEngine.getTransport()),
+      pluginBrowserView(pluginManager, audioEngine.getMixer()),
+      insertChainPanel(audioEngine.getMixer()),
+      mixerView(audioEngine.getMixer()),
+      statusBar(audioEngine),
+      preferencesDialog(audioEngine.getDeviceManager())
+{
+    juce::LookAndFeel::setDefaultLookAndFeel(&lookAndFeel);
+    tooltipWindow = std::make_unique<juce::TooltipWindow>(this, 600);
+    audioFormats.registerBasicFormats();
+
+    workspace.onResized = [this] { layoutWorkspace(); };
+
+    addAndMakeVisible(workspace);
+
+    workspace.addAndMakeVisible(menuBar);
+    workspace.addAndMakeVisible(transportBar);
+    workspace.addAndMakeVisible(browserPanel);
+    workspace.addAndMakeVisible(panelHost);
+    workspace.addAndMakeVisible(statusBar);
+
+    panelHost.addPanel(playlistPanelId, "Playlist", Icon::lines, arrangementView);
+    panelHost.addPanel(editorPanelId, "Editor", Icon::notes, editorPanel);
+    panelHost.addPanel(mixerPanelId, "Mixer", Icon::waveform, mixerView);
+    panelHost.addPanel(pluginsPanelId, "Plugins", Icon::plug, pluginBrowserView);
+    panelHost.addPanel(insertPanelId, "Insert Chain", Icon::panel, insertChainPanel);
+
+    panelHost.setLayoutBuilder([this] (PanelHost& host, juce::Rectangle<int> area)
+    {
+        buildDefaultPanelLayout(host, area);
+    });
+    panelHost.onPanelStateChanged = [this] { refreshMenuState(); };
+
+    workspace.addChildComponent(projectManagerDialog);
+    workspace.addChildComponent(preferencesDialog);
+
+    // Wiring -----------------------------------------------------------------
+    menuBar.setCommandHandler([this] (AppCommand command) { handleCommand(command); });
+
+    browserPanel.setCollapseToggleCallback([this] { toggleBrowserCollapsed(); });
+    browserPanel.setMinimizeToggleCallback([this] { toggleBrowserMinimized(); });
+    browserPanel.setDockCycleCallback([this] { cycleBrowserDock(); });
+    browserPanel.setFileActivatedCallback([this] (const juce::File& file)
+    {
+        if (file.hasFileExtension(".djrs"))
+        {
+            openProjectFile(file);
+            return;
+        }
+
+        if (file.hasFileExtension(".wav;.aif;.aiff;.flac;.mp3;.ogg"))
+        {
+            // Drop it on the selected audio track at the playhead.
+            addAudioClipToTrack(sessionState.getSelectedTrack(),
+                                file,
+                                audioEngine.getTransport().getPositionBeats());
+            return;
+        }
+
+        setStatusMessage("Preview " + file.getFileName() + " belum didukung.");
+    });
+
+    transportBar.setSnapChangeCallback([this] (SnapUnit unit)
+    {
+        // Each editor resolves Line and Cell against its own zoom and grid.
+        arrangementView.setSnapUnit(unit);
+        editorPanel.setSnapUnit(unit);
+        setStatusMessage("Snap: " + getSnapUnitLabel(unit));
+    });
+    transportBar.setPatternModeChangeCallback([this] (bool patternMode)
+    {
+        sessionState.setSongMode(! patternMode);
+        setStatusMessage(patternMode
+                             ? "Pattern mode: pattern aktif diulang."
+                             : "Song mode: memainkan penempatan pattern di playlist.");
+    });
+    transportBar.setRecordToggleCallback([this] { toggleRecording(); });
+    transportBar.setTimeSignatureChangeCallback([this]
+    {
+        // Bar lines, the loop length and the step grid all derive from this.
+        refreshPatternLength();
+        arrangementView.repaint();
+        editorPanel.repaint();
+        markDirty();
+        setStatusMessage("Time signature: "
+                       + juce::String(audioEngine.getTransport().getTimeSignatureNumerator()) + "/"
+                       + juce::String(audioEngine.getTransport().getTimeSignatureDenominator()));
+    });
+    transportBar.setMetronomeToggleCallback([this] { toggleMetronome(); });
+    transportBar.setUndoCallback([this] { undoEdit(); });
+    transportBar.setRedoCallback([this] { redoEdit(); });
+
+    arrangementView.setTrackSelectedCallback([this] (int trackIndex) { selectTrack(trackIndex); });
+    arrangementView.setClipEditedCallback([this]
+    {
+        pianoRollModel.notifyClipChanged();
+        markDirty();
+    });
+    arrangementView.setTrackListChangedCallback([this]
+    {
+        mixerView.refreshStrips();
+        insertChainPanel.refresh();
+        pluginBrowserView.refreshTrackList();
+        selectTrack(arrangementView.getSelectedTrack());
+        markDirty();
+    });
+
+    arrangementView.setClipOpenRequestCallback([this] (int trackIndex, int patternIndex)
+    {
+        // Double clicking a clip should land you on its notes: right track, right
+        // pattern, editor open and showing the piano roll.
+        selectTrack(trackIndex);
+        sessionState.setActivePattern(patternIndex);
+        panelHost.setPanelOpen(editorPanelId, true);
+
+        // Editing notes wants the room, so the editor comes up full size.
+        if (auto* panel = panelHost.findPanel(editorPanelId))
+        {
+            panel->setRolledUp(false);
+            panel->setMaximised(true);
+            panel->toFront(true);
+        }
+
+        editorPanel.showPianoRoll();
+        refreshMenuState();
+        setStatusMessage("Piano roll: " + juce::String(getTrack(trackIndex) != nullptr
+                                                           ? getTrack(trackIndex)->getName()
+                                                           : juce::String())
+                       + " - PAT " + juce::String(patternIndex + 1));
+    });
+
+    arrangementView.setPatternNameProvider([this] (int patternIndex)
+    {
+        return sessionState.getPatternName(patternIndex);
+    });
+    arrangementView.setPatternRenameCallback([this] (int patternIndex) { renamePattern(patternIndex); });
+    editorPanel.setPatternRenameCallback([this] { renamePattern(sessionState.getActivePattern()); });
+
+    wireUndoHooks();
+
+    editorPanel.setViewChangedCallback([this] { refreshMenuState(); });
+    editorPanel.setPatternChangedCallback([this] (int patternIndex)
+    {
+        sessionState.setActivePattern(patternIndex);
+    });
+    editorPanel.setPatternLengthChangedCallback([this] (double beats)
+    {
+        sessionState.setPatternLengthBeats(sessionState.getActivePattern(), beats);
+        refreshPatternLength();
+        setStatusMessage(beats <= 0.0
+                             ? "Panjang pattern mengikuti isinya."
+                             : "Panjang pattern dikunci di "
+                                   + juce::String(beats / audioEngine.getTransport().getBeatsPerBar(), 0)
+                                   + " bar.");
+    });
+    editorPanel.setKeyboardMessageCallback([this] (const juce::MidiMessage& message)
+    {
+        midiEngine.postLiveMessage(message);
+    });
+
+    pluginBrowserView.setLoadPluginCallback([this] (int pluginIndex, int trackIndex)
+    {
+        loadSelectedPluginIntoTrack(pluginIndex, trackIndex);
+    });
+    pluginBrowserView.setOpenEditorCallback([this] (int trackIndex) { openTrackPluginEditor(trackIndex); });
+    pluginBrowserView.setStatusCallback([this] (const juce::String& text) { setStatusMessage(text); });
+
+    insertChainPanel.setLoadSelectedPluginCallback([this] (int trackIndex)
+    {
+        loadSelectedPluginIntoTrack(pluginBrowserView.getSelectedPluginIndex(), trackIndex);
+    });
+    insertChainPanel.setOpenEditorCallback([this] (int trackIndex) { openTrackPluginEditor(trackIndex); });
+    insertChainPanel.setOpenSlotCallback([this] (int trackIndex, int slotIndex)
+    {
+        openTrackPlugin(trackIndex,
+                        slotIndex < 0 ? PluginSlot::instrument : PluginSlot::insert,
+                        juce::jmax(0, slotIndex));
+    });
+
+    projectManagerDialog.setCloseCallback([this] { closeDialogs(); });
+    projectManagerDialog.setNewProjectCallback([this] { closeDialogs(); newProject(); });
+    projectManagerDialog.setBrowseCallback([this] { closeDialogs(); openProject(); });
+    projectManagerDialog.setOpenProjectCallback([this] (const juce::File& file)
+    {
+        closeDialogs();
+        openProjectFile(file);
+    });
+
+    preferencesDialog.setCloseCallback([this] { closeDialogs(); });
+    preferencesDialog.setThemeChangedCallback([this] (ThemeVariant variant) { applyThemeVariant(variant); });
+    preferencesDialog.setScaleChangedCallback([this] (int percent) { setDisplayScalePercent(percent); });
+    preferencesDialog.setScanRequestedCallback([this] { handleCommand(AppCommand::scanPlugins); });
+    preferencesDialog.setTooltipsChangedCallback([this] (bool enabled)
+    {
+        tooltipWindow = enabled ? std::make_unique<juce::TooltipWindow>(this, 600) : nullptr;
+    });
+    preferencesDialog.setAutoScrollChangedCallback([this] (bool enabled)
+    {
+        arrangementView.setFollowPlayhead(enabled);
+    });
+    preferencesDialog.setAutoOpenEditorChangedCallback([this] (bool enabled)
+    {
+        autoOpenPluginEditor = enabled;
+    });
+    preferencesDialog.setToggleStates(true, arrangementView.isFollowingPlayhead(), autoOpenPluginEditor);
+
+    mixerView.setTrackSelectedCallback([this] (int trackIndex) { selectTrack(trackIndex); });
+
+    sessionState.addChangeListener(this);
+    pianoRollModel.addChangeListener(this);
+    projectManager.addChangeListener(this);
+    pluginManager.addChangeListener(this);
+
+    setWantsKeyboardFocus(true);
+    setSize(1600, 1000);
+
+    if (! audioEngine.initialise())
+        Logger::write("Audio engine started without an active device.");
+
+    // Live playing reaches the graph only once the engine knows where to pull it.
+    audioEngine.setLiveMidiSource(&midiEngine);
+    startTimerHz(12);
+
+    refreshBrowserLayoutState();
+    syncBrowserVst3Library();
+    selectTrack(0);
+    refreshMenuState();
+    browserPanel.refreshContent();
+    projectDirty = false;
+}
+
+MainComponent::~MainComponent()
+{
+    stopTimer();
+    audioEngine.stopAudioRecording();
+    audioEngine.setLiveMidiSource(nullptr);
+    sessionState.removeChangeListener(this);
+    pianoRollModel.removeChangeListener(this);
+    projectManager.removeChangeListener(this);
+    pluginManager.removeChangeListener(this);
+    audioEngine.shutdown();
+
+    tooltipWindow = nullptr;
+    pluginWindows.clear();
+    juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
+}
+
+void MainComponent::paint(juce::Graphics& g)
+{
+    g.fillAll(Theme::windowBackground());
+}
+
+void MainComponent::resized()
+{
+    workspace.setTransform(juce::AffineTransform());
+
+    const auto area = getLocalBounds();
+    const auto scaledWidth = juce::jmax(1, juce::roundToInt(static_cast<float>(area.getWidth()) / displayScale));
+    const auto scaledHeight = juce::jmax(1, juce::roundToInt(static_cast<float>(area.getHeight()) / displayScale));
+    workspace.setBounds(0, 0, scaledWidth, scaledHeight);
+    workspace.setTransform(juce::AffineTransform::scale(displayScale));
+
+    layoutWorkspace();
+}
+
+void MainComponent::layoutWorkspace()
+{
+    auto area = workspace.getLocalBounds();
+
+    projectManagerDialog.setBounds(area);
+    preferencesDialog.setBounds(area);
+
+    menuBar.setBounds(area.removeFromTop(menuBarHeight));
+    transportBar.setBounds(area.removeFromTop(transportHeight));
+    statusBar.setBounds(area.removeFromBottom(statusBarHeight));
+
+    area = area.reduced(gap);
+
+    if (browserVisible)
+    {
+        const auto sideWidth = getBrowserPrimarySize();
+
+        switch (browserDockPosition)
+        {
+            case BrowserDockPosition::right:
+                browserPanel.setBounds(area.removeFromRight(sideWidth));
+                area.removeFromRight(gap);
+                break;
+
+            case BrowserDockPosition::bottom:
+            {
+                const auto height = browserCollapsed ? 60 : (browserMinimized ? 118 : bottomBrowserHeight);
+                browserPanel.setBounds(area.removeFromBottom(height));
+                area.removeFromBottom(gap);
+                break;
+            }
+
+            case BrowserDockPosition::left:
+            default:
+                browserPanel.setBounds(area.removeFromLeft(sideWidth));
+                area.removeFromLeft(gap);
+                break;
+        }
+    }
+
+    panelHost.setBounds(area);
+}
+
+void MainComponent::buildDefaultPanelLayout(PanelHost& host, juce::Rectangle<int> area)
+{
+    // Familiar DAW tiling: playlist over editor on the left, plugin rack on the
+    // right, mixer across the bottom. Every panel is free to move from here.
+    const auto mixerHeight = juce::jlimit(120, 220, area.getHeight() / 3);
+    const auto rightWidth = juce::jlimit(200, 320, area.getWidth() / 4);
+
+    auto remaining = area;
+    auto mixerRow = remaining.removeFromBottom(mixerHeight);
+    remaining.removeFromBottom(gap);
+
+    auto rightColumnArea = remaining.removeFromRight(rightWidth);
+    remaining.removeFromRight(gap);
+
+    auto pluginsArea = rightColumnArea.removeFromTop(juce::jmax(120, rightColumnArea.getHeight() * 3 / 5));
+    rightColumnArea.removeFromTop(gap);
+
+    auto playlistArea = remaining.removeFromTop(juce::jmax(120, remaining.getHeight() / 2));
+    remaining.removeFromTop(gap);
+
+    const auto place = [&host] (const juce::String& id, juce::Rectangle<int> bounds)
+    {
+        if (auto* panel = host.findPanel(id))
+            panel->setRestoredBounds(bounds);
+    };
+
+    place(playlistPanelId, playlistArea);
+    place(editorPanelId, remaining);
+    place(pluginsPanelId, pluginsArea);
+    place(insertPanelId, rightColumnArea);
+    place(mixerPanelId, mixerRow);
+}
+
+void MainComponent::handleCommand(AppCommand command)
+{
+    switch (command)
+    {
+        case AppCommand::newProject:          newProject(); break;
+        case AppCommand::openProject:         openProject(); break;
+        case AppCommand::saveProject:         saveProject(false); break;
+        case AppCommand::saveProjectAs:       saveProject(true); break;
+
+        case AppCommand::exportAudio:
+            exportAudio();
+            break;
+
+        case AppCommand::showProjectManager:
+            projectManagerDialog.refresh();
+            showDialog(&projectManagerDialog);
+            break;
+
+        case AppCommand::showPreferences:
+            preferencesDialog.showPage(3);
+            showDialog(&preferencesDialog);
+            break;
+
+        case AppCommand::audioSettings:
+            preferencesDialog.showPage(0);
+            showDialog(&preferencesDialog);
+            break;
+
+        case AppCommand::quit:
+            juce::JUCEApplication::getInstance()->systemRequestedQuit();
+            break;
+
+        case AppCommand::scanPlugins:
+            setStatusMessage("Scanning folder VST3...");
+            pluginManager.scanVst3Async();
+            browserPanel.setScanProgress(true, 0, 0, "");
+            break;
+
+        case AppCommand::about:
+            // The version carries the git describe, so a bug report can always
+            // be tied back to the exact commit it came from.
+            showError("DJR_Studio",
+                      "DJR_Studio " + juce::String(DJR_STUDIO_VERSION_STRING)
+                          + "\nLinux DAW - masih beta"
+                          + "\nJUCE " + juce::SystemStats::getJUCEVersion());
+            break;
+
+        case AppCommand::toggleMetronome: toggleMetronome(); break;
+        case AppCommand::countInOff:     setCountInBars(0); break;
+        case AppCommand::countInOneBar:  setCountInBars(1); break;
+        case AppCommand::countInTwoBars: setCountInBars(2); break;
+
+        case AppCommand::undo: undoEdit(); break;
+        case AppCommand::redo: redoEdit(); break;
+
+        case AppCommand::togglePlaylist:    panelHost.togglePanel(playlistPanelId); break;
+        case AppCommand::toggleEditor:      panelHost.togglePanel(editorPanelId); break;
+        case AppCommand::toggleMixer:       panelHost.togglePanel(mixerPanelId); break;
+        case AppCommand::togglePlugins:     panelHost.togglePanel(pluginsPanelId); break;
+        case AppCommand::toggleInsertChain: panelHost.togglePanel(insertPanelId); break;
+
+        case AppCommand::resetPanelLayout:
+            panelHost.resetLayout();
+            setStatusMessage("Layout panel dikembalikan ke default.");
+            break;
+
+        case AppCommand::toggleBrowser:        toggleBrowserVisible(); break;
+        case AppCommand::cycleBrowserDock:     cycleBrowserDock(); break;
+
+        case AppCommand::toggleVelocityLane:
+            editorPanel.setVelocityLaneVisible(! editorPanel.isVelocityLaneVisible());
+            refreshMenuState();
+            break;
+
+        case AppCommand::showPianoRoll:
+            editorPanel.showPianoRoll();
+            break;
+
+        case AppCommand::showStepSequencer:
+            editorPanel.showStepSequencer();
+            break;
+    }
+}
+
+void MainComponent::setDisplayScalePercent(int percent)
+{
+    const auto clamped = juce::jlimit(60, 140, percent);
+    displayScale = static_cast<float>(clamped) / 100.0f;
+    preferencesDialog.setScalePercent(clamped);
+    resized();
+    repaint();
+}
+
+void MainComponent::applyThemeVariant(ThemeVariant variant)
+{
+    Theme::setVariant(variant);
+    lookAndFeel.refreshColours();
+    sendLookAndFeelChange();
+    repaint();
+    setStatusMessage("Theme: " + Theme::getVariantName(variant) + ".");
+}
+
+void MainComponent::toggleBrowserCollapsed()
+{
+    browserCollapsed = ! browserCollapsed;
+    refreshBrowserLayoutState();
+    resized();
+    repaint();
+}
+
+void MainComponent::toggleBrowserMinimized()
+{
+    if (browserCollapsed)
+        browserCollapsed = false;
+
+    browserMinimized = ! browserMinimized;
+    refreshBrowserLayoutState();
+    resized();
+    repaint();
+}
+
+void MainComponent::cycleBrowserDock()
+{
+    if (browserDockPosition == BrowserDockPosition::left)
+        browserDockPosition = BrowserDockPosition::right;
+    else if (browserDockPosition == BrowserDockPosition::right)
+        browserDockPosition = BrowserDockPosition::bottom;
+    else
+        browserDockPosition = BrowserDockPosition::left;
+
+    refreshBrowserLayoutState();
+    resized();
+    repaint();
+}
+
+void MainComponent::toggleBrowserVisible()
+{
+    browserVisible = ! browserVisible;
+    browserPanel.setVisible(browserVisible);
+    refreshBrowserLayoutState();
+    refreshMenuState();
+    resized();
+    repaint();
+}
+
+void MainComponent::refreshBrowserLayoutState()
+{
+    browserPanel.setCollapsed(browserCollapsed);
+    browserPanel.setMinimized(browserMinimized);
+
+    auto dock = BrowserPanel::DockPosition::left;
+    if (browserDockPosition == BrowserDockPosition::right)
+        dock = BrowserPanel::DockPosition::right;
+    else if (browserDockPosition == BrowserDockPosition::bottom)
+        dock = BrowserPanel::DockPosition::bottom;
+
+    browserPanel.setDockPosition(dock);
+    browserPanel.setVisible(browserVisible);
+
+}
+
+void MainComponent::refreshMenuState()
+{
+    ViewState state;
+    state.playlistVisible = panelHost.isPanelOpen(playlistPanelId);
+    state.editorVisible = panelHost.isPanelOpen(editorPanelId);
+    state.mixerVisible = panelHost.isPanelOpen(mixerPanelId);
+    state.pluginsVisible = panelHost.isPanelOpen(pluginsPanelId);
+    state.insertChainVisible = panelHost.isPanelOpen(insertPanelId);
+    state.velocityLaneVisible = editorPanel.isVelocityLaneVisible();
+    state.browserVisible = browserVisible;
+    state.pianoRollSelected = editorPanel.isPianoRollVisible();
+    state.canUndo = editHistory.canUndo();
+    state.canRedo = editHistory.canRedo();
+    state.metronomeOn = audioEngine.getMetronome().isEnabled();
+    state.countInBars = countInBars;
+    state.undoName = editHistory.getUndoName();
+    state.redoName = editHistory.getRedoName();
+    menuBar.setViewState(state);
+
+    // The header buttons follow the same state as the menu items.
+    transportBar.setUndoState(state.canUndo, state.canRedo, state.undoName, state.redoName);
+}
+
+void MainComponent::syncBrowserVst3Library()
+{
+    const auto plugins = pluginManager.getKnownPlugins();
+    browserPanel.setVst3Plugins(plugins);
+    browserPanel.setScanProgress(pluginManager.isScanning(), plugins.size(), plugins.size(), "");
+    statusBar.setPluginCount(plugins.size());
+}
+
+void MainComponent::showDialog(juce::Component* dialog)
+{
+    closeDialogs();
+
+    if (dialog == nullptr)
+        return;
+
+    dialog->setVisible(true);
+    dialog->toFront(true);
+}
+
+void MainComponent::closeDialogs()
+{
+    projectManagerDialog.setVisible(false);
+    preferencesDialog.setVisible(false);
+}
+
+int MainComponent::getBrowserPrimarySize() const noexcept
+{
+    if (browserCollapsed)
+        return 30;
+
+    if (browserMinimized)
+        return 140;
+
+    return Metrics::browserWidth;
+}
+
+bool MainComponent::keyPressed(const juce::KeyPress& key)
+{
+    if (key == juce::KeyPress::escapeKey)
+    {
+        closeDialogs();
+        return true;
+    }
+
+    if (key == juce::KeyPress::spaceKey)
+    {
+        audioEngine.getTransport().togglePlayStop();
+        return true;
+    }
+
+    if (key.getTextCharacter() == 'r' || key.getTextCharacter() == 'R')
+    {
+        toggleRecording();
+        return true;
+    }
+
+    if (key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown())
+    {
+        // Not getTextCharacter(): with ctrl held, X11 reports a control code
+        // (ctrl+Z is 0x1A), so matching on the letter never fires on Linux.
+        // getKeyCode() gives the plain uppercase key regardless of modifiers.
+        const auto character = juce::CharacterFunctions::toLowerCase(
+            static_cast<juce::juce_wchar>(key.getKeyCode()));
+
+        if (character == 'z')
+        {
+            if (key.getModifiers().isShiftDown())
+                redoEdit();
+            else
+                undoEdit();
+
+            return true;
+        }
+
+        if (character == 'y')
+        {
+            redoEdit();
+            return true;
+        }
+
+        if (character == 's')
+        {
+            saveProject(false);
+            return true;
+        }
+
+        if (character == 'o')
+        {
+            openProject();
+            return true;
+        }
+
+        if (character == 'n')
+        {
+            newProject();
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void MainComponent::timerCallback()
+{
+    // The count-in runs on the audio thread; this is where we notice it ended.
+    if (waitingForCountIn && ! audioEngine.getMetronome().isCountingIn())
+    {
+        waitingForCountIn = false;
+        audioEngine.getMetronome().setEnabled(metronomeWasEnabled);
+        beginRecording();
+    }
+
+    collectRecordedNotes();
+}
+
+void MainComponent::toggleMetronome()
+{
+    auto& metronome = audioEngine.getMetronome();
+    const auto turningOn = ! metronome.isEnabled();
+
+    metronome.setEnabled(turningOn);
+    transportBar.setMetronomeActive(turningOn);
+    refreshMenuState();
+    setStatusMessage(turningOn ? "Metronome nyala." : "Metronome mati.");
+}
+
+void MainComponent::setCountInBars(int bars)
+{
+    countInBars = juce::jlimit(0, 8, bars);
+    refreshMenuState();
+    setStatusMessage(countInBars == 0
+                         ? "Count-in mati."
+                         : "Count-in " + juce::String(countInBars) + " bar sebelum record.");
+}
+
+void MainComponent::toggleRecording()
+{
+    auto& transport = audioEngine.getTransport();
+
+    if (waitingForCountIn)
+    {
+        audioEngine.getMetronome().cancelCountIn();
+        audioEngine.getMetronome().setEnabled(metronomeWasEnabled);
+        waitingForCountIn = false;
+        setStatusMessage("Count-in dibatalkan.");
+        return;
+    }
+
+    if (transport.isRecording())
+    {
+        transport.setRecording(false);
+        midiEngine.setRecordingArmed(false);
+        collectRecordedNotes();
+
+        const auto file = audioEngine.getCurrentRecordingFile();
+        const auto wasWritingAudio = audioEngine.isAudioRecording();
+        audioEngine.stopAudioRecording();
+
+        if (wasWritingAudio && file.existsAsFile())
+        {
+            browserPanel.refreshContent();
+
+            // Close the loop: the take lands on the timeline where it started.
+            const auto trackIndex = findAudioTrackForRecording();
+
+            if (trackIndex < 0 || ! addAudioClipToTrack(trackIndex, file, recordingStartBeat))
+                setStatusMessage("Rekaman disimpan: " + file.getFileName()
+                                     + " (" + juce::File::descriptionOfSizeInBytes(file.getSize()) + ")");
+        }
+        else
+        {
+            setStatusMessage("Recording selesai.");
+        }
+
+        markDirty();
+        return;
+    }
+
+    // Count the click in first, if asked. Recording arms when it finishes.
+    if (countInBars > 0)
+    {
+        auto& metronome = audioEngine.getMetronome();
+        metronomeWasEnabled = metronome.isEnabled();
+        waitingForCountIn = true;
+
+        const auto beats = juce::roundToInt(countInBars * transport.getBeatsPerBar());
+        metronome.startCountIn(beats, transport.getTempoBpm(), transport.getBeatsPerBar());
+
+        setStatusMessage("Count-in " + juce::String(countInBars) + " bar...");
+        return;
+    }
+
+    beginRecording();
+}
+
+void MainComponent::beginRecording()
+{
+    auto& transport = audioEngine.getTransport();
+
+    midiEngine.discardRecordedNotes();
+    midiEngine.setRecordingArmed(true);
+    recordingStartBeat = transport.getPositionBeats();
+    transport.setRecording(true);
+
+    // Recording with the transport parked would capture nothing.
+    if (! transport.isPlaying())
+        transport.play();
+
+    // Audio capture only makes sense when the device actually has inputs.
+    if (audioEngine.getInputChannelCount() > 0)
+    {
+        const auto folder = FileUtils::getDefaultProjectRoot().getChildFile("Recordings");
+        const auto stamp = juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S");
+        const auto file = folder.getChildFile("take-" + stamp + ".wav");
+
+        if (audioEngine.startAudioRecording(file))
+            setStatusMessage("Recording ke " + file.getFileName() + " - MIDI juga direkam.");
+        else
+            setStatusMessage("Audio input tidak bisa direkam; MIDI tetap direkam.");
+    }
+    else
+    {
+        setStatusMessage("Tidak ada input audio - merekam MIDI saja.");
+    }
+}
+
+bool MainComponent::addAudioClipToTrack(int trackIndex, const juce::File& file, double startBeat)
+{
+    auto* audioTrack = dynamic_cast<AudioTrack*>(getTrack(trackIndex));
+
+    if (audioTrack == nullptr)
+    {
+        setStatusMessage("Pilih track audio dulu - " + file.getFileName() + " tidak bisa ditaruh di track MIDI.");
+        return false;
+    }
+
+    juce::String error;
+    auto clip = AudioClip::createFromFile(file, audioEngine.getCurrentSampleRate(), audioFormats, error);
+
+    if (clip == nullptr)
+    {
+        setStatusMessage(error);
+        return false;
+    }
+
+    const auto name = clip->getName();
+    const auto lengthSeconds = clip->getPlayLengthSeconds();
+    clip->setOriginalTempo(audioEngine.getTransport().getTempoBpm());
+    clip->setStartBeat(startBeat);
+    audioTrack->addClip(std::move(clip));
+
+    arrangementView.repaint();
+    markDirty();
+
+    setStatusMessage(name + " (" + juce::String(lengthSeconds, 1) + " s) masuk ke "
+                         + audioTrack->getName() + " di beat " + juce::String(startBeat, 2) + ".");
+    return true;
+}
+
+int MainComponent::findAudioTrackForRecording()
+{
+    auto& mixer = audioEngine.getMixer();
+
+    // Prefer an armed audio track, then the selection, then the first one.
+    for (int i = 0; i < mixer.getNumTracks(); ++i)
+        if (auto* track = mixer.getTrack(i))
+            if (track->getKind() == TrackKind::audio && track->isRecordArmed())
+                return i;
+
+    const auto selected = sessionState.getSelectedTrack();
+
+    if (auto* track = mixer.getTrack(selected))
+        if (track->getKind() == TrackKind::audio)
+            return selected;
+
+    for (int i = 0; i < mixer.getNumTracks(); ++i)
+        if (auto* track = mixer.getTrack(i))
+            if (track->getKind() == TrackKind::audio)
+                return i;
+
+    return -1;
+}
+
+void MainComponent::collectRecordedNotes()
+{
+    auto captured = midiEngine.takeRecordedNotes();
+    if (captured.isEmpty())
+        return;
+
+    auto notes = pianoRollModel.getNotes();
+    notes.addArray(captured);
+    pianoRollModel.setNotes(notes);
+
+    setStatusMessage(juce::String(captured.size()) + " note MIDI direkam.");
+}
+
+void MainComponent::newProject()
+{
+    projectManager.newProject(FileUtils::getDefaultProjectRoot().getChildFile("Untitled"));
+    for (int i = 0; i < audioEngine.getMixer().getNumTracks(); ++i)
+    {
+        if (auto* midiTrack = dynamic_cast<MidiTrack*>(getTrack(i)))
+        {
+            for (int pattern = 0; pattern < MidiTrack::maxPatterns; ++pattern)
+                midiTrack->getClip(pattern).setNotes({});
+
+            midiTrack->clearPlacements();
+        }
+    }
+
+    pianoRollModel.notifyClipChanged();
+    projectDirty = false;
+    refreshMenuState();
+    setStatusMessage("Project baru dibuat.");
+}
+
+void MainComponent::saveProject(bool forceChooser)
+{
+    synchroniseProjectState();
+
+    const auto currentFile = projectManager.getProject().projectFile;
+
+    if (! forceChooser && currentFile.existsAsFile())
+    {
+        juce::String error;
+        if (projectManager.saveProject(currentFile, error))
+        {
+            projectDirty = false;
+            refreshMenuState();
+            setStatusMessage("Tersimpan: " + currentFile.getFileName());
+        }
+        else
+        {
+            showError("Save failed", error);
+        }
+
+        return;
+    }
+
+    auto start = currentFile.existsAsFile()
+        ? currentFile
+        : FileUtils::getDefaultProjectRoot().getChildFile("Untitled.djrs");
+
+    fileChooser = std::make_unique<juce::FileChooser>("Save DJR_Studio project", start, "*.djrs");
+
+    fileChooser->launchAsync(juce::FileBrowserComponent::saveMode
+                           | juce::FileBrowserComponent::canSelectFiles
+                           | juce::FileBrowserComponent::warnAboutOverwriting,
+        [this] (const juce::FileChooser& chooser)
+        {
+            auto file = chooser.getResult();
+            if (file == juce::File())
+                return;
+
+            if (! file.hasFileExtension(".djrs"))
+                file = file.withFileExtension(".djrs");
+
+            juce::String error;
+            if (! projectManager.saveProject(file, error))
+            {
+                showError("Save failed", error);
+                return;
+            }
+
+            projectDirty = false;
+            refreshMenuState();
+            setStatusMessage("Tersimpan: " + file.getFileName());
+        });
+}
+
+void MainComponent::openProject()
+{
+    fileChooser = std::make_unique<juce::FileChooser>("Open DJR_Studio project",
+                                                      FileUtils::getDefaultProjectRoot(),
+                                                      "*.djrs");
+
+    fileChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+        [this] (const juce::FileChooser& chooser)
+        {
+            const auto file = chooser.getResult();
+            if (file != juce::File())
+                openProjectFile(file);
+        });
+}
+
+void MainComponent::openProjectFile(const juce::File& file)
+{
+    juce::String error;
+
+    if (! projectManager.loadProject(file, error))
+    {
+        showError("Open failed", error);
+        return;
+    }
+
+    projectDirty = false;
+    setStatusMessage("Project dibuka: " + file.getFileName());
+}
+
+double MainComponent::getSongLengthBeats()
+{
+    auto& mixer = audioEngine.getMixer();
+    const auto tempo = audioEngine.getTransport().getTempoBpm();
+    auto last = 0.0;
+
+    for (int i = 0; i < mixer.getNumTracks(); ++i)
+    {
+        if (const auto* midiTrack = dynamic_cast<const MidiTrack*>(mixer.getTrack(i)))
+        {
+            for (const auto& placement : midiTrack->getPlacements())
+                last = juce::jmax(last, placement.startBeat + placement.lengthBeats);
+
+            for (int pattern = 0; pattern < MidiTrack::maxPatterns; ++pattern)
+                for (const auto& note : midiTrack->getClip(pattern).getNotesSnapshot())
+                    last = juce::jmax(last, note.startBeat + note.lengthBeats);
+        }
+
+        if (const auto* audioTrack = dynamic_cast<const AudioTrack*>(mixer.getTrack(i)))
+            for (const auto* clip : audioTrack->getClipsSnapshot())
+                if (clip != nullptr)
+                    last = juce::jmax(last, clip->getStartBeat() + clip->getLengthBeats(tempo));
+    }
+
+    // Round up to a whole bar in the current signature, and never export nothing.
+    const auto barBeats = audioEngine.getTransport().getBeatsPerBar();
+    return juce::jmax(barBeats, std::ceil(last / barBeats) * barBeats);
+}
+
+void MainComponent::exportAudio()
+{
+    auto start = projectManager.getProject().projectFile;
+    start = start.existsAsFile()
+        ? start.getSiblingFile(start.getFileNameWithoutExtension() + ".wav")
+        : FileUtils::getDefaultProjectRoot().getChildFile("Export.wav");
+
+    fileChooser = std::make_unique<juce::FileChooser>("Export audio ke WAV", start, "*.wav");
+
+    fileChooser->launchAsync(juce::FileBrowserComponent::saveMode
+                           | juce::FileBrowserComponent::canSelectFiles
+                           | juce::FileBrowserComponent::warnAboutOverwriting,
+        [this] (const juce::FileChooser& chooser)
+        {
+            auto file = chooser.getResult();
+
+            if (file == juce::File())
+                return;
+
+            if (! file.hasFileExtension(".wav"))
+                file = file.withFileExtension(".wav");
+
+            ExportManager::Options options;
+            options.sampleRate = audioEngine.getCurrentSampleRate();
+            options.blockSize = audioEngine.getCurrentBufferSize();
+            options.tempoBpm = audioEngine.getTransport().getTempoBpm();
+            options.startBeat = 0.0;
+            options.lengthBeats = getSongLengthBeats();
+            options.songMode = sessionState.isSongMode();
+
+            setStatusMessage("Rendering "
+                           + juce::String(options.lengthBeats / audioEngine.getTransport().getBeatsPerBar(), 1)
+                           + " bar...");
+
+            juce::String error;
+            auto succeeded = false;
+
+            // The device must let go of the mixer before we drive it by hand.
+            audioEngine.renderOffline([&]
+            {
+                succeeded = exportManager.render(audioEngine.getMixer(), file, options, error);
+            });
+
+            if (! succeeded)
+            {
+                showError("Export gagal", error);
+                return;
+            }
+
+            browserPanel.refreshContent();
+            setStatusMessage("Export selesai: " + file.getFileName()
+                                 + " (" + juce::File::descriptionOfSizeInBytes(file.getSize()) + ")");
+        });
+}
+
+void MainComponent::showError(const juce::String& title, const juce::String& message)
+{
+    juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, title, message);
+}
+
+void MainComponent::setStatusMessage(const juce::String& message)
+{
+    statusBar.setMessage(message);
+}
+
+void MainComponent::markDirty()
+{
+    projectDirty = true;
+
+    const auto& project = projectManager.getProject();
+    const auto file = project.projectFile;
+    menuBar.setProjectInfo(file.existsAsFile() ? file.getParentDirectory().getFullPathName() + "/"
+                                               : FileUtils::getDefaultProjectRoot().getFullPathName() + "/",
+                           file.existsAsFile() ? file.getFileName() : juce::String("Untitled.djrs"),
+                           projectDirty);
+}
+
+void MainComponent::changeListenerCallback(juce::ChangeBroadcaster* source)
+{
+    if (source == &sessionState)
+    {
+        applySelectionToPanels();
+        return;
+    }
+
+    if (source == &pianoRollModel)
+    {
+        // The model edits the track's clip in place, so the engine already has
+        // the change; only the project snapshot and the playlist need telling.
+        refreshPatternLength();
+        synchroniseProjectState();
+        arrangementView.repaint();
+        projectDirty = true;
+        markDirty();
+        return;
+    }
+
+    if (source == &projectManager)
+    {
+        applyProjectToSession();
+
+        const auto& project = projectManager.getProject();
+        const auto file = project.projectFile;
+        menuBar.setProjectInfo(file.existsAsFile() ? file.getParentDirectory().getFullPathName() + "/"
+                                                   : FileUtils::getDefaultProjectRoot().getFullPathName() + "/",
+                               file.existsAsFile() ? file.getFileName() : juce::String("Untitled.djrs"),
+                               projectDirty);
+        return;
+    }
+
+    if (source == &pluginManager)
+    {
+        syncBrowserVst3Library();
+        insertChainPanel.refresh();
+    }
+}
+
+void MainComponent::loadSelectedPluginIntoTrack(int pluginIndex, int trackIndex)
+{
+    const auto plugins = pluginManager.getKnownPlugins();
+    auto* track = getTrack(trackIndex);
+
+    if (! juce::isPositiveAndBelow(pluginIndex, plugins.size()) || track == nullptr)
+    {
+        setStatusMessage("Pilih dulu plugin di panel PLUGINS.");
+        return;
+    }
+
+    const auto description = plugins[pluginIndex];
+    setStatusMessage("Loading " + description.name + " ke " + track->getName() + "...");
+
+    pluginManager.createPluginAsync(description,
+                                    audioEngine.getCurrentSampleRate(),
+                                    audioEngine.getCurrentBufferSize(),
+        [this, trackIndex, description] (std::unique_ptr<juce::AudioPluginInstance> instance, juce::String error)
+        {
+            if (instance == nullptr)
+            {
+                setStatusMessage(error.isNotEmpty() ? error : "Plugin gagal dibuat.");
+                return;
+            }
+
+            if (auto* targetTrack = getTrack(trackIndex))
+            {
+                // Instruments own the track's synth slot; everything else is an insert.
+                if (description.isInstrument)
+                    targetTrack->setInstrument(std::move(instance));
+                else
+                    targetTrack->addPlugin(std::move(instance));
+
+                mixerView.repaint();
+                insertChainPanel.refresh();
+                pluginBrowserView.refreshTrackList();
+                setStatusMessage(description.name
+                                     + (description.isInstrument ? " jadi instrument di " : " jadi insert di ")
+                                     + targetTrack->getName() + ".");
+
+                if (autoOpenPluginEditor)
+                    openTrackPluginEditor(trackIndex);
+
+                markDirty();
+                synchroniseProjectState();
+            }
+        });
+}
+
+void MainComponent::openTrackPluginEditor(int trackIndex)
+{
+    openTrackPlugin(trackIndex, PluginSlot::automatic, 0);
+}
+
+void MainComponent::openTrackPlugin(int trackIndex, PluginSlot slot, int insertIndex)
+{
+    auto* track = getTrack(trackIndex);
+    if (track == nullptr)
+        return;
+
+    if (slot != PluginSlot::insert)
+    {
+        if (auto* synth = track->getInstrument())
+        {
+            showPluginWindow(*synth);
+            return;
+        }
+
+        if (slot == PluginSlot::instrument)
+        {
+            setStatusMessage("Track ini belum punya instrument.");
+            return;
+        }
+    }
+
+    if (track->getPluginCount() == 0)
+    {
+        setStatusMessage("Track ini belum punya plugin yang bisa dibuka.");
+        return;
+    }
+
+    const auto index = juce::jlimit(0, track->getPluginCount() - 1,
+                                    slot == PluginSlot::insert ? insertIndex : track->getPluginCount() - 1);
+
+    if (auto* plugin = track->getPlugin(index))
+        showPluginWindow(*plugin);
+}
+
+void MainComponent::showPluginWindow(juce::AudioPluginInstance& plugin)
+{
+    for (auto& window : pluginWindows)
+    {
+        if (window != nullptr && &window->getProcessor() == &plugin)
+        {
+            window->setVisible(true);
+            window->toFront(true);
+            return;
+        }
+    }
+
+    auto window = std::make_unique<PluginWindow>(plugin);
+    window->toFront(true);
+    pluginWindows.push_back(std::move(window));
+}
+
+void MainComponent::selectTrack(int trackIndex)
+{
+    const auto clamped = juce::jlimit(0, juce::jmax(0, audioEngine.getMixer().getNumTracks() - 1), trackIndex);
+
+    if (clamped == sessionState.getSelectedTrack())
+    {
+        // Same track, but the panels may still be stale after an add or remove.
+        applySelectionToPanels();
+        return;
+    }
+
+    sessionState.setSelectedTrack(clamped);
+}
+
+double MainComponent::getEffectivePatternLength(int patternIndex)
+{
+    const auto manual = sessionState.getPatternLengthBeats(patternIndex);
+
+    if (manual > 0.0)
+        return manual;
+
+    // Auto: follow the furthest note in this pattern across every track,
+    // rounded up to a whole bar so the loop lands musically.
+    auto& mixer = audioEngine.getMixer();
+    auto lastBeat = 0.0;
+
+    for (int i = 0; i < mixer.getNumTracks(); ++i)
+        if (const auto* midiTrack = dynamic_cast<const MidiTrack*>(mixer.getTrack(i)))
+            for (const auto& note : midiTrack->getClip(patternIndex).getNotesSnapshot())
+                lastBeat = juce::jmax(lastBeat, note.startBeat + note.lengthBeats);
+
+    const auto barBeats = audioEngine.getTransport().getBeatsPerBar();
+    return juce::jmax(barBeats, std::ceil(lastBeat / barBeats) * barBeats);
+}
+
+void MainComponent::wireUndoHooks()
+{
+    // Recording a point changes what Undo/Redo would do, so the menu has to be
+    // rebuilt: it caches its state rather than asking each time it opens.
+    arrangementView.setUndoHooks([this] (const juce::String& name)
+                                 {
+                                     editHistory.pushSnapshot(name);
+                                     refreshMenuState();
+                                 },
+                                 [this] (bool opening)
+                                 {
+                                     if (opening)
+                                         editHistory.beginGesture({});
+                                     else
+                                         editHistory.endGesture();
+                                 });
+
+    // Every note editor writes through the model, so one hook covers the piano
+    // roll, the velocity lane and the step sequencer alike.
+    pianoRollModel.onBeforeEdit = [this]
+    {
+        editHistory.pushSnapshot("Edit note");
+        refreshMenuState();
+    };
+
+    const auto bracket = [this] (bool opening)
+    {
+        if (opening)
+            editHistory.beginGesture({});
+        else
+            editHistory.endGesture();
+    };
+
+    editorPanel.setNoteGestureCallback(bracket);
+
+    editHistory.onChanged = [this]
+    {
+        // The model changed underneath every panel, so make them all re-read it.
+        pianoRollModel.notifyClipChanged();
+        arrangementView.repaint();
+        editorPanel.repaint();
+        refreshMenuState();
+        markDirty();
+    };
+}
+
+void MainComponent::undoEdit()
+{
+    if (! editHistory.canUndo())
+    {
+        setStatusMessage("Tidak ada yang bisa di-undo.");
+        return;
+    }
+
+    const auto name = editHistory.getUndoName();
+    editHistory.undo();
+    setStatusMessage("Undo: " + (name.isEmpty() ? juce::String("edit terakhir") : name));
+}
+
+void MainComponent::redoEdit()
+{
+    if (! editHistory.canRedo())
+    {
+        setStatusMessage("Tidak ada yang bisa di-redo.");
+        return;
+    }
+
+    const auto name = editHistory.getRedoName();
+    editHistory.redo();
+    setStatusMessage("Redo: " + (name.isEmpty() ? juce::String("edit terakhir") : name));
+}
+
+void MainComponent::renamePattern(int patternIndex)
+{
+    if (! juce::isPositiveAndBelow(patternIndex, SessionState::maxPatterns))
+        return;
+
+    auto* window = new juce::AlertWindow("Ganti nama pattern",
+                                         "Nama untuk PAT " + juce::String(patternIndex + 1) + ":",
+                                         juce::AlertWindow::NoIcon);
+
+    window->addTextEditor("name", sessionState.getCustomPatternName(patternIndex), juce::String());
+    window->addButton("Simpan", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    window->addButton("Batal", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+    window->enterModalState(true,
+        juce::ModalCallbackFunction::create([this, patternIndex, window] (int result)
+        {
+            std::unique_ptr<juce::AlertWindow> owned(window);
+
+            if (result != 1)
+                return;
+
+            // An empty name is how you go back to the "PAT n" default.
+            sessionState.setPatternName(patternIndex, owned->getTextEditorContents("name"));
+            refreshPatternName();
+            arrangementView.repaint();
+            markDirty();
+            setStatusMessage("Pattern: " + sessionState.getPatternName(patternIndex));
+        }),
+        false);
+}
+
+void MainComponent::refreshPatternName()
+{
+    editorPanel.setPatternName(sessionState.getPatternName(sessionState.getActivePattern()));
+}
+
+void MainComponent::refreshPatternLength()
+{
+    const auto length = getEffectivePatternLength(sessionState.getActivePattern());
+
+    // This is the bug fix: the loop used to be pinned at 16 beats forever, so a
+    // one bar pattern played followed by three bars of silence.
+    audioEngine.getTransport().setLoopRangeBeats(0.0, length);
+    arrangementView.setPatternLengthBeats(length);
+    editorPanel.setPatternLengthBeats(length, sessionState.getPatternLengthBeats(sessionState.getActivePattern()) > 0.0);
+}
+
+void MainComponent::applySelectionToPanels()
+{
+    const auto trackIndex = juce::jlimit(0,
+                                         juce::jmax(0, audioEngine.getMixer().getNumTracks() - 1),
+                                         sessionState.getSelectedTrack());
+
+    // Every MIDI track edits and plays the same pattern slot.
+    const auto pattern = sessionState.getActivePattern();
+
+    for (int i = 0; i < audioEngine.getMixer().getNumTracks(); ++i)
+        if (auto* midi = dynamic_cast<MidiTrack*>(getTrack(i)))
+            midi->setActivePattern(pattern);
+
+    audioEngine.getTransport().setSongMode(sessionState.isSongMode());
+    editorPanel.setActivePattern(pattern);
+    arrangementView.setActivePattern(pattern);
+    refreshPatternName();
+    refreshPatternLength();
+
+    arrangementView.setSelectedTrack(trackIndex);
+    insertChainPanel.setSelectedTrack(trackIndex);
+    pluginBrowserView.setTargetTrack(trackIndex);
+    mixerView.setSelectedTrack(trackIndex);
+
+    // Playing the keyboard should sound on whichever track is selected.
+    audioEngine.getMixer().setLiveMidiTarget(trackIndex);
+
+    // The piano roll, velocity lane and step sequencer are all views onto the
+    // selected track's clip - point them at it, or blank them for audio tracks.
+    auto* midiTrack = dynamic_cast<MidiTrack*>(getTrack(trackIndex));
+    pianoRollModel.setTargetClip(midiTrack != nullptr ? &midiTrack->getClip() : nullptr);
+
+    if (auto* track = getTrack(trackIndex))
+        setStatusMessage("Track aktif: " + track->getName()
+                             + (midiTrack != nullptr ? "" : " (track audio - editor MIDI kosong)"));
+}
+
+void MainComponent::synchroniseProjectState()
+{
+    auto& project = projectManager.getProject();
+    project.tempo = audioEngine.getTransport().getTempoBpm();
+    project.timeSigNumerator = audioEngine.getTransport().getTimeSignatureNumerator();
+    project.timeSigDenominator = audioEngine.getTransport().getTimeSignatureDenominator();
+    project.sampleRate = audioEngine.getCurrentSampleRate();
+    project.tracks.clear();
+    project.panelLayout = panelHost.getLayoutState();
+
+    project.patternNames.clear();
+    project.patternLengths.clear();
+    for (int i = 0; i < SessionState::maxPatterns; ++i)
+    {
+        project.patternNames.add(sessionState.getCustomPatternName(i));
+        project.patternLengths.add(sessionState.getPatternLengthBeats(i));
+    }
+
+    for (int i = 0; i < audioEngine.getMixer().getNumTracks(); ++i)
+    {
+        const auto* track = audioEngine.getMixer().getTrack(i);
+        if (track == nullptr)
+            continue;
+
+        ProjectTrackState state;
+        state.name = track->getName();
+        state.type = track->getKind() == TrackKind::midi ? "midi" : "audio";
+        state.volume = track->getVolume();
+        state.pan = track->getPan();
+        state.mute = track->isMuted();
+        state.solo = track->isSoloed();
+        state.plugins = track->getPluginNames();
+        state.laneHeight = arrangementView.getRowHeight(i);
+
+        // Plugins are saved with their own parameter state so a project reopens
+        // sounding the way it was left, not just with the right names.
+        const auto capturePlugin = [] (juce::AudioPluginInstance& plugin, bool isInstrument)
+        {
+            juce::MemoryBlock stateBlock;
+            plugin.getStateInformation(stateBlock);
+
+            auto* object = new juce::DynamicObject();
+            object->setProperty("name", plugin.getName());
+            object->setProperty("isInstrument", isInstrument);
+            object->setProperty("state", stateBlock.toBase64Encoding());
+
+            if (auto xml = plugin.getPluginDescription().createXml())
+                object->setProperty("description", xml->toString());
+
+            return juce::var(object);
+        };
+
+        auto* editableTrack = audioEngine.getMixer().getTrack(i);
+
+        if (editableTrack != nullptr)
+        {
+            if (auto* instrument = editableTrack->getInstrument())
+                state.pluginStates.add(capturePlugin(*instrument, true));
+
+            for (int slot = 0; slot < editableTrack->getPluginCount(); ++slot)
+                if (auto* insert = editableTrack->getPlugin(slot))
+                    state.pluginStates.add(capturePlugin(*insert, false));
+        }
+
+        if (const auto* audioTrack = dynamic_cast<const AudioTrack*>(track))
+            for (const auto* clip : audioTrack->getClipsSnapshot())
+                if (clip != nullptr)
+                    state.audioClips.add(clip->toVar());
+
+        // Every pattern of the track is saved, plus where they sit in the song.
+        if (const auto* midiTrack = dynamic_cast<const MidiTrack*>(track))
+        {
+            for (int pattern = 0; pattern < MidiTrack::maxPatterns; ++pattern)
+            {
+                juce::Array<juce::var> patternNotes;
+
+                for (const auto& note : midiTrack->getClip(pattern).getNotesSnapshot())
+                    patternNotes.add(note.toVar());
+
+                state.patterns.add(patternNotes);
+            }
+
+            for (const auto& placement : midiTrack->getPlacements())
+                state.placements.add(placement.toVar());
+
+            // Kept for older projects that only understood one clip.
+            for (const auto& note : midiTrack->getClip().getNotesSnapshot())
+                state.midiNotes.add(note.toVar());
+        }
+
+        project.tracks.add(state);
+    }
+}
+
+void MainComponent::restorePluginsForTrack(int trackIndex, const juce::Array<juce::var>& pluginStates)
+{
+    auto* track = getTrack(trackIndex);
+
+    if (track == nullptr || pluginStates.isEmpty())
+        return;
+
+    track->clearInstrument();
+    track->clearPlugins();
+
+    for (const auto& entry : pluginStates)
+    {
+        auto* object = entry.getDynamicObject();
+
+        if (object == nullptr)
+            continue;
+
+        const auto xmlText = object->getProperty("description").toString();
+        const auto stateBase64 = object->getProperty("state").toString();
+        const auto isInstrument = static_cast<bool>(object->getProperty("isInstrument"));
+        const auto name = object->getProperty("name").toString();
+
+        juce::PluginDescription description;
+
+        if (auto xml = juce::parseXML(xmlText); xml == nullptr || ! description.loadFromXml(*xml))
+        {
+            setStatusMessage("Plugin " + name + " tidak bisa dipulihkan: deskripsi rusak.");
+            continue;
+        }
+
+        pluginManager.createPluginAsync(description,
+                                        audioEngine.getCurrentSampleRate(),
+                                        audioEngine.getCurrentBufferSize(),
+            [this, trackIndex, isInstrument, stateBase64, name]
+            (std::unique_ptr<juce::AudioPluginInstance> instance, juce::String error)
+            {
+                if (instance == nullptr)
+                {
+                    setStatusMessage("Plugin " + name + " tidak ditemukan lagi"
+                                         + (error.isNotEmpty() ? ": " + error : "."));
+                    return;
+                }
+
+                // Restore the saved parameters before the plugin joins the graph.
+                juce::MemoryBlock stateBlock;
+                if (stateBlock.fromBase64Encoding(stateBase64) && stateBlock.getSize() > 0)
+                    instance->setStateInformation(stateBlock.getData(),
+                                                  static_cast<int>(stateBlock.getSize()));
+
+                if (auto* target = getTrack(trackIndex))
+                {
+                    if (isInstrument)
+                        target->setInstrument(std::move(instance));
+                    else
+                        target->addPlugin(std::move(instance));
+
+                    insertChainPanel.refresh();
+                    mixerView.repaint();
+                }
+            });
+    }
+}
+
+void MainComponent::restoreAudioClipsForTrack(int trackIndex, const juce::Array<juce::var>& clipStates)
+{
+    auto* audioTrack = dynamic_cast<AudioTrack*>(getTrack(trackIndex));
+
+    if (audioTrack == nullptr)
+        return;
+
+    audioTrack->clearClips();
+
+    for (const auto& entry : clipStates)
+    {
+        const auto file = AudioClip::getFileFromVar(entry);
+
+        juce::String error;
+        auto clip = AudioClip::createFromFile(file, audioEngine.getCurrentSampleRate(), audioFormats, error);
+
+        if (clip == nullptr)
+        {
+            setStatusMessage(error.isNotEmpty() ? error : "Clip audio hilang: " + file.getFileName());
+            continue;
+        }
+
+        clip->applyStateFromVar(entry);
+        audioTrack->addClip(std::move(clip));
+    }
+}
+
+void MainComponent::applyProjectToSession()
+{
+    const auto& project = projectManager.getProject();
+    audioEngine.getTransport().setTempoBpm(project.tempo);
+    audioEngine.getTransport().setTimeSignature(project.timeSigNumerator, project.timeSigDenominator);
+
+    for (int i = 0; i < project.tracks.size(); ++i)
+    {
+        auto* runtimeTrack = getTrack(i);
+        if (runtimeTrack == nullptr)
+            continue;
+
+        const auto& projectTrack = project.tracks.getReference(i);
+        runtimeTrack->setVolume(projectTrack.volume);
+        runtimeTrack->setPan(projectTrack.pan);
+        runtimeTrack->setMuted(projectTrack.mute);
+        runtimeTrack->setSoloed(projectTrack.solo);
+        arrangementView.setRowHeight(i, projectTrack.laneHeight);
+
+        if (auto* midiTrack = dynamic_cast<MidiTrack*>(runtimeTrack))
+        {
+            if (! projectTrack.patterns.isEmpty())
+            {
+                for (int pattern = 0; pattern < projectTrack.patterns.size()
+                                      && pattern < MidiTrack::maxPatterns; ++pattern)
+                {
+                    juce::Array<MidiNote> notes;
+
+                    for (const auto& noteValue : projectTrack.patterns[pattern])
+                        notes.add(MidiNote::fromVar(noteValue));
+
+                    midiTrack->getClip(pattern).setNotes(notes);
+                }
+            }
+            else
+            {
+                // Older project: one clip, restore it into the first pattern.
+                juce::Array<MidiNote> notes;
+                for (const auto& noteValue : projectTrack.midiNotes)
+                    notes.add(MidiNote::fromVar(noteValue));
+
+                midiTrack->getClip(0).setNotes(notes);
+            }
+
+            midiTrack->clearPlacements();
+            for (const auto& placementValue : projectTrack.placements)
+                midiTrack->addPlacement(PatternPlacement::fromVar(placementValue));
+        }
+
+        restoreAudioClipsForTrack(i, projectTrack.audioClips);
+        restorePluginsForTrack(i, projectTrack.pluginStates);
+    }
+
+    panelHost.applyLayoutState(project.panelLayout);
+
+    for (int i = 0; i < SessionState::maxPatterns; ++i)
+    {
+        sessionState.setPatternName(i, i < project.patternNames.size() ? project.patternNames[i]
+                                                                       : juce::String());
+        sessionState.setPatternLengthBeats(i, i < project.patternLengths.size() ? project.patternLengths[i]
+                                                                                : 0.0);
+    }
+
+    // Re-point the editors at the freshly loaded clip.
+    applySelectionToPanels();
+    pianoRollModel.notifyClipChanged();
+    mixerView.repaint();
+    arrangementView.repaint();
+    insertChainPanel.refresh();
+    setStatusMessage("Project dibuka: pattern, clip audio, plugin dan layout panel dipulihkan.");
+}
+
+Track* MainComponent::getTrack(int index) noexcept
+{
+    return audioEngine.getMixer().getTrack(index);
+}
+
+} // namespace djr

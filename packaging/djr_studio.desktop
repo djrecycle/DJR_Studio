@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=DJR_Studio
+Comment=Linux DAW with MIDI, recording, piano roll, mixer, and VST3 support
+Exec=/usr/bin/djr_studio
+Icon=djr_studio
+Terminal=false
+Type=Application
+Categories=Audio;AudioVideo;Music;Midi;Recorder;
+StartupNotify=true

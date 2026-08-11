@@ -1,0 +1,27 @@
+build/
+build-debug/
+build-release/
+cmake-build-*/
+_deps/
+.cache/
+.idea/
+.vscode/
+*.deb
+*.o
+*.so
+*.a
+*.dylib
+*.dll
+*.exe
+*.app/
+*.jucer
+compile_commands.json
+Testing/
+*.log
+*.wav
+*.flac
+*.mp3
+*.djrs
+
+# Screenshots in docs/ are tracked on purpose; ignore stray captures.
+/*.png
