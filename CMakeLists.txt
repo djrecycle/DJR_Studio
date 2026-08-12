@@ -7,22 +7,38 @@ cmake_minimum_required(VERSION 3.22)
 set(DJR_VERSION_BASE "0.2.0")
 set(DJR_VERSION_STAGE "beta")
 
-set(DJR_GIT_DESCRIBE "")
+# Deliberately the commit hash, not "git describe": once a release is tagged,
+# describe would return the tag itself and the version would repeat itself as
+# 0.2.0-beta+v0.2.0-beta. A hash always points at something traceable.
+set(DJR_GIT_HASH "")
 find_package(Git QUIET)
 
 if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
     execute_process(
-        COMMAND ${GIT_EXECUTABLE} describe --tags --always --dirty
+        COMMAND ${GIT_EXECUTABLE} rev-parse --short=7 HEAD
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        OUTPUT_VARIABLE DJR_GIT_DESCRIBE
+        OUTPUT_VARIABLE DJR_GIT_HASH
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET)
+
+    # Mark builds made from uncommitted changes, so an artefact never claims to
+    # be a commit it is not.
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} status --porcelain
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE DJR_GIT_DIRTY
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+
+    if(NOT DJR_GIT_DIRTY STREQUAL "")
+        set(DJR_GIT_HASH "${DJR_GIT_HASH}-dirty")
+    endif()
 endif()
 
-if(DJR_GIT_DESCRIBE STREQUAL "")
+if(DJR_GIT_HASH STREQUAL "")
     set(DJR_VERSION_STRING "${DJR_VERSION_BASE}-${DJR_VERSION_STAGE}")
 else()
-    set(DJR_VERSION_STRING "${DJR_VERSION_BASE}-${DJR_VERSION_STAGE}+${DJR_GIT_DESCRIBE}")
+    set(DJR_VERSION_STRING "${DJR_VERSION_BASE}-${DJR_VERSION_STAGE}+${DJR_GIT_HASH}")
 endif()
 
 message(STATUS "DJR_Studio version: ${DJR_VERSION_STRING}")
