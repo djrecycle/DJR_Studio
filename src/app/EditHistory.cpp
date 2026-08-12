@@ -6,8 +6,10 @@
 namespace djr
 {
 
-EditHistory::EditHistory(Mixer& mixerToWatch)
-    : mixer(mixerToWatch)
+EditHistory::EditHistory(Mixer& mixerToWatch,
+                         Transport* transportToWatch,
+                         SessionState* sessionToWatch)
+    : mixer(mixerToWatch), transport(transportToWatch), session(sessionToWatch)
 {
 }
 
@@ -35,6 +37,21 @@ EditHistory::Snapshot EditHistory::capture(const juce::String& actionName) const
         }
 
         snapshot.tracks.push_back(std::move(state));
+    }
+
+    if (transport != nullptr)
+    {
+        snapshot.session.timeSigNumerator = transport->getTimeSignatureNumerator();
+        snapshot.session.timeSigDenominator = transport->getTimeSignatureDenominator();
+    }
+
+    if (session != nullptr)
+    {
+        for (int i = 0; i < SessionState::maxPatterns; ++i)
+        {
+            snapshot.session.patternNames[static_cast<size_t>(i)] = session->getCustomPatternName(i);
+            snapshot.session.patternLengths[static_cast<size_t>(i)] = session->getPatternLengthBeats(i);
+        }
     }
 
     return snapshot;
@@ -69,6 +86,21 @@ void EditHistory::restore(const Snapshot& snapshot)
                     copies.push_back(std::move(copy));
 
             audioTrack->replaceClips(std::move(copies));
+        }
+    }
+
+    if (transport != nullptr)
+    {
+        transport->setTimeSignature(snapshot.session.timeSigNumerator,
+                                    snapshot.session.timeSigDenominator);
+    }
+
+    if (session != nullptr)
+    {
+        for (int i = 0; i < SessionState::maxPatterns; ++i)
+        {
+            session->setPatternName(i, snapshot.session.patternNames[static_cast<size_t>(i)]);
+            session->setPatternLengthBeats(i, snapshot.session.patternLengths[static_cast<size_t>(i)]);
         }
     }
 }

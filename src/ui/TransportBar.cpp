@@ -409,10 +409,9 @@ void TransportBar::showTimeSignatureMenu()
             if (! juce::isPositiveAndBelow(result - 1, static_cast<int>(std::size(signatures))))
                 return;
 
-            transport.setTimeSignature(signatures[result - 1].first, signatures[result - 1].second);
-
+            // The host applies it, so it can record an undo point first.
             if (timeSignatureChangeCallback)
-                timeSignatureChangeCallback();
+                timeSignatureChangeCallback(signatures[result - 1].first, signatures[result - 1].second);
 
             repaint();
         });
@@ -556,7 +555,7 @@ void TransportBar::setMetronomeActive(bool isActive)
     metronomeButton.setActive(isActive);
 }
 
-void TransportBar::setTimeSignatureChangeCallback(std::function<void()> callback)
+void TransportBar::setTimeSignatureChangeCallback(std::function<void(int, int)> callback)
 {
     timeSignatureChangeCallback = std::move(callback);
 }

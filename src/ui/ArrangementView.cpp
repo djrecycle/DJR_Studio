@@ -564,6 +564,7 @@ void ArrangementView::mouseDown(const juce::MouseEvent& event)
         // Paint keeps laying clips for as long as the drag lasts, so the stroke
         // starts here even when this first spot is already taken.
         painting = true;
+        lastPaintPosition = position;
         paintPatternAt(position);
         return;
     }
@@ -669,7 +670,7 @@ void ArrangementView::mouseDrag(const juce::MouseEvent& event)
 
     if (painting)
     {
-        paintPatternAt(event.getPosition());
+        paintSweep(event.getPosition());
         return;
     }
 
@@ -1472,9 +1473,24 @@ void ArrangementView::setPatternNameProvider(std::function<juce::String(int)> pr
     repaint();
 }
 
+void ArrangementView::setPatternLengthProvider(std::function<double(int)> provider)
+{
+    patternLengthProvider = std::move(provider);
+    repaint();
+}
+
 void ArrangementView::setPatternRenameCallback(std::function<void(int)> callback)
 {
     patternRenameCallback = std::move(callback);
+}
+
+double ArrangementView::patternLengthFor(int patternIndex) const
+{
+    if (patternLengthProvider)
+        if (const auto beats = patternLengthProvider(patternIndex); beats > 0.0)
+            return beats;
+
+    return patternLengthBeats;
 }
 
 juce::String ArrangementView::patternLabel(int patternIndex) const
@@ -1685,6 +1701,31 @@ void ArrangementView::updateSlicePreview(juce::Point<int> position)
     repaint();
 }
 
+void ArrangementView::paintSweep(juce::Point<int> position)
+{
+    // A gap exactly one clip wide only accepts a clip when the pointer lands
+    // inside it, and that window can be a few pixels. Moving the mouse quickly
+    // jumps clean over it, so walk every snap step between the last position
+    // and this one instead of only sampling where the pointer ended up.
+    const auto snap = getEffectiveSnapBeats();
+    const auto fromBeat = xToBeat(lastPaintPosition.x);
+    const auto toBeat = xToBeat(position.x);
+    const auto step = snap > 0.0 ? snap : 0.25;
+    const auto distance = std::abs(toBeat - fromBeat);
+
+    // Guard against a huge jump turning into thousands of steps.
+    const auto stepCount = juce::jmin(256, static_cast<int>(distance / step));
+
+    for (int i = 1; i <= stepCount; ++i)
+    {
+        const auto beat = fromBeat + (toBeat > fromBeat ? i * step : -i * step);
+        paintPatternAt({ beatToX(beat), position.y });
+    }
+
+    paintPatternAt(position);
+    lastPaintPosition = position;
+}
+
 bool ArrangementView::paintPatternAt(juce::Point<int> position)
 {
     // Row bounds run the full width, so without this a stroke that wanders into
@@ -1839,7 +1880,9 @@ void ArrangementView::showPlacementContextMenu(int trackIndex, int placementInde
 
     juce::PopupMenu menu;
     menu.addSectionHeader(patternLabel(placement.patternIndex));
-    menu.addItem(1, "Kembalikan panjang penuh", placement.sourceOffsetBeats > 0.0 || placement.lengthBeats < 4.0);
+    const auto fullLength = patternLengthFor(placement.patternIndex);
+    menu.addItem(1, "Kembalikan panjang penuh",
+                 placement.sourceOffsetBeats > 0.0 || placement.lengthBeats < fullLength - 1.0e-9);
     menu.addItem(2, "Panjangkan 1 bar");
     menu.addSeparator();
     menu.addItem(4, "Ganti nama pattern...");
@@ -1868,7 +1911,9 @@ void ArrangementView::showPlacementContextMenu(int trackIndex, int placementInde
                     // Undo the trim: back to the head of the pattern, four beats.
                     edited.startBeat = juce::jmax(0.0, edited.startBeat - edited.sourceOffsetBeats);
                     edited.sourceOffsetBeats = 0.0;
-                    edited.lengthBeats = juce::jmax(4.0, edited.lengthBeats);
+                    // The pattern's own loop length, not a fixed four beats:
+                    // that was wrong for every signature except 4/4.
+                    edited.lengthBeats = patternLengthFor(edited.patternIndex);
                     track->updatePlacement(placementIndex, edited);
                     break;
 

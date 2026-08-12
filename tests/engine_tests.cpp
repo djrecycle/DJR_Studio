@@ -1292,6 +1292,51 @@ int main()
         }
     }
 
+    // --- Undo covers song settings, but only what it also records -----------
+    {
+        djr::Mixer settingsMixer;
+        settingsMixer.prepare(sampleRate, blockSize);
+
+        djr::Transport settingsTransport;
+        djr::SessionState settingsSession;
+        djr::EditHistory history(settingsMixer, &settingsTransport, &settingsSession);
+
+        // --- Time signature ---------------------------------------------
+        settingsTransport.setTimeSignature(4, 4);
+        history.pushSnapshot("Time signature");
+        settingsTransport.setTimeSignature(7, 8);
+        check(settingsTransport.getTimeSignatureNumerator() == 7, "the signature changed to 7/8");
+
+        check(history.undo(), "undo runs for the signature");
+        check(settingsTransport.getTimeSignatureNumerator() == 4
+              && settingsTransport.getTimeSignatureDenominator() == 4,
+              "undo puts the time signature back");
+
+        // --- Pattern name and length -------------------------------------
+        settingsSession.setPatternName(0, "Intro");
+        settingsSession.setPatternLengthBeats(0, 8.0);
+
+        history.pushSnapshot("Ganti nama pattern");
+        settingsSession.setPatternName(0, "Verse");
+        check(settingsSession.getPatternName(0) == "Verse", "the pattern was renamed");
+
+        check(history.undo(), "undo runs for the rename");
+        check(settingsSession.getPatternName(0) == "Intro", "undo restores the old name");
+        check(std::abs(settingsSession.getPatternLengthBeats(0) - 8.0) < 1.0e-9,
+              "and leaves the pattern length alone");
+
+        // --- Tempo is deliberately NOT restored ---------------------------
+        // Restoring a value that is never recorded would let an unrelated undo
+        // drag it back without the user asking.
+        settingsTransport.setTempoBpm(140.0);
+        history.pushSnapshot("Taruh clip");
+        settingsTransport.setTempoBpm(90.0);
+
+        check(history.undo(), "undo runs after a tempo change");
+        check(std::abs(settingsTransport.getTempoBpm() - 90.0) < 1.0e-9,
+              "undo leaves tempo exactly where the user put it");
+    }
+
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
                                 : "\n" + std::to_string(failures) + " engine test(s) failed\n");
     return failures == 0 ? 0 : 1;

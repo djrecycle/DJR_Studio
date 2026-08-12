@@ -1,11 +1,14 @@
 #pragma once
 
+#include "SessionState.h"
 #include "audio/AudioClip.h"
 #include "audio/Mixer.h"
+#include "audio/Transport.h"
 #include "audio/PatternPlacement.h"
 #include "midi/MidiNote.h"
 
 #include <juce_core/juce_core.h>
+#include <array>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -27,7 +30,13 @@ namespace djr
 class EditHistory
 {
 public:
-    explicit EditHistory(Mixer& mixerToWatch);
+    /** `transport` and `session` are optional: pass them and tempo, time
+        signature, pattern names and pattern lengths join the snapshot. The
+        engine tests construct without them.
+    */
+    explicit EditHistory(Mixer& mixerToWatch,
+                         Transport* transportToWatch = nullptr,
+                         SessionState* sessionToWatch = nullptr);
 
     /** Records the state as it is now, tagged with what is about to happen.
         Call this immediately before mutating anything.
@@ -68,16 +77,35 @@ private:
         std::vector<juce::Array<MidiNote>> patterns;
     };
 
+    /** Song-wide settings that are part of the document, not the view.
+
+        Deliberately excluded: lane heights and zoom (how you look at the song,
+        not the song), the active pattern (navigation), and **tempo**. Anything
+        restored here must also be recorded when it changes, otherwise undoing a
+        clip edit would silently drag that value back too - and tempo is dragged
+        continuously, which would need its own gesture handling.
+    */
+    struct SessionSnapshot
+    {
+        int timeSigNumerator = 4;
+        int timeSigDenominator = 4;
+        std::array<juce::String, SessionState::maxPatterns> patternNames {};
+        std::array<double, SessionState::maxPatterns> patternLengths {};
+    };
+
     struct Snapshot
     {
         juce::String name;
         std::vector<TrackState> tracks;
+        SessionSnapshot session;
     };
 
     Snapshot capture(const juce::String& actionName) const;
     void restore(const Snapshot& snapshot);
 
     Mixer& mixer;
+    Transport* transport = nullptr;
+    SessionState* session = nullptr;
     std::vector<Snapshot> undoStack;
     std::vector<Snapshot> redoStack;
     bool gestureOpen = false;

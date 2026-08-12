@@ -103,8 +103,12 @@ MainComponent::MainComponent()
                              : "Song mode: memainkan penempatan pattern di playlist.");
     });
     transportBar.setRecordToggleCallback([this] { toggleRecording(); });
-    transportBar.setTimeSignatureChangeCallback([this]
+    transportBar.setTimeSignatureChangeCallback([this] (int numerator, int denominator)
     {
+        // Record before applying, or the snapshot captures the new value.
+        editHistory.pushSnapshot("Time signature");
+        audioEngine.getTransport().setTimeSignature(numerator, denominator);
+
         // Bar lines, the loop length and the step grid all derive from this.
         refreshPatternLength();
         arrangementView.repaint();
@@ -161,6 +165,10 @@ MainComponent::MainComponent()
     {
         return sessionState.getPatternName(patternIndex);
     });
+    arrangementView.setPatternLengthProvider([this] (int patternIndex)
+    {
+        return getEffectivePatternLength(patternIndex);
+    });
     arrangementView.setPatternRenameCallback([this] (int patternIndex) { renamePattern(patternIndex); });
     editorPanel.setPatternRenameCallback([this] { renamePattern(sessionState.getActivePattern()); });
 
@@ -173,6 +181,7 @@ MainComponent::MainComponent()
     });
     editorPanel.setPatternLengthChangedCallback([this] (double beats)
     {
+        editHistory.pushSnapshot("Panjang pattern");
         sessionState.setPatternLengthBeats(sessionState.getActivePattern(), beats);
         refreshPatternLength();
         setStatusMessage(beats <= 0.0
@@ -1330,6 +1339,7 @@ void MainComponent::renamePattern(int patternIndex)
                 return;
 
             // An empty name is how you go back to the "PAT n" default.
+            editHistory.pushSnapshot("Ganti nama pattern");
             sessionState.setPatternName(patternIndex, owned->getTextEditorContents("name"));
             refreshPatternName();
             arrangementView.repaint();

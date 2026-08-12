@@ -30,8 +30,10 @@ public:
     void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
 
     void setSnapChangeCallback(std::function<void(SnapUnit)> callback);
-    /** Fired after the time signature changes, so the grids can redraw. */
-    void setTimeSignatureChangeCallback(std::function<void()> callback);
+    /** Fired when a signature is picked, before anything is applied, so the
+        host can record an undo point and then apply it.
+    */
+    void setTimeSignatureChangeCallback(std::function<void(int, int)> callback);
     void setUndoCallback(std::function<void()> callback);
     void setRedoCallback(std::function<void()> callback);
     void setMetronomeToggleCallback(std::function<void()> callback);
@@ -130,7 +132,7 @@ private:
     juce::Rectangle<int> masterMeterArea;
 
     std::function<void(SnapUnit)> snapChangeCallback;
-    std::function<void()> timeSignatureChangeCallback;
+    std::function<void(int, int)> timeSignatureChangeCallback;
     std::function<void()> undoCallback;
     std::function<void()> redoCallback;
     std::function<void()> metronomeToggleCallback;

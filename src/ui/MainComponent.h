@@ -145,7 +145,7 @@ private:
     SessionState sessionState;
     AudioEngine audioEngine;
     /** Declared after the engine: it holds a reference to the engine's mixer. */
-    EditHistory editHistory { audioEngine.getMixer() };
+    EditHistory editHistory { audioEngine.getMixer(), &audioEngine.getTransport(), &sessionState };
     MidiEngine midiEngine;
     PianoRollModel pianoRollModel;
     PluginManager pluginManager;

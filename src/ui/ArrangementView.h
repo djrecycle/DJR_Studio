@@ -78,6 +78,10 @@ public:
         its own, so the host hands it the naming.
     */
     void setPatternNameProvider(std::function<juce::String(int)> provider);
+    /** Supplies a pattern's loop length in beats. "Restore full length" needs the
+        length of the pattern a clip points at, which may not be the active one.
+    */
+    void setPatternLengthProvider(std::function<double(int)> provider);
     /** Fired when the user asks to rename a pattern from a clip's menu. */
     void setPatternRenameCallback(std::function<void(int)> callback);
 
@@ -194,6 +198,8 @@ private:
     static juce::String describeKind(const Track& track, int trackIndex);
     /** A pattern's name from the host, or the "PAT n" default. */
     juce::String patternLabel(int patternIndex) const;
+    /** Loop length of one pattern, falling back to the active pattern's. */
+    double patternLengthFor(int patternIndex) const;
 
     Mixer& mixer;
     Transport& transport;
@@ -213,6 +219,10 @@ private:
         that are already taken. Returns true when a clip was placed.
     */
     bool paintPatternAt(juce::Point<int> position);
+    /** Paints every snap position the pointer swept over since the last drag
+        event, not just where it happens to be now.
+    */
+    void paintSweep(juce::Point<int> position);
 
     // Multi clip selection ---------------------------------------------------
     bool isClipSelected(int trackIndex, int clipIndex) const;
@@ -250,11 +260,14 @@ private:
     std::function<void(const juce::String&)> pushUndoCallback;
     std::function<void(bool)> undoGestureCallback;
     std::function<juce::String(int)> patternNameProvider;
+    std::function<double(int)> patternLengthProvider;
     std::function<void(int)> patternRenameCallback;
     ClipDrag clipDrag;
     Tool activeTool = Tool::select;
     /** A paint drag in progress: the pointer keeps laying clips as it sweeps. */
     bool painting = false;
+    /** Where the last paint step landed, so a fast sweep can be filled in. */
+    juce::Point<int> lastPaintPosition;
     bool snapEnabled = true;
     /** Live drag rectangle for the zoom tool. */
     juce::Rectangle<int> zoomDrag;
