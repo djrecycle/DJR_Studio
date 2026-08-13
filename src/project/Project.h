@@ -25,6 +25,12 @@ struct ProjectTrackState
     juce::Array<juce::var> pluginStates;
     /** Audio clips laid out on this track. */
     juce::Array<juce::var> audioClips;
+    /** Automation lanes: their target, their curve and whether they are live. */
+    juce::Array<juce::var> automation;
+    /** Where the main output goes: -1 for master, otherwise a bus track index. */
+    int outputDestination = -1;
+    /** Send slots, each with its destination, level and pre/post fader flag. */
+    juce::Array<juce::var> sends;
     /** Playlist lane height in pixels. Zero means the default height. */
     int laneHeight = 0;
 };

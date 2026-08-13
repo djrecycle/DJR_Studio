@@ -3,12 +3,14 @@
 #include "UiControls.h"
 
 #include "app/SnapSetting.h"
+#include "audio/AutomationLane.h"
 #include "audio/Mixer.h"
 #include "midi/MidiNote.h"
 #include "audio/Transport.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <functional>
+#include <vector>
 
 namespace djr
 {
@@ -84,6 +86,8 @@ public:
     void setPatternLengthProvider(std::function<double(int)> provider);
     /** Fired when the user asks to rename a pattern from a clip's menu. */
     void setPatternRenameCallback(std::function<void(int)> callback);
+    /** Fired when a track's name is double clicked, or asked for from its menu. */
+    void setTrackRenameCallback(std::function<void(int)> callback);
 
     /** Lane height for one track, so it can be saved with the project. Zero or
         anything out of range restores the default height.
@@ -96,10 +100,64 @@ public:
     void setTrackSelectedCallback(std::function<void(int)> callback);
     /** Fired after a track is added or removed so the mixer can rebuild. */
     void setTrackListChangedCallback(std::function<void()> callback);
+    /** Re-reads the mixer's tracks. Public because the track list also changes
+        from outside this view: opening a project replaces the whole of it.
+    */
+    void notifyTrackListChanged();
     void setFollowPlayhead(bool shouldFollow);
     bool isFollowingPlayhead() const noexcept;
 
 private:
+    /** One playlist row. A track owns its clip row plus one row per automation
+        lane, which is why row indices and track indices are no longer the same
+        thing: everything that positions a lane goes through the row list.
+    */
+    struct Row
+    {
+        int trackIndex = 0;
+        /** -1 for the track's own clips, otherwise its automation lane index. */
+        int automationLane = -1;
+        /** Resolved once per rebuild. Working these out on demand meant every
+            geometry question walked the rows and took the track's automation
+            lock on each step - hundreds of times a frame, against the same lock
+            the audio thread try-locks every block.
+        */
+        int height = 0;
+        int top = 0;
+        /** The lane's curve as of this rebuild, so drawing and hit testing never
+            touch the lane itself.
+        */
+        std::vector<AutomationPoint> points;
+        bool laneEnabled = true;
+        /** Copied too, so painting a lane needs no lane pointer and therefore
+            takes no lock at all.
+        */
+        AutomationTarget target;
+    };
+
+    /** What a drag inside an automation lane is doing. */
+    struct AutomationDrag
+    {
+        enum class Mode
+        {
+            none,
+            point,  ///< moving a breakpoint
+            curve   ///< bending the segment that ends at `pointIndex`
+        };
+
+        Mode mode = Mode::none;
+        int rowIndex = -1;
+        int trackIndex = -1;
+        int laneIndex = -1;
+        int pointIndex = -1;
+        double grabCurve = 0.0;
+        int grabY = 0;
+        /** A falling segment bends the opposite way, so the drag is flipped to
+            keep "drag down" meaning "curve dips down" either way.
+        */
+        bool falling = false;
+    };
+
     /** One note drawn inside a clip, in clip-relative beats. */
     struct ClipNote
     {
@@ -164,7 +222,32 @@ private:
     juce::Rectangle<int> getGridArea() const;
     juce::Rectangle<int> getRowBounds(int trackIndex) const;
     int getRowTop(int trackIndex) const;
-    /** Track whose bottom edge is under `position` in the headers, or -1. */
+
+    // Rows -------------------------------------------------------------------
+    /** Re-reads the mixer's tracks and their lanes into `rows`. Cheap, and
+        called from every entry point so a lane added mid-gesture cannot leave
+        the geometry pointing at something that is no longer there.
+    */
+    void rebuildRows();
+    /** Re-runs only the vertical positions, for when scrolling moves the rows
+        without changing what they are.
+    */
+    void refreshRowTops();
+    int getRowCount() const noexcept;
+    int getRowIndexForTrack(int trackIndex) const;
+    int getRowHeightAt(int rowIndex) const;
+    void setRowHeightAt(int rowIndex, int height);
+    int getRowTopAt(int rowIndex) const;
+    juce::Rectangle<int> getRowBoundsAt(int rowIndex) const;
+    /** Row under `position`, or -1. */
+    int rowAt(juce::Point<int> position) const;
+    /** The live lane behind a row. Takes the track's lock, so it is only for
+        the handful of places that actually mutate a curve - drawing and hit
+        testing work from the snapshot in the row instead.
+    */
+    AutomationLane* getLane(int trackIndex, int laneIndex) const;
+
+    /** Row whose bottom edge is under `position` in the headers, or -1. */
     int hitTestRowResize(juce::Point<int> position) const;
     juce::Rectangle<int> getMuteBounds(int trackIndex) const;
     juce::Rectangle<int> getSoloBounds(int trackIndex) const;
@@ -175,7 +258,6 @@ private:
     void zoomToFit();
     void showAddTrackMenu();
     void showTrackContextMenu(int trackIndex);
-    void notifyTrackListChanged();
     void notifyClipEdited();
     /** Finds the clip under `position` and what a drag there would do. */
     ClipDragMode hitTestClip(juce::Point<int> position, int& trackIndexOut, int& clipIndexOut) const;
@@ -238,6 +320,30 @@ private:
     bool getClipStartBeat(int trackIndex, int clipIndex, double& startBeatOut) const;
     void setClipStartBeat(int trackIndex, int clipIndex, double startBeat);
 
+    // Automation lanes -------------------------------------------------------
+    void drawAutomationRow(juce::Graphics& g, int rowIndex, const Row& row);
+    /** The drawable band of an automation row, inset so a point sitting at 0 or
+        at 1 is still fully inside the lane.
+    */
+    juce::Rectangle<int> getCurveArea(int rowIndex) const;
+    double valueFromY(int rowIndex, int y) const;
+    int yFromValue(int rowIndex, double value) const;
+    /** What is under `position` in an automation lane. A hit with mode `none`
+        but a valid track means an empty spot on a lane, which is where a new
+        point goes.
+    */
+    AutomationDrag hitTestAutomation(juce::Point<int> position) const;
+    /** Returns false when the active tool has nothing to do with a curve, so
+        the click falls through to the timeline instead.
+    */
+    bool handleAutomationMouseDown(int rowIndex, juce::Point<int> position, const juce::ModifierKeys& mods);
+    /** Menu for a lane; `pointIndex` >= 0 adds the entries for that point. */
+    void showAutomationMenu(int trackIndex, int laneIndex, int pointIndex);
+    /** The "add automation" submenu: volume, pan, and every plugin parameter. */
+    void fillAutomationTargetMenu(juce::PopupMenu& menu, int trackIndex) const;
+    /** Turns an id from that menu back into a target, and creates the lane. */
+    void addAutomationTarget(int trackIndex, int menuId);
+
     /** Works out where the slice tool would cut, and whether the cut is legal.
         Clears the preview when the pointer is not over a sliceable clip.
     */
@@ -262,6 +368,7 @@ private:
     std::function<juce::String(int)> patternNameProvider;
     std::function<double(int)> patternLengthProvider;
     std::function<void(int)> patternRenameCallback;
+    std::function<void(int)> trackRenameCallback;
     ClipDrag clipDrag;
     Tool activeTool = Tool::select;
     /** A paint drag in progress: the pointer keeps laying clips as it sweeps. */
@@ -290,7 +397,14 @@ private:
     */
     std::vector<int> rowHeights;
     int defaultRowHeight = 30;
-    /** The lane whose edge is being dragged, or -1. */
+    /** Automation lanes start taller than a clip lane: a curve needs vertical
+        room to be worth drawing at all.
+    */
+    int defaultAutomationRowHeight = 52;
+    /** Track rows and automation rows in the order they are drawn. */
+    std::vector<Row> rows;
+    AutomationDrag automationDrag;
+    /** The row whose edge is being dragged, or -1. */
     int resizingRow = -1;
     int resizeStartHeight = 0;
     int resizeGrabY = 0;

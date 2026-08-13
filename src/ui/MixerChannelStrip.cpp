@@ -19,6 +19,12 @@ namespace
     constexpr int rowGap = 4;
     constexpr int dbRowHeight = 13;
     constexpr float maxLevel = 1.5f;
+    /** The send row only exists when something is assigned, so an unrouted
+        strip looks exactly as it always did.
+    */
+    constexpr int sendRowHeight = 15;
+    constexpr int sendBarGap = 2;
+    constexpr float maxSendLevel = 1.5f;
 }
 
 MixerChannelStrip::MixerChannelStrip(Track& trackToUse, int colourIndex)
@@ -104,6 +110,16 @@ void MixerChannelStrip::paint(juce::Graphics& g)
     g.setColour(colour);
     g.fillRect(handle.getX() + 2, handle.getCentreY() - 1, handle.getWidth() - 4, 2);
 
+    // A fader the automation is holding says so, otherwise it just looks like a
+    // control that refuses to move.
+    if (track != nullptr && track->isVolumeAutomated())
+    {
+        g.setColour(Theme::amber());
+        g.setFont(Theme::mono(8.0f, true));
+        g.drawText("A", handle.getX() - 9, handle.getY(), 8, handle.getHeight(),
+                   juce::Justification::centred, false);
+    }
+
     auto meters = getMeterArea();
     const auto meterWidth = (meters.getWidth() - 2) / 2;
     Theme::drawLevelMeter(g, meters.removeFromLeft(meterWidth).toFloat(), smoothedLeft, true);
@@ -135,6 +151,40 @@ void MixerChannelStrip::paint(juce::Graphics& g)
         drawButton(getArmBounds(), "R", track->isRecordArmed(), Theme::pink(), true);
     }
 
+    // Sends ------------------------------------------------------------------
+    // Only drawn when something is assigned, so a strip with no sends looks
+    // exactly as it did before routing existed.
+    if (track != nullptr && mixer != nullptr)
+    {
+        for (const auto slot : getAssignedSends())
+        {
+            const auto bar = getSendBarBounds(slot);
+
+            if (bar.isEmpty())
+                continue;
+
+            const auto send = track->getSend(slot);
+            // Pre-fader reads amber, post-fader takes the track colour: the one
+            // thing you cannot afford to misread about a send is which it is.
+            const auto sendColour = send.preFader ? Theme::amber() : colour;
+
+            g.setColour(Theme::inset());
+            g.fillRoundedRectangle(bar.toFloat(), 2.0f);
+
+            const auto ratio = juce::jlimit(0.0f, 1.0f, send.level / maxSendLevel);
+            auto filled = bar.reduced(1);
+            filled = filled.withHeight(juce::roundToInt(ratio * filled.getHeight()))
+                           .withBottomY(bar.getBottom() - 1);
+
+            g.setColour(sendColour.withAlpha(0.85f));
+            g.fillRoundedRectangle(filled.toFloat(), 1.5f);
+
+            g.setColour(Theme::windowBackground().withAlpha(0.85f));
+            g.setFont(Theme::mono(8.0f, true));
+            g.drawText(juce::String(slot + 1), bar, juce::Justification::centred, false);
+        }
+    }
+
     // Level readout ----------------------------------------------------------
     const auto level = getLevel();
     const auto db = level <= 0.0001f ? juce::String("-inf")
@@ -143,6 +193,202 @@ void MixerChannelStrip::paint(juce::Graphics& g)
     g.setColour(Theme::faintText());
     g.setFont(Theme::mono(9.5f));
     g.drawText(db, bounds.withTrimmedBottom(3).removeFromBottom(10), juce::Justification::centred, false);
+}
+
+void MixerChannelStrip::setMixer(Mixer* mixerToRouteThrough, int indexInMixer) noexcept
+{
+    mixer = mixerToRouteThrough;
+    trackIndex = indexInMixer;
+}
+
+std::vector<int> MixerChannelStrip::getAssignedSends() const
+{
+    std::vector<int> assigned;
+
+    if (track == nullptr)
+        return assigned;
+
+    for (int slot = 0; slot < Track::maxSends; ++slot)
+        if (track->getSend(slot).destination >= 0)
+            assigned.push_back(slot);
+
+    return assigned;
+}
+
+juce::Rectangle<int> MixerChannelStrip::getSendRowBounds() const
+{
+    if (getAssignedSends().empty())
+        return {};
+
+    auto area = getLocalBounds().reduced(stripPadding);
+    area.removeFromBottom(dbRowHeight);
+    area.removeFromBottom(buttonRowHeight + rowGap);
+    return area.removeFromBottom(sendRowHeight);
+}
+
+juce::Rectangle<int> MixerChannelStrip::getSendBarBounds(int slot) const
+{
+    const auto assigned = getAssignedSends();
+    const auto row = getSendRowBounds();
+
+    if (assigned.empty() || row.isEmpty())
+        return {};
+
+    const auto position = std::find(assigned.begin(), assigned.end(), slot);
+
+    if (position == assigned.end())
+        return {};
+
+    const auto count = static_cast<int>(assigned.size());
+    const auto index = static_cast<int>(std::distance(assigned.begin(), position));
+    const auto width = (row.getWidth() - sendBarGap * (count - 1)) / count;
+
+    return { row.getX() + index * (width + sendBarGap), row.getY(), width, row.getHeight() };
+}
+
+void MixerChannelStrip::showRoutingMenu()
+{
+    if (track == nullptr || mixer == nullptr)
+        return;
+
+    // Built from the mixer, so a destination that would feed back is greyed out
+    // rather than offered and then refused.
+    const auto addDestinations = [this] (juce::PopupMenu& menu, int baseId, int current, bool includeMaster)
+    {
+        if (includeMaster)
+            menu.addItem(baseId, "Master", true, current == Track::masterDestination);
+        else
+            menu.addItem(baseId, "Mati", true, current < 0);
+
+        for (int i = 0; i < mixer->getNumTracks(); ++i)
+        {
+            const auto* candidate = mixer->getTrack(i);
+
+            if (candidate == nullptr || candidate->getKind() != TrackKind::bus)
+                continue;
+
+            menu.addItem(baseId + 1 + i,
+                         candidate->getName(),
+                         mixer->canRoute(trackIndex, i),
+                         current == i);
+        }
+    };
+
+    juce::PopupMenu outputMenu;
+    addDestinations(outputMenu, 1000, track->getOutputDestination(), true);
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader(track->getName());
+    menu.addSubMenu("Output", outputMenu);
+    menu.addSeparator();
+
+    for (int slot = 0; slot < Track::maxSends; ++slot)
+    {
+        const auto send = track->getSend(slot);
+
+        juce::PopupMenu sendMenu;
+        addDestinations(sendMenu, 2000 + slot * 100, send.destination, false);
+        sendMenu.addSeparator();
+        sendMenu.addItem(2000 + slot * 100 + 99, "Pre-fader", send.destination >= 0, send.preFader);
+
+        auto label = "Send " + juce::String(slot + 1);
+
+        if (send.destination >= 0)
+            if (const auto* destination = mixer->getTrack(send.destination))
+                label += ": " + destination->getName() + (send.preFader ? " (pre)" : "");
+
+        menu.addSubMenu(label, sendMenu);
+    }
+
+    menu.showMenuAsync(juce::PopupMenu::Options()
+                           .withMousePosition()
+                           .withMinimumWidth(190)
+                           .withStandardItemHeight(21),
+        [this] (int result)
+        {
+            if (result == 0 || track == nullptr || mixer == nullptr)
+                return;
+
+            if (result >= 1000 && result < 2000)
+            {
+                mixer->setTrackOutput(trackIndex, result - 1000 - 1);
+            }
+            else if (result >= 2000)
+            {
+                const auto slot = (result - 2000) / 100;
+                const auto choice = (result - 2000) % 100;
+                auto send = track->getSend(slot);
+
+                if (choice == 99)
+                {
+                    send.preFader = ! send.preFader;
+                }
+                else
+                {
+                    send.destination = choice - 1;
+
+                    // A send that has just been pointed somewhere starts at
+                    // unity rather than at zero, so it is audible immediately.
+                    if (send.destination >= 0 && send.level <= 0.0f)
+                        send.level = 1.0f;
+                }
+
+                mixer->setTrackSend(trackIndex, slot, send);
+            }
+
+            if (onRoutingChanged)
+                onRoutingChanged();
+
+            repaint();
+        });
+}
+
+void MixerChannelStrip::showAutomationMenu(bool forPan)
+{
+    if (track == nullptr)
+        return;
+
+    AutomationTarget target;
+    target.kind = forPan ? AutomationTarget::Kind::trackPan : AutomationTarget::Kind::trackVolume;
+    target.label = forPan ? "Pan" : "Volume";
+
+    const auto existing = track->findAutomationLane(target);
+    const auto current = forPan ? track->getPan() : track->getVolume();
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader(track->getName() + " - " + target.label);
+    menu.addItem(1, "Buat automation clip", existing < 0);
+    menu.addItem(2, "Hapus automation", existing >= 0);
+
+    menu.showMenuAsync(juce::PopupMenu::Options()
+                           .withMousePosition()
+                           .withMinimumWidth(180)
+                           .withStandardItemHeight(21),
+        [this, target, current, existing] (int result)
+        {
+            if (track == nullptr || result == 0)
+                return;
+
+            if (result == 1)
+            {
+                if (auto* lane = track->addAutomationLane(target))
+                {
+                    // Seeded at the value the control has now, so creating a
+                    // clip never changes the sound by itself.
+                    if (lane->isEmpty())
+                        lane->addPoint(0.0, target.fromParameterValue(current));
+                }
+            }
+            else if (result == 2)
+            {
+                track->removeAutomationLane(existing);
+            }
+
+            if (onAutomationChanged)
+                onAutomationChanged();
+
+            repaint();
+        });
 }
 
 void MixerChannelStrip::setSelected(bool shouldBeSelected)
@@ -154,9 +400,26 @@ void MixerChannelStrip::setSelected(bool shouldBeSelected)
     repaint();
 }
 
+void MixerChannelStrip::mouseUp(const juce::MouseEvent& event)
+{
+    juce::ignoreUnused(event);
+
+    // Nothing used to clear these, so panning once left every later drag on the
+    // strip moving the pan instead of whatever was actually grabbed.
+    draggingFader = false;
+    draggingPan = false;
+    draggingSend = -1;
+}
+
 void MixerChannelStrip::mouseDown(const juce::MouseEvent& event)
 {
     const auto position = event.getPosition();
+
+    // A fresh press owns the strip: whatever the last gesture grabbed, it is
+    // finished with now.
+    draggingFader = false;
+    draggingPan = false;
+    draggingSend = -1;
 
     // Touching a strip anywhere makes it the session's current track.
     if (! isMaster() && onSelected)
@@ -164,6 +427,47 @@ void MixerChannelStrip::mouseDown(const juce::MouseEvent& event)
 
     if (! isMaster() && track != nullptr)
     {
+        // Right clicking a control is where FL puts "create automation clip",
+        // and it is the shortest route from hearing a level to automating it.
+        if (event.mods.isRightButtonDown())
+        {
+            if (getPanKnobArea().expanded(3).contains(position))
+            {
+                showAutomationMenu(true);
+                return;
+            }
+
+            if (getFaderColumn().expanded(4, 6).contains(position))
+            {
+                showAutomationMenu(false);
+                return;
+            }
+
+            // Anywhere else on the strip is where the audio goes.
+            showRoutingMenu();
+            return;
+        }
+
+        // Sends are dragged like little faders of their own.
+        for (const auto slot : getAssignedSends())
+        {
+            if (! getSendBarBounds(slot).contains(position))
+                continue;
+
+            draggingSend = slot;
+            auto send = track->getSend(slot);
+            const auto bar = getSendBarBounds(slot);
+            const auto ratio = 1.0f - static_cast<float>(position.y - bar.getY())
+                                          / static_cast<float>(juce::jmax(1, bar.getHeight()));
+            send.level = juce::jlimit(0.0f, 1.0f, ratio) * maxSendLevel;
+
+            if (mixer != nullptr)
+                mixer->setTrackSend(trackIndex, slot, send);
+
+            repaint();
+            return;
+        }
+
         if (getMuteBounds().contains(position))
         {
             track->setMuted(! track->isMuted());
@@ -205,6 +509,23 @@ void MixerChannelStrip::mouseDown(const juce::MouseEvent& event)
 
 void MixerChannelStrip::mouseDrag(const juce::MouseEvent& event)
 {
+    if (draggingSend >= 0 && track != nullptr && mixer != nullptr)
+    {
+        const auto bar = getSendBarBounds(draggingSend);
+
+        if (! bar.isEmpty())
+        {
+            auto send = track->getSend(draggingSend);
+            const auto ratio = 1.0f - static_cast<float>(event.getPosition().y - bar.getY())
+                                          / static_cast<float>(juce::jmax(1, bar.getHeight()));
+            send.level = juce::jlimit(0.0f, 1.0f, ratio) * maxSendLevel;
+            mixer->setTrackSend(trackIndex, draggingSend, send);
+        }
+
+        repaint();
+        return;
+    }
+
     if (draggingPan && track != nullptr)
     {
         track->setPan(juce::jlimit(-1.0f, 1.0f, panDragStart - event.getDistanceFromDragStartY() * 0.01f));
@@ -319,14 +640,20 @@ juce::Rectangle<int> MixerChannelStrip::getArmBounds() const
 
 float MixerChannelStrip::getLevel() const
 {
+    // The automated value, so the fader shows what is actually being applied
+    // rather than the number the automation is overriding.
     if (track != nullptr)
-        return track->getVolume();
+        return track->getEffectiveVolume();
 
     return masterBus != nullptr ? masterBus->getGain() : 0.0f;
 }
 
 void MixerChannelStrip::setLevel(float newLevel)
 {
+    // An automated fader still moves when dragged, the way FL's does: the curve
+    // takes it straight back on the next block, so it visibly springs back.
+    // That reads as "something else owns this", where a control that refuses to
+    // move at all just reads as broken.
     if (track != nullptr)
         track->setVolume(newLevel);
     else if (masterBus != nullptr)
@@ -335,7 +662,7 @@ void MixerChannelStrip::setLevel(float newLevel)
 
 float MixerChannelStrip::getPan() const
 {
-    return track != nullptr ? track->getPan() : 0.0f;
+    return track != nullptr ? track->getEffectivePan() : 0.0f;
 }
 
 juce::String MixerChannelStrip::getDisplayName() const

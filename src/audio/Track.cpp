@@ -1,16 +1,128 @@
 #include "Track.h"
 
+#include <cmath>
+
 namespace djr
 {
+
+namespace
+{
+    /** Below this two gains are the same and a ramp is not worth setting up. */
+    constexpr float gainEpsilon = 1.0e-7f;
+}
 
 Track::Track(juce::String trackName, TrackKind kind)
     : name(std::move(trackName)), trackKind(kind)
 {
+    // Reserved up front so adding a lane never reallocates while the audio
+    // thread might be part way through the list.
+    automationLanes.reserve(static_cast<size_t>(maxAutomationLanes));
+
+    for (auto& destination : sendDestination)
+        destination.store(-1, std::memory_order_release);
+
+    for (auto& level : sendLevel)
+        level.store(0.0f, std::memory_order_release);
+
+    for (auto& preFader : sendPreFader)
+        preFader.store(false, std::memory_order_release);
+}
+
+void Track::setOutputDestination(int destination) noexcept
+{
+    outputDestination.store(destination < 0 ? masterDestination : destination,
+                            std::memory_order_release);
+}
+
+int Track::getOutputDestination() const noexcept
+{
+    return outputDestination.load(std::memory_order_acquire);
+}
+
+void Track::setSend(int slot, const TrackSend& send) noexcept
+{
+    if (! juce::isPositiveAndBelow(slot, maxSends))
+        return;
+
+    const auto index = static_cast<size_t>(slot);
+    sendDestination[index].store(send.destination < 0 ? -1 : send.destination, std::memory_order_release);
+    sendLevel[index].store(juce::jlimit(0.0f, 2.0f, send.level), std::memory_order_release);
+    sendPreFader[index].store(send.preFader, std::memory_order_release);
+}
+
+TrackSend Track::getSend(int slot) const noexcept
+{
+    if (! juce::isPositiveAndBelow(slot, maxSends))
+        return {};
+
+    const auto index = static_cast<size_t>(slot);
+    return { sendDestination[index].load(std::memory_order_acquire),
+             sendLevel[index].load(std::memory_order_acquire),
+             sendPreFader[index].load(std::memory_order_acquire) };
+}
+
+bool Track::hasPreFaderSend() const noexcept
+{
+    for (int slot = 0; slot < maxSends; ++slot)
+        if (const auto send = getSend(slot); send.isActive() && send.preFader)
+            return true;
+
+    return false;
+}
+
+void Track::dropRoutesTo(int destination) noexcept
+{
+    if (destination < 0)
+        return;
+
+    if (getOutputDestination() == destination)
+        setOutputDestination(masterDestination);
+
+    for (int slot = 0; slot < maxSends; ++slot)
+        if (getSend(slot).destination == destination)
+            setSend(slot, {});
+}
+
+void Track::remapDestinations(int removedIndex) noexcept
+{
+    if (removedIndex < 0)
+        return;
+
+    // Everything past the hole shuffles down by one; anything that pointed at
+    // the hole itself has already been sent back to master by dropRoutesTo.
+    const auto shift = [removedIndex] (int destination)
+    {
+        return destination > removedIndex ? destination - 1 : destination;
+    };
+
+    if (const auto output = getOutputDestination(); output >= 0)
+        setOutputDestination(shift(output));
+
+    for (int slot = 0; slot < maxSends; ++slot)
+    {
+        auto send = getSend(slot);
+
+        if (send.destination >= 0)
+        {
+            send.destination = shift(send.destination);
+            setSend(slot, send);
+        }
+    }
 }
 
 const juce::String& Track::getName() const noexcept
 {
     return name;
+}
+
+void Track::setName(juce::String newName)
+{
+    // A blank header reads as a broken track, so an empty name is refused
+    // rather than stored.
+    if (newName.trim().isEmpty())
+        return;
+
+    name = std::move(newName).trim();
 }
 
 TrackKind Track::getKind() const noexcept
@@ -82,6 +194,151 @@ float Track::getPeakLevel(int channel) const noexcept
         return peakLevelRight.load(std::memory_order_acquire);
 
     return getPeakLevel();
+}
+
+AutomationLane* Track::addAutomationLane(AutomationTarget target)
+{
+    if (const auto existing = findAutomationLane(target); existing >= 0)
+        return getAutomationLane(existing);
+
+    auto lane = std::make_unique<AutomationLane>(std::move(target));
+    auto* raw = lane.get();
+
+    const juce::SpinLock::ScopedLockType scoped(automationLock);
+
+    if (static_cast<int>(automationLanes.size()) >= maxAutomationLanes)
+        return nullptr;
+
+    automationLanes.push_back(std::move(lane));
+    automationLaneCount.store(static_cast<int>(automationLanes.size()), std::memory_order_release);
+    return raw;
+}
+
+bool Track::removeAutomationLane(int index)
+{
+    std::unique_ptr<AutomationLane> detached;
+
+    {
+        const juce::SpinLock::ScopedLockType scoped(automationLock);
+
+        if (! juce::isPositiveAndBelow(index, static_cast<int>(automationLanes.size())))
+            return false;
+
+        detached = std::move(automationLanes[static_cast<size_t>(index)]);
+        automationLanes.erase(automationLanes.begin() + index);
+        automationLaneCount.store(static_cast<int>(automationLanes.size()), std::memory_order_release);
+    }
+
+    // The lane that was driving volume or pan is gone; stop reporting its value
+    // or the fader would freeze where the curve happened to leave it.
+    volumeAutomated.store(false, std::memory_order_release);
+    panAutomated.store(false, std::memory_order_release);
+
+    detached.reset();
+    return true;
+}
+
+int Track::getNumAutomationLanes() const noexcept
+{
+    return automationLaneCount.load(std::memory_order_acquire);
+}
+
+AutomationLane* Track::getAutomationLane(int index) noexcept
+{
+    const juce::SpinLock::ScopedLockType scoped(automationLock);
+
+    return juce::isPositiveAndBelow(index, static_cast<int>(automationLanes.size()))
+        ? automationLanes[static_cast<size_t>(index)].get()
+        : nullptr;
+}
+
+const AutomationLane* Track::getAutomationLane(int index) const noexcept
+{
+    const juce::SpinLock::ScopedLockType scoped(automationLock);
+
+    return juce::isPositiveAndBelow(index, static_cast<int>(automationLanes.size()))
+        ? automationLanes[static_cast<size_t>(index)].get()
+        : nullptr;
+}
+
+int Track::findAutomationLane(const AutomationTarget& target) const noexcept
+{
+    const juce::SpinLock::ScopedLockType scoped(automationLock);
+
+    for (int i = 0; i < static_cast<int>(automationLanes.size()); ++i)
+        if (automationLanes[static_cast<size_t>(i)]->getTarget().aimsAtSameParameter(target))
+            return i;
+
+    return -1;
+}
+
+std::vector<AutomationLaneState> Track::captureAutomation() const
+{
+    std::vector<AutomationLaneState> captured;
+
+    const juce::SpinLock::ScopedLockType scoped(automationLock);
+    captured.reserve(automationLanes.size());
+
+    for (const auto& lane : automationLanes)
+        if (lane != nullptr)
+            captured.push_back(lane->captureState());
+
+    return captured;
+}
+
+void Track::restoreAutomation(const std::vector<AutomationLaneState>& lanes)
+{
+    // Built outside the lock: allocating a whole set of lanes is not something
+    // the audio thread should ever be made to wait for.
+    std::vector<std::unique_ptr<AutomationLane>> rebuilt;
+    rebuilt.reserve(static_cast<size_t>(maxAutomationLanes));
+
+    for (const auto& state : lanes)
+    {
+        if (static_cast<int>(rebuilt.size()) >= maxAutomationLanes)
+            break;
+
+        auto lane = std::make_unique<AutomationLane>(state.target);
+        lane->applyState(state);
+        rebuilt.push_back(std::move(lane));
+    }
+
+    std::vector<std::unique_ptr<AutomationLane>> previous;
+
+    {
+        const juce::SpinLock::ScopedLockType scoped(automationLock);
+        previous = std::move(automationLanes);
+        automationLanes = std::move(rebuilt);
+        automationLaneCount.store(static_cast<int>(automationLanes.size()), std::memory_order_release);
+    }
+
+    volumeAutomated.store(false, std::memory_order_release);
+    panAutomated.store(false, std::memory_order_release);
+    previous.clear();
+}
+
+float Track::getEffectiveVolume() const noexcept
+{
+    return volumeAutomated.load(std::memory_order_acquire)
+        ? automatedVolume.load(std::memory_order_acquire)
+        : getVolume();
+}
+
+float Track::getEffectivePan() const noexcept
+{
+    return panAutomated.load(std::memory_order_acquire)
+        ? automatedPan.load(std::memory_order_acquire)
+        : getPan();
+}
+
+bool Track::isVolumeAutomated() const noexcept
+{
+    return volumeAutomated.load(std::memory_order_acquire);
+}
+
+bool Track::isPanAutomated() const noexcept
+{
+    return panAutomated.load(std::memory_order_acquire);
 }
 
 void Track::addPlugin(std::unique_ptr<juce::AudioPluginInstance> plugin)
@@ -210,10 +467,15 @@ void Track::prepare(double sampleRate, int blockSize)
 
 void Track::processAudio(juce::AudioBuffer<float>& buffer,
                          juce::MidiBuffer& midi,
-                         const TrackPlaybackContext& context)
+                         const TrackPlaybackContext& context,
+                         juce::AudioBuffer<float>* preFaderOut)
 {
     buffer.clear();
     midi.clear();
+
+    // Read the curves first: the mute check below returns early, and the mixer
+    // faders should still show what the automation is doing on a muted track.
+    readAutomation(context, buffer.getNumSamples());
 
     // Live playing is merged before rendering so the instrument - or the
     // preview synth - hears the keyboard as well as the sequence.
@@ -227,6 +489,12 @@ void Track::processAudio(juce::AudioBuffer<float>& buffer,
     {
         buffer.clear();
         midi.clear();
+
+        // A muted track feeds its sends nothing either, so the pre-fader tap has
+        // to be cleared too rather than left holding the previous block.
+        if (preFaderOut != nullptr)
+            preFaderOut->clear();
+
         peakLevel.store(0.0f, std::memory_order_release);
         peakLevelLeft.store(0.0f, std::memory_order_release);
         peakLevelRight.store(0.0f, std::memory_order_release);
@@ -237,7 +505,10 @@ void Track::processAudio(juce::AudioBuffer<float>& buffer,
         // Instrument first: it is what turns this track's MIDI into audio.
         const juce::SpinLock::ScopedTryLockType scoped(instrumentLock);
         if (scoped.isLocked() && instrument != nullptr)
+        {
+            applyParameterAutomation(*instrument, AutomationTarget::instrumentSlot);
             PluginChain::processWithChannelAdaptation(*instrument, buffer, midi, instrumentScratch);
+        }
     }
 
     {
@@ -245,12 +516,132 @@ void Track::processAudio(juce::AudioBuffer<float>& buffer,
         // block instead, so the worst case is one unprocessed buffer.
         const juce::SpinLock::ScopedTryLockType scoped(pluginLock);
         if (scoped.isLocked() && ! pluginChain.isEmpty())
+        {
+            for (int slot = 0; pendingParameterCount > 0 && slot < pluginChain.size(); ++slot)
+                if (auto* insert = pluginChain.getPlugin(slot))
+                    applyParameterAutomation(*insert, slot);
+
             pluginChain.process(buffer, midi);
+        }
     }
 
-    buffer.applyGain(getVolume());
-    applyPan(buffer);
+    // Taken here, between the inserts and the fader: that is what "pre-fader"
+    // means, and it is why riding the fader does not also ride the send.
+    if (preFaderOut != nullptr)
+    {
+        const auto numSamples = juce::jmin(preFaderOut->getNumSamples(), buffer.getNumSamples());
+
+        for (int channel = 0; channel < preFaderOut->getNumChannels(); ++channel)
+            if (channel < buffer.getNumChannels())
+                preFaderOut->copyFrom(channel, 0, buffer, channel, 0, numSamples);
+    }
+
+    applyLevels(buffer);
     updatePeak(buffer);
+}
+
+void Track::readAutomation(const TrackPlaybackContext& context, int numSamples) noexcept
+{
+    blockVolumeAutomated = false;
+    blockPanAutomated = false;
+    pendingParameterCount = 0;
+    blockAutomationChunks = juce::jlimit(1, maxAutomationChunks,
+                                         (juce::jmax(1, numSamples) + automationChunkSamples - 1)
+                                             / automationChunkSamples);
+
+    if (automationLaneCount.load(std::memory_order_acquire) == 0)
+    {
+        volumeAutomated.store(false, std::memory_order_release);
+        panAutomated.store(false, std::memory_order_release);
+        return;
+    }
+
+    const juce::SpinLock::ScopedTryLockType scoped(automationLock);
+
+    // Losing the race with an edit costs one block of the previous value, the
+    // same bargain the plugin chain already makes.
+    if (! scoped.isLocked())
+        return;
+
+    // A stopped transport still reads at the playhead, so dragging it shows what
+    // the curve does there instead of freezing on the last value played.
+    const auto endBeat = context.isPlaying ? context.endBeat : context.startBeat;
+
+    // Big enough for every sub-block boundary; 65 doubles of stack is nothing
+    // next to what a plugin will ask for in the same callback.
+    double sampled[maxAutomationChunks + 1];
+
+    for (const auto& lane : automationLanes)
+    {
+        if (lane == nullptr)
+            continue;
+
+        const auto& laneTarget = lane->getTarget();
+
+        // A plugin parameter cannot ramp inside a block, so it only needs the
+        // one value at the block boundary.
+        const auto wanted = laneTarget.kind == AutomationTarget::Kind::pluginParameter
+            ? 1
+            : blockAutomationChunks + 1;
+
+        if (! lane->sampleRange(context.startBeat, endBeat, sampled, wanted))
+            continue;
+
+        switch (laneTarget.kind)
+        {
+            case AutomationTarget::Kind::trackVolume:
+                for (int i = 0; i < wanted; ++i)
+                    blockVolumeCurve[static_cast<size_t>(i)] =
+                        static_cast<float>(laneTarget.toParameterValue(sampled[i]));
+
+                blockVolumeAutomated = true;
+                automatedVolume.store(blockVolumeCurve[static_cast<size_t>(wanted - 1)],
+                                      std::memory_order_release);
+                break;
+
+            case AutomationTarget::Kind::trackPan:
+                for (int i = 0; i < wanted; ++i)
+                    blockPanCurve[static_cast<size_t>(i)] =
+                        static_cast<float>(laneTarget.toParameterValue(sampled[i]));
+
+                blockPanAutomated = true;
+                automatedPan.store(blockPanCurve[static_cast<size_t>(wanted - 1)],
+                                   std::memory_order_release);
+                break;
+
+            case AutomationTarget::Kind::pluginParameter:
+                if (pendingParameterCount < maxAutomationLanes)
+                    pendingParameters[static_cast<size_t>(pendingParameterCount++)] =
+                        { laneTarget.pluginSlot,
+                          laneTarget.parameterIndex,
+                          static_cast<float>(laneTarget.toParameterValue(sampled[0])) };
+                break;
+        }
+    }
+
+    volumeAutomated.store(blockVolumeAutomated, std::memory_order_release);
+    panAutomated.store(blockPanAutomated, std::memory_order_release);
+}
+
+void Track::applyParameterAutomation(juce::AudioPluginInstance& plugin, int pluginSlot) noexcept
+{
+    if (pendingParameterCount == 0)
+        return;
+
+    // setValue is the path a host uses from the audio thread; the notifying
+    // variant is the one that would call back into the message thread.
+    const auto& parameters = plugin.getParameters();
+
+    for (int i = 0; i < pendingParameterCount; ++i)
+    {
+        const auto& pending = pendingParameters[static_cast<size_t>(i)];
+
+        if (pending.pluginSlot != pluginSlot)
+            continue;
+
+        if (juce::isPositiveAndBelow(pending.parameterIndex, parameters.size()))
+            parameters[pending.parameterIndex]->setValue(pending.value);
+    }
 }
 
 void Track::mixInInput(juce::AudioBuffer<float>& buffer, const TrackPlaybackContext& context) const noexcept
@@ -297,17 +688,78 @@ void Track::updatePeak(const juce::AudioBuffer<float>& buffer) noexcept
     peakLevelRight.store(buffer.getNumChannels() > 1 ? channelPeak(1) : channelPeak(0), std::memory_order_release);
 }
 
-void Track::applyPan(juce::AudioBuffer<float>& buffer) const noexcept
+void Track::applyLevels(juce::AudioBuffer<float>& buffer) const noexcept
 {
-    if (buffer.getNumChannels() < 2)
+    const auto numSamples = buffer.getNumSamples();
+
+    if (numSamples <= 0)
         return;
 
-    const auto panValue = getPan();
-    const auto leftGain = juce::jlimit(0.0f, 1.0f, 1.0f - juce::jmax(0.0f, panValue));
-    const auto rightGain = juce::jlimit(0.0f, 1.0f, 1.0f + juce::jmin(0.0f, panValue));
+    const auto stereo = buffer.getNumChannels() >= 2;
+    const auto storedVolume = getVolume();
+    const auto storedPan = getPan();
 
-    buffer.applyGain(0, 0, buffer.getNumSamples(), leftGain);
-    buffer.applyGain(1, 0, buffer.getNumSamples(), rightGain);
+    const auto leftGain = [] (float panValue)
+    {
+        return juce::jlimit(0.0f, 1.0f, 1.0f - juce::jmax(0.0f, panValue));
+    };
+
+    const auto rightGain = [] (float panValue)
+    {
+        return juce::jlimit(0.0f, 1.0f, 1.0f + juce::jmin(0.0f, panValue));
+    };
+
+    // Nothing being automated is by far the common case, and it costs one gain
+    // call for the whole buffer.
+    if (! blockVolumeAutomated && ! blockPanAutomated)
+    {
+        buffer.applyGain(storedVolume);
+
+        if (stereo)
+        {
+            buffer.applyGain(0, 0, numSamples, leftGain(storedPan));
+            buffer.applyGain(1, 0, numSamples, rightGain(storedPan));
+        }
+
+        return;
+    }
+
+    // Automation is followed in sub-blocks and ramped between them: one straight
+    // line per buffer would flatten a fast sweep into audible stair steps, and a
+    // plain step would click on every buffer boundary.
+    for (int chunk = 0; chunk < blockAutomationChunks; ++chunk)
+    {
+        const auto begin = chunk * numSamples / blockAutomationChunks;
+        const auto length = (chunk + 1) * numSamples / blockAutomationChunks - begin;
+
+        if (length <= 0)
+            continue;
+
+        const auto index = static_cast<size_t>(chunk);
+        const auto volumeStart = blockVolumeAutomated ? blockVolumeCurve[index] : storedVolume;
+        const auto volumeEnd = blockVolumeAutomated ? blockVolumeCurve[index + 1] : storedVolume;
+
+        if (std::abs(volumeEnd - volumeStart) < gainEpsilon)
+            buffer.applyGain(begin, length, volumeStart);
+        else
+            buffer.applyGainRamp(begin, length, volumeStart, volumeEnd);
+
+        if (! stereo)
+            continue;
+
+        const auto panStart = blockPanAutomated ? blockPanCurve[index] : storedPan;
+        const auto panEnd = blockPanAutomated ? blockPanCurve[index + 1] : storedPan;
+
+        if (std::abs(panEnd - panStart) < gainEpsilon)
+        {
+            buffer.applyGain(0, begin, length, leftGain(panStart));
+            buffer.applyGain(1, begin, length, rightGain(panStart));
+            continue;
+        }
+
+        buffer.applyGainRamp(0, begin, length, leftGain(panStart), leftGain(panEnd));
+        buffer.applyGainRamp(1, begin, length, rightGain(panStart), rightGain(panEnd));
+    }
 }
 
 } // namespace djr

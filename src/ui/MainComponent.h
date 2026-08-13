@@ -126,6 +126,8 @@ private:
     void wireUndoHooks();
     /** Asks for a new name for `patternIndex` and stores it on the session. */
     void renamePattern(int patternIndex);
+    /** Asks for a new name for a track and pushes it everywhere it is shown. */
+    void renameTrack(int trackIndex);
     /** Pushes the active pattern's name into the editor header. */
     void refreshPatternName();
     /** Beats the active pattern loops for: the manual length, or its content. */
@@ -133,11 +135,21 @@ private:
     /** Re-points the loop and the playlist at the pattern's real length. */
     void refreshPatternLength();
     void synchroniseProjectState();
+    /** Makes the mixer hold the project's tracks - as many as it names, each of
+        the kind it asks for - and points the views at the new list.
+    */
+    void rebuildTrackListForProject();
     void applyProjectToSession();
     /** Rebuilds a track's plugins from the project, restoring their state. */
     void restorePluginsForTrack(int trackIndex, const juce::Array<juce::var>& pluginStates);
     /** Reloads a track's audio clips from disk with their trim and warp. */
     void restoreAudioClipsForTrack(int trackIndex, const juce::Array<juce::var>& clipStates);
+    /** Replaces a track's automation lanes with the ones in the project. */
+    void restoreAutomationForTrack(int trackIndex, const juce::Array<juce::var>& laneStates);
+    /** Re-points every output and send. Runs after the whole track list exists,
+        because a destination is an index into it.
+    */
+    void restoreRoutingFromProject();
     Track* getTrack(int index) noexcept;
 
     DJRLookAndFeel lookAndFeel;

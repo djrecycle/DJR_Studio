@@ -267,8 +267,10 @@ void EditorPanel::showPatternLengthMenu()
                      true,
                      patternLengthLocked && std::abs(patternLengthBeats - bars[i] * barBeats) < 1.0e-9);
 
+    // Anchored to the badge that opened it, not to the whole panel: targeting
+    // the component drops the menu at the panel's edge, nowhere near the click.
     menu.showMenuAsync(juce::PopupMenu::Options()
-                           .withTargetComponent(this)
+                           .withTargetScreenArea(localAreaToGlobal(getPatternLengthBounds()))
                            .withMinimumWidth(160)
                            .withStandardItemHeight(21),
         [this] (int result)

@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 
 #include "Theme.h"
+#include "project/ProjectTrackLayout.h"
 #include "utils/FileUtils.h"
 #include "utils/Logger.h"
 
@@ -123,6 +124,7 @@ MainComponent::MainComponent()
     transportBar.setRedoCallback([this] { redoEdit(); });
 
     arrangementView.setTrackSelectedCallback([this] (int trackIndex) { selectTrack(trackIndex); });
+    arrangementView.setTrackRenameCallback([this] (int trackIndex) { renameTrack(trackIndex); });
     arrangementView.setClipEditedCallback([this]
     {
         pianoRollModel.notifyClipChanged();
@@ -242,6 +244,14 @@ MainComponent::MainComponent()
     preferencesDialog.setToggleStates(true, arrangementView.isFollowingPlayhead(), autoOpenPluginEditor);
 
     mixerView.setTrackSelectedCallback([this] (int trackIndex) { selectTrack(trackIndex); });
+
+    // A lane created from a mixer strip has to show up as a playlist row, and
+    // counts as an unsaved change like any other edit.
+    mixerView.setAutomationChangedCallback([this]
+    {
+        arrangementView.repaint();
+        markDirty();
+    });
 
     sessionState.addChangeListener(this);
     pianoRollModel.addChangeListener(this);
@@ -1317,6 +1327,49 @@ void MainComponent::redoEdit()
     setStatusMessage("Redo: " + (name.isEmpty() ? juce::String("edit terakhir") : name));
 }
 
+void MainComponent::renameTrack(int trackIndex)
+{
+    auto* track = getTrack(trackIndex);
+
+    if (track == nullptr)
+        return;
+
+    auto* window = new juce::AlertWindow("Ganti nama track",
+                                         "Nama untuk track " + juce::String(trackIndex + 1) + ":",
+                                         juce::AlertWindow::NoIcon);
+
+    window->addTextEditor("name", track->getName(), juce::String());
+    window->addButton("Simpan", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    window->addButton("Batal", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+    window->enterModalState(true,
+        juce::ModalCallbackFunction::create([this, trackIndex, window] (int result)
+        {
+            std::unique_ptr<juce::AlertWindow> owned(window);
+
+            if (result != 1)
+                return;
+
+            auto* renamed = getTrack(trackIndex);
+
+            if (renamed == nullptr)
+                return;
+
+            editHistory.pushSnapshot("Ganti nama track");
+            renamed->setName(owned->getTextEditorContents("name"));
+
+            // The name is shown in four places at once, so all of them are
+            // re-read rather than left to notice on their own.
+            arrangementView.repaint();
+            mixerView.refreshStrips();
+            mixerView.setSelectedTrack(sessionState.getSelectedTrack());
+            insertChainPanel.refresh();
+            markDirty();
+            setStatusMessage("Track: " + renamed->getName());
+        }),
+        false);
+}
+
 void MainComponent::renamePattern(int patternIndex)
 {
     if (! juce::isPositiveAndBelow(patternIndex, SessionState::maxPatterns))
@@ -1428,7 +1481,22 @@ void MainComponent::synchroniseProjectState()
 
         ProjectTrackState state;
         state.name = track->getName();
-        state.type = track->getKind() == TrackKind::midi ? "midi" : "audio";
+        state.type = track->getKind() == TrackKind::midi ? "midi"
+                   : track->getKind() == TrackKind::bus ? "bus"
+                                                        : "audio";
+        state.outputDestination = track->getOutputDestination();
+
+        for (int slot = 0; slot < Track::maxSends; ++slot)
+        {
+            const auto send = track->getSend(slot);
+
+            auto* sendObject = new juce::DynamicObject();
+            sendObject->setProperty("destination", send.destination);
+            sendObject->setProperty("level", send.level);
+            sendObject->setProperty("preFader", send.preFader);
+            state.sends.add(juce::var(sendObject));
+        }
+
         state.volume = track->getVolume();
         state.pan = track->getPan();
         state.mute = track->isMuted();
@@ -1464,6 +1532,10 @@ void MainComponent::synchroniseProjectState()
             for (int slot = 0; slot < editableTrack->getPluginCount(); ++slot)
                 if (auto* insert = editableTrack->getPlugin(slot))
                     state.pluginStates.add(capturePlugin(*insert, false));
+
+            for (int lane = 0; lane < editableTrack->getNumAutomationLanes(); ++lane)
+                if (const auto* automationLane = editableTrack->getAutomationLane(lane))
+                    state.automation.add(automationLane->toVar());
         }
 
         if (const auto* audioTrack = dynamic_cast<const AudioTrack*>(track))
@@ -1586,11 +1658,103 @@ void MainComponent::restoreAudioClipsForTrack(int trackIndex, const juce::Array<
     }
 }
 
+void MainComponent::restoreAutomationForTrack(int trackIndex, const juce::Array<juce::var>& laneStates)
+{
+    auto* track = getTrack(trackIndex);
+
+    if (track == nullptr)
+        return;
+
+    // A project with no automation still has to clear whatever the previous one
+    // left behind, so this runs even for an empty array.
+    std::vector<AutomationLaneState> restored;
+    restored.reserve(static_cast<size_t>(laneStates.size()));
+
+    for (const auto& entry : laneStates)
+        if (auto lane = AutomationLane::fromVar(entry))
+            restored.push_back(lane->captureState());
+
+    track->restoreAutomation(restored);
+}
+
+void MainComponent::rebuildTrackListForProject()
+{
+    auto& mixer = audioEngine.getMixer();
+
+    if (! applyProjectTrackLayout(mixer, projectManager.getProject().tracks))
+        return;
+
+    // Opening a project is not an edit, so the panels are brought up to date
+    // without the file ending up marked as changed by it.
+    const auto wasDirty = projectDirty;
+
+    // A track that changed kind, or one this project does not have, has just
+    // been destroyed - and the strips are still holding pointers into it, so they
+    // are rebuilt before anything can paint one.
+    mixerView.refreshStrips();
+
+    // The selection can now be past the end of a shorter list; it is clamped
+    // before the views are told, so they never look up a track that is gone.
+    const auto selected = juce::jlimit(0, juce::jmax(0, mixer.getNumTracks() - 1),
+                                       sessionState.getSelectedTrack());
+    sessionState.setSelectedTrack(selected);
+    arrangementView.setSelectedTrack(selected);
+    arrangementView.notifyTrackListChanged();
+
+    projectDirty = wasDirty;
+}
+
+void MainComponent::restoreRoutingFromProject()
+{
+    const auto& project = projectManager.getProject();
+    auto& mixer = audioEngine.getMixer();
+
+    // Every route is cleared first, so a track the file says nothing about does
+    // not keep whatever the previous session pointed it at.
+    for (int i = 0; i < mixer.getNumTracks(); ++i)
+    {
+        mixer.setTrackOutput(i, Track::masterDestination);
+
+        for (int slot = 0; slot < Track::maxSends; ++slot)
+            mixer.setTrackSend(i, slot, {});
+    }
+
+    for (int i = 0; i < project.tracks.size() && i < mixer.getNumTracks(); ++i)
+    {
+        const auto& projectTrack = project.tracks.getReference(i);
+
+        // Set through the mixer rather than onto the track: a file that has been
+        // hand edited, or written by an older build, could describe a loop, and
+        // the mixer is what refuses one.
+        mixer.setTrackOutput(i, projectTrack.outputDestination);
+
+        for (int slot = 0; slot < projectTrack.sends.size() && slot < Track::maxSends; ++slot)
+        {
+            auto* sendObject = projectTrack.sends[slot].getDynamicObject();
+
+            if (sendObject == nullptr)
+                continue;
+
+            TrackSend send;
+            send.destination = static_cast<int>(sendObject->getProperty("destination"));
+            send.level = static_cast<float>(static_cast<double>(sendObject->getProperty("level")));
+            send.preFader = static_cast<bool>(sendObject->getProperty("preFader"));
+
+            mixer.setTrackSend(i, slot, send);
+        }
+    }
+}
+
 void MainComponent::applyProjectToSession()
 {
     const auto& project = projectManager.getProject();
     audioEngine.getTransport().setTempoBpm(project.tempo);
     audioEngine.getTransport().setTimeSignature(project.timeSigNumerator, project.timeSigDenominator);
+
+    // The session has to hold the project's tracks before any of their state is
+    // applied: the loop below reaches a seventh track only once one exists, and
+    // it can only tell a MIDI track from an audio one once the kinds match.
+    rebuildTrackListForProject();
 
     for (int i = 0; i < project.tracks.size(); ++i)
     {
@@ -1599,6 +1763,9 @@ void MainComponent::applyProjectToSession()
             continue;
 
         const auto& projectTrack = project.tracks.getReference(i);
+        // Saved since the first version of the format but never read back, so a
+        // renamed track reopened under its old default name.
+        runtimeTrack->setName(projectTrack.name);
         runtimeTrack->setVolume(projectTrack.volume);
         runtimeTrack->setPan(projectTrack.pan);
         runtimeTrack->setMuted(projectTrack.mute);
@@ -1637,7 +1804,12 @@ void MainComponent::applyProjectToSession()
 
         restoreAudioClipsForTrack(i, projectTrack.audioClips);
         restorePluginsForTrack(i, projectTrack.pluginStates);
+        restoreAutomationForTrack(i, projectTrack.automation);
     }
+
+    // Routing comes last and in its own pass: a destination is a track index, so
+    // every track has to exist before any of them can point at another.
+    restoreRoutingFromProject();
 
     panelHost.applyLayoutState(project.panelLayout);
 

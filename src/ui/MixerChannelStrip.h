@@ -1,10 +1,12 @@
 #pragma once
 
 #include "audio/MasterBus.h"
+#include "audio/Mixer.h"
 #include "audio/Track.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <functional>
+#include <vector>
 
 namespace djr
 {
@@ -23,6 +25,7 @@ public:
     void paint(juce::Graphics& g) override;
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
+    void mouseUp(const juce::MouseEvent& event) override;
     void mouseDoubleClick(const juce::MouseEvent& event) override;
 
     bool isMaster() const noexcept;
@@ -32,9 +35,32 @@ public:
 
     /** Fired when the strip is clicked anywhere, so the owner can select it. */
     std::function<void()> onSelected;
+    /** Fired after a lane is created or removed from this strip, so the playlist
+        can grow the lane and the project can be marked unsaved.
+    */
+    std::function<void()> onAutomationChanged;
+
+    /** Fired after this strip changes where its audio goes, so the owner can
+        re-read the routing everywhere it is shown.
+    */
+    std::function<void()> onRoutingChanged;
+
+    /** The strip needs the mixer to change routing: only the mixer can see the
+        whole graph and refuse a route that would feed back.
+    */
+    void setMixer(Mixer* mixerToRouteThrough, int trackIndex) noexcept;
 
 private:
     void timerCallback() override;
+    /** FL's "create automation clip", on the fader and on the pan knob. */
+    void showAutomationMenu(bool forPan);
+    /** Where this track's audio goes, and what its sends are doing. */
+    void showRoutingMenu();
+    /** The row of send level bars, empty when nothing is assigned. */
+    juce::Rectangle<int> getSendRowBounds() const;
+    juce::Rectangle<int> getSendBarBounds(int slot) const;
+    /** Slots that actually point somewhere, in slot order. */
+    std::vector<int> getAssignedSends() const;
 
     /** The fader/meter block absorbs whatever height the strip has spare. */
     int getFaderRowHeight() const;
@@ -62,6 +88,11 @@ private:
     bool draggingPan = false;
     bool selected = false;
     float panDragStart = 0.0f;
+    /** Set when the strip belongs to a mixer track, so routing can be changed. */
+    Mixer* mixer = nullptr;
+    int trackIndex = -1;
+    /** Send slot being dragged, or -1. */
+    int draggingSend = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MixerChannelStrip)
 };

@@ -2,6 +2,8 @@
 // driven by hand so the assertions are deterministic.
 
 #include "audio/AudioClip.h"
+#include "audio/AutomationLane.h"
+#include "audio/BusTrack.h"
 #include "audio/Transport.h"
 #include "audio/AudioTrack.h"
 #include "audio/MidiTrack.h"
@@ -11,6 +13,7 @@
 #include "midi/PianoRollModel.h"
 #include "export/ExportManager.h"
 #include "project/Project.h"
+#include "project/ProjectTrackLayout.h"
 #include "app/EditHistory.h"
 #include "audio/Metronome.h"
 #include "recording/Recorder.h"
@@ -1335,6 +1338,659 @@ int main()
         check(history.undo(), "undo runs after a tempo change");
         check(std::abs(settingsTransport.getTempoBpm() - 90.0) < 1.0e-9,
               "undo leaves tempo exactly where the user put it");
+    }
+
+    // --- Automation: the curve model ---------------------------------------
+    {
+        djr::AutomationTarget volumeTarget;
+        volumeTarget.kind = djr::AutomationTarget::Kind::trackVolume;
+
+        djr::AutomationLane lane(volumeTarget);
+        check(lane.isEmpty(), "a new automation lane has no points");
+
+        // Deliberately out of order: the lane is responsible for sorting.
+        lane.addPoint(8.0, 0.0);
+        lane.addPoint(0.0, 1.0);
+
+        const auto points = lane.getPoints();
+        check(points.size() == 2 && points[0].beat < points[1].beat,
+              "points are kept in beat order however they arrive");
+
+        check(std::abs(lane.getValueAtBeat(-4.0) - 1.0) < 1.0e-9,
+              "before the first point the curve holds its value");
+        check(std::abs(lane.getValueAtBeat(99.0) - 0.0) < 1.0e-9,
+              "and after the last point it holds too");
+        check(std::abs(lane.getValueAtBeat(4.0) - 0.5) < 1.0e-9,
+              "a straight segment reads linearly");
+
+        lane.addPoint(0.0, 0.25);
+        check(lane.getNumPoints() == 2, "dropping a point onto an existing one moves it");
+        check(std::abs(lane.getValueAtBeat(0.0) - 0.25) < 1.0e-9, "and it takes the new value");
+
+        lane.setPoints({ { 0.0, 0.0, 0.0 }, { 8.0, 1.0, 0.0 } });
+        lane.setPointCurve(1, 1.0);
+        check(lane.getValueAtBeat(4.0) < 0.5, "positive tension holds the previous value longer");
+
+        lane.setPointCurve(1, -1.0);
+        check(lane.getValueAtBeat(4.0) > 0.5, "negative tension races towards the next one");
+
+        lane.setPointCurve(1, 0.0);
+        check(std::abs(lane.getValueAtBeat(4.0) - 0.5) < 1.0e-9, "and zero is a straight line again");
+
+        // Sub-block sampling: the audio thread asks for a whole block's worth of
+        // values under one lock rather than one lock per sub-block.
+        double sampled[5] = {};
+        check(lane.sampleRange(0.0, 8.0, sampled, 5), "a range can be sampled in one go");
+        check(std::abs(sampled[0] - 0.0) < 1.0e-9 && std::abs(sampled[4] - 1.0) < 1.0e-9,
+              "the ends of the range land on the ends of the curve");
+        check(std::abs(sampled[2] - 0.5) < 1.0e-9, "and the middle sample sits in the middle");
+
+        double single = -1.0;
+        check(lane.sampleRange(2.0, 8.0, &single, 1) && std::abs(single - 0.25) < 1.0e-9,
+              "asking for one value reads the start of the range");
+
+        lane.setEnabled(false);
+        check(! lane.sampleRange(0.0, 8.0, sampled, 5), "a bypassed lane refuses to be sampled");
+        lane.setEnabled(true);
+    }
+
+    // --- Automation: the curve read from a snapshot, with no lane ------------
+    {
+        // Drawing uses this so a repaint never contends with the audio thread.
+        const std::vector<djr::AutomationPoint> points { { 0.0, 0.2, 0.0 }, { 4.0, 0.8, 0.0 } };
+
+        check(std::abs(djr::AutomationLane::valueAt(points, -1.0) - 0.2) < 1.0e-9,
+              "a snapshot holds before its first point");
+        check(std::abs(djr::AutomationLane::valueAt(points, 2.0) - 0.5) < 1.0e-9,
+              "and interpolates the same way the lane does");
+        check(std::abs(djr::AutomationLane::valueAt({}, 2.0)) < 1.0e-9,
+              "an empty snapshot answers zero rather than reading off the end");
+    }
+
+    // --- Automation: parameter ranges --------------------------------------
+    {
+        djr::AutomationTarget volumeTarget;
+        volumeTarget.kind = djr::AutomationTarget::Kind::trackVolume;
+        check(std::abs(volumeTarget.toParameterValue(0.5) - 1.0) < 1.0e-9, "track volume runs 0..2");
+        check(std::abs(volumeTarget.fromParameterValue(0.8) - 0.4) < 1.0e-9, "and maps back again");
+
+        djr::AutomationTarget panTarget;
+        panTarget.kind = djr::AutomationTarget::Kind::trackPan;
+        check(std::abs(panTarget.toParameterValue(0.5)) < 1.0e-9, "half way up a pan lane is centre");
+        check(std::abs(panTarget.toParameterValue(1.0) - 1.0) < 1.0e-9, "and the top is hard right");
+
+        djr::AutomationTarget pluginTarget;
+        pluginTarget.kind = djr::AutomationTarget::Kind::pluginParameter;
+        check(std::abs(pluginTarget.toParameterValue(0.35) - 0.35) < 1.0e-9,
+              "plugin parameters are already normalised");
+    }
+
+    // --- Automation: project round trip ------------------------------------
+    {
+        djr::AutomationTarget target;
+        target.kind = djr::AutomationTarget::Kind::pluginParameter;
+        target.pluginSlot = 2;
+        target.parameterIndex = 7;
+        target.label = "Reverb: Mix";
+
+        djr::AutomationLane lane(target);
+        lane.setPoints({ { 0.0, 0.2, 0.0 }, { 4.0, 0.9, 0.5 } });
+        lane.setEnabled(false);
+        lane.setLaneHeight(70);
+
+        auto restored = djr::AutomationLane::fromVar(lane.toVar());
+        check(restored != nullptr, "a lane survives a var round trip");
+
+        if (restored != nullptr)
+        {
+            check(restored->getTarget().pluginSlot == 2 && restored->getTarget().parameterIndex == 7,
+                  "the target comes back pointing at the same parameter");
+            check(restored->getTarget().label == "Reverb: Mix", "and keeps the name it was given");
+            check(! restored->isEnabled(), "a bypassed lane reopens bypassed");
+            check(restored->getLaneHeight() == 70, "the lane height is kept");
+
+            const auto restoredPoints = restored->getPoints();
+            check(restoredPoints.size() == 2 && std::abs(restoredPoints[1].curve - 0.5) < 1.0e-9,
+                  "and the curve comes back with its tension");
+        }
+    }
+
+    // --- Automation: it really drives the track ----------------------------
+    {
+        djr::Mixer automationMixer;
+        automationMixer.prepare(sampleRate, blockSize);
+
+        auto* track = findFirstMidiTrack(automationMixer);
+        check(track != nullptr, "there is a MIDI track for the automation checks");
+
+        if (track != nullptr)
+        {
+            juce::Array<djr::MidiNote> notes;
+            djr::MidiNote held;
+            held.pitch = 60;
+            held.velocity = 0.9f;
+            held.startBeat = 0.0;
+            held.lengthBeats = 16.0;
+            notes.add(held);
+            track->getClip(0).setNotes(notes);
+
+            check(! isSilent(renderPeak(automationMixer, true, 8)),
+                  "the held note sounds with no automation on the track");
+
+            settle(automationMixer);
+
+            djr::AutomationTarget target;
+            target.kind = djr::AutomationTarget::Kind::trackVolume;
+            target.label = "Volume";
+
+            auto* lane = track->addAutomationLane(target);
+            check(lane != nullptr, "a volume lane can be added to a track");
+
+            if (lane != nullptr)
+            {
+                lane->setPoints({ { 0.0, 0.0, 0.0 } });
+                check(isSilent(renderPeak(automationMixer, true, 8)),
+                      "a curve pinned at zero silences the same note");
+
+                settle(automationMixer);
+                lane->setPoints({ { 0.0, 1.0, 0.0 }, { 8.0, 0.0, 0.0 } });
+
+                renderPeak(automationMixer, true, 1, nullptr, 0.0);
+                check(track->isVolumeAutomated(), "the track reports its volume as automated");
+                check(std::abs(track->getEffectiveVolume() - 2.0f) < 0.05f,
+                      "at the top of the curve the fader reads full");
+
+                renderPeak(automationMixer, true, 1, nullptr, 4.0);
+                check(std::abs(track->getEffectiveVolume() - 1.0f) < 0.1f,
+                      "half way along it reads half way down");
+
+                renderPeak(automationMixer, true, 1, nullptr, 8.0);
+                check(track->getEffectiveVolume() < 0.05f, "and at the end it reads silence");
+
+                // Bypass hands the fader back to whoever was holding it.
+                const auto stored = track->getVolume();
+                lane->setEnabled(false);
+                renderPeak(automationMixer, true, 1, nullptr, 8.0);
+                check(! track->isVolumeAutomated(), "bypassing a lane gives the fader back");
+                check(std::abs(track->getEffectiveVolume() - stored) < 1.0e-6f,
+                      "and the stored level is what applies again");
+            }
+        }
+    }
+
+    // --- Automation: undo ---------------------------------------------------
+    {
+        djr::Mixer undoAutomationMixer;
+        undoAutomationMixer.prepare(sampleRate, blockSize);
+
+        auto* track = undoAutomationMixer.getTrack(0);
+        check(track != nullptr, "there is a track for the automation undo checks");
+
+        if (track != nullptr)
+        {
+            djr::EditHistory history(undoAutomationMixer);
+
+            djr::AutomationTarget target;
+            target.kind = djr::AutomationTarget::Kind::trackPan;
+            target.label = "Pan";
+
+            history.pushSnapshot("Tambah lane automation");
+
+            if (auto* lane = track->addAutomationLane(target))
+                lane->addPoint(2.0, 0.75);
+
+            check(track->getNumAutomationLanes() == 1, "the lane is on the track");
+            check(history.undo(), "undo runs for an automation edit");
+            check(track->getNumAutomationLanes() == 0, "undo takes the lane away again");
+
+            check(history.redo(), "redo runs");
+            check(track->getNumAutomationLanes() == 1, "redo puts the lane back");
+
+            if (const auto* restored = track->getAutomationLane(0))
+            {
+                check(restored->getNumPoints() == 1, "with the point that was on it");
+                check(std::abs(restored->getPoints()[0].value - 0.75) < 1.0e-9, "at the value it had");
+                check(restored->getTarget().kind == djr::AutomationTarget::Kind::trackPan,
+                      "and still aimed at pan");
+            }
+        }
+    }
+
+    // --- Renaming a track ---------------------------------------------------
+    {
+        djr::Mixer renameMixer;
+        renameMixer.prepare(sampleRate, blockSize);
+
+        auto* track = renameMixer.getTrack(0);
+        check(track != nullptr, "there is a track to rename");
+
+        if (track != nullptr)
+        {
+            const auto original = track->getName();
+
+            track->setName("Lead");
+            check(track->getName() == "Lead", "a track takes a new name");
+
+            track->setName("  Sub Bass  ");
+            check(track->getName() == "Sub Bass", "and the name is trimmed");
+
+            track->setName("   ");
+            check(track->getName() == "Sub Bass", "a blank name is refused, not stored");
+
+            djr::EditHistory history(renameMixer);
+            history.pushSnapshot("Ganti nama track");
+            track->setName("Pluck");
+
+            check(track->getName() == "Pluck", "the rename went through");
+            check(history.undo() && track->getName() == "Sub Bass", "undo puts the old name back");
+            check(history.redo() && track->getName() == "Pluck", "and redo returns the new one");
+
+            // The name has to be recorded on every snapshot, not just on a
+            // rename, or an unrelated undo would drag it backwards.
+            history.pushSnapshot("Taruh clip");
+            track->setName("Keys");
+            check(history.undo() && track->getName() == "Pluck",
+                  "a snapshot taken for another edit still carries the name");
+
+            track->setName(original);
+        }
+    }
+
+    // --- A project round trip keeps the track name --------------------------
+    {
+        djr::Project project;
+        djr::ProjectTrackState state;
+        state.name = "Sub Bass";
+        state.type = "midi";
+        project.tracks.add(state);
+
+        djr::Project reopened;
+        reopened.fromVar(project.toVar());
+
+        check(reopened.tracks.size() == 1 && reopened.tracks.getReference(0).name == "Sub Bass",
+              "a renamed track survives being saved and reopened");
+    }
+
+    // --- Opening a project rebuilds the track list ---------------------------
+    {
+        djr::Project saved;
+
+        const auto addTrackState = [&saved] (const juce::String& name, const juce::String& type)
+        {
+            djr::ProjectTrackState state;
+            state.name = name;
+            state.type = type;
+            saved.tracks.add(state);
+        };
+
+        // Seven tracks, and not the kinds the mixer starts with: both the count
+        // and the kinds have to be made to match.
+        addTrackState("Kick", "midi");
+        addTrackState("Gitar", "audio");   // the mixer has a MIDI track here
+        addTrackState("Sub", "midi");
+        addTrackState("Vocal", "audio");
+        addTrackState("Room", "audio");
+        addTrackState("Lead", "midi");
+        addTrackState("Tape", "audio");    // the seventh, silently dropped before
+
+        djr::Project reopened;
+        reopened.fromVar(saved.toVar());
+        check(reopened.tracks.size() == 7, "all seven tracks survive the file");
+
+        djr::Mixer layoutMixer;
+        layoutMixer.prepare(sampleRate, blockSize);
+        check(layoutMixer.getNumTracks() == 6, "the mixer starts with its six default tracks");
+
+        // A note on a track the project keeps as MIDI: rebuilding the list must
+        // not throw that track away, or its clips and plugins would be lost on
+        // every load.
+        auto* kept = dynamic_cast<djr::MidiTrack*>(layoutMixer.getTrack(0));
+        check(kept != nullptr, "the first default track is a MIDI track");
+
+        if (kept != nullptr)
+        {
+            juce::Array<djr::MidiNote> notes;
+            notes.add({ 60, 0.9f, 0.0, 1.0, false });
+            kept->setClipNotes(notes);
+        }
+
+        check(djr::applyProjectTrackLayout(layoutMixer, reopened.tracks),
+              "the track list reports that it changed");
+        check(layoutMixer.getNumTracks() == 7, "the seventh track exists to be loaded into");
+        check(layoutMixer.getTrack(0) == kept, "a track of the right kind is kept, not rebuilt");
+        check(kept != nullptr && kept->getClip(0).getNumNotes() == 1, "so its clip is still there");
+        check(dynamic_cast<djr::AudioTrack*>(layoutMixer.getTrack(1)) != nullptr,
+              "a MIDI slot the project calls audio becomes an audio track");
+        check(dynamic_cast<djr::MidiTrack*>(layoutMixer.getTrack(5)) != nullptr,
+              "and a MIDI one stays MIDI");
+        check(dynamic_cast<djr::AudioTrack*>(layoutMixer.getTrack(6)) != nullptr,
+              "the seventh track is built as the kind the project asks for");
+
+        // The session applies the saved state on top; the point is that there is
+        // now something at index 6 to apply it to.
+        for (int i = 0; i < reopened.tracks.size(); ++i)
+            if (auto* track = layoutMixer.getTrack(i))
+                track->setName(reopened.tracks.getReference(i).name);
+
+        check(layoutMixer.getTrack(6) != nullptr && layoutMixer.getTrack(6)->getName() == "Tape",
+              "the seventh track's state is no longer dropped");
+
+        check(! djr::applyProjectTrackLayout(layoutMixer, reopened.tracks),
+              "a list that already matches is left alone");
+
+        // Fewer tracks than the mixer holds: the leftovers have to go, or a small
+        // project opens with the previous song's tracks still hanging off it.
+        djr::Project smaller;
+        djr::ProjectTrackState single;
+        single.name = "Solo";
+        single.type = "midi";
+        smaller.tracks.add(single);
+
+        check(djr::applyProjectTrackLayout(layoutMixer, smaller.tracks), "a shorter list changes the mixer");
+        check(layoutMixer.getNumTracks() == 1, "a smaller project leaves no stale tracks behind");
+        check(layoutMixer.getTrack(0) == kept, "and the track that survives is the one that fit");
+
+        // A file written before tracks were saved names none at all; that says
+        // nothing about the list, so it must not empty the mixer.
+        djr::Project untracked;
+        check(! djr::applyProjectTrackLayout(layoutMixer, untracked.tracks),
+              "a project without any tracks reports no change");
+        check(layoutMixer.getNumTracks() == 1, "and leaves the session's tracks alone");
+
+        // More tracks than the mixer can hold: it fills up and stops.
+        djr::Project overfull;
+        for (int i = 0; i < djr::Mixer::maxTracks + 8; ++i)
+        {
+            djr::ProjectTrackState state;
+            state.name = "Track " + juce::String(i + 1);
+            state.type = i % 2 == 0 ? "midi" : "audio";
+            overfull.tracks.add(state);
+        }
+
+        djr::applyProjectTrackLayout(layoutMixer, overfull.tracks);
+        check(layoutMixer.getNumTracks() == djr::Mixer::maxTracks,
+              "a project with more tracks than the mixer holds stops at the limit");
+        check(dynamic_cast<djr::AudioTrack*>(layoutMixer.getTrack(djr::Mixer::maxTracks - 1)) != nullptr,
+              "the last track it did fit in still gets the right kind");
+    }
+
+    // --- A project from before the track type was saved ----------------------
+    {
+        djr::Mixer legacyMixer;
+        legacyMixer.prepare(sampleRate, blockSize);
+
+        djr::Project legacy;
+        for (int i = 0; i < 4; ++i)
+        {
+            djr::ProjectTrackState state;     // type left empty, as an old file has it
+            state.name = "Old " + juce::String(i + 1);
+            legacy.tracks.add(state);
+        }
+
+        djr::applyProjectTrackLayout(legacyMixer, legacy.tracks);
+        check(legacyMixer.getNumTracks() == 4, "an old project still sets the number of tracks");
+        check(dynamic_cast<djr::MidiTrack*>(legacyMixer.getTrack(0)) != nullptr,
+              "a slot without a saved type keeps the kind it had");
+        check(dynamic_cast<djr::AudioTrack*>(legacyMixer.getTrack(3)) != nullptr,
+              "including the audio one");
+    }
+
+    // --- Bus routing: audio reaches master through a bus ---------------------
+    {
+        djr::Mixer busMixer;
+        busMixer.prepare(sampleRate, blockSize);
+
+        auto* source = findFirstMidiTrack(busMixer);
+        check(source != nullptr, "there is a MIDI track to route");
+
+        auto* bus = dynamic_cast<djr::BusTrack*>(busMixer.addTrack(std::make_unique<djr::BusTrack>("Reverb")));
+        check(bus != nullptr, "a bus track can be added to the mixer");
+
+        if (source != nullptr && bus != nullptr)
+        {
+            const auto busIndex = busMixer.indexOf(bus);
+            const auto sourceIndex = busMixer.indexOf(source);
+            check(busIndex > sourceIndex, "the bus lands after the track in the list");
+
+            source->getClip(0).setNotes(makeFourBarChord());
+
+            const auto direct = renderPeak(busMixer, true, 8);
+            check(! isSilent(direct), "the track is audible straight into master");
+
+            settle(busMixer);
+
+            // Route the track through the bus instead of to master.
+            check(busMixer.setTrackOutput(sourceIndex, busIndex), "the track can be routed to the bus");
+            check(source->getOutputDestination() == busIndex, "and it remembers where it points");
+
+            const auto throughBus = renderPeak(busMixer, true, 8);
+            check(! isSilent(throughBus), "audio still reaches master through the bus");
+
+            settle(busMixer);
+
+            // A muted bus takes everything routed into it with it.
+            bus->setMuted(true);
+            check(isSilent(renderPeak(busMixer, true, 8)), "muting the bus silences what feeds it");
+            bus->setMuted(false);
+            settle(busMixer);
+
+            // The bus is processed after the track that feeds it, always.
+            const auto order = busMixer.getProcessOrder();
+            const auto positionOf = [&order] (int trackIndex)
+            {
+                return static_cast<int>(std::distance(order.begin(),
+                                                      std::find(order.begin(), order.end(), trackIndex)));
+            };
+
+            check(order.size() == static_cast<size_t>(busMixer.getNumTracks()),
+                  "every track appears in the process order exactly once");
+            check(positionOf(sourceIndex) < positionOf(busIndex),
+                  "and a feeder is always processed before its bus");
+        }
+    }
+
+    // --- Routing refuses to feed back ---------------------------------------
+    {
+        djr::Mixer loopMixer;
+        loopMixer.prepare(sampleRate, blockSize);
+
+        auto* busA = loopMixer.addTrack(std::make_unique<djr::BusTrack>("Bus A"));
+        auto* busB = loopMixer.addTrack(std::make_unique<djr::BusTrack>("Bus B"));
+        check(busA != nullptr && busB != nullptr, "two buses can be added");
+
+        if (busA != nullptr && busB != nullptr)
+        {
+            const auto a = loopMixer.indexOf(busA);
+            const auto b = loopMixer.indexOf(busB);
+
+            check(! loopMixer.canRoute(a, a), "a bus cannot feed itself");
+            check(loopMixer.canRoute(a, b), "but it can feed another bus");
+            check(loopMixer.setTrackOutput(a, b), "and that route is accepted");
+
+            // B now feeds off A, so sending B back into A would close the loop.
+            check(! loopMixer.canRoute(b, a), "the route back round is refused");
+            check(! loopMixer.setTrackOutput(b, a), "and setting it changes nothing");
+            check(busB->getOutputDestination() == djr::Track::masterDestination,
+                  "the refused track still points at master");
+
+            // A send closes a loop just as surely as a main output does.
+            check(! loopMixer.setTrackSend(b, 0, { a, 0.5f, false }),
+                  "a send that would loop is refused too");
+
+            check(! loopMixer.canRoute(0, 1), "a track that is not a bus cannot receive");
+        }
+    }
+
+    // --- Sends: level, pre-fader, and what the fader does to them ------------
+    {
+        djr::Mixer sendMixer;
+        sendMixer.prepare(sampleRate, blockSize);
+
+        auto* source = findFirstMidiTrack(sendMixer);
+        auto* bus = sendMixer.addTrack(std::make_unique<djr::BusTrack>("Send bus"));
+
+        if (source != nullptr && bus != nullptr)
+        {
+            const auto sourceIndex = sendMixer.indexOf(source);
+            const auto busIndex = sendMixer.indexOf(bus);
+
+            source->getClip(0).setNotes(makeFourBarChord());
+
+            // Only the send reaches master, so what arrives is the send alone.
+            check(sendMixer.setTrackOutput(sourceIndex, busIndex), "route the track into the bus");
+            check(sendMixer.setTrackSend(sourceIndex, 0, { busIndex, 0.0f, false }),
+                  "a send at zero is still a legal route");
+
+            bus->setMuted(true);
+            check(isSilent(renderPeak(sendMixer, true, 8)), "with the bus muted nothing gets out");
+            bus->setMuted(false);
+            settle(sendMixer);
+
+            // Back to master, and measure the send on its own into a muted bus.
+            check(sendMixer.setTrackOutput(sourceIndex, djr::Track::masterDestination),
+                  "the track goes back to master");
+
+            source->setVolume(1.0f);
+            check(sendMixer.setTrackSend(sourceIndex, 0, { busIndex, 1.0f, true }),
+                  "a pre-fader send can be set");
+
+            const auto loudFader = renderPeak(sendMixer, true, 8);
+            check(! isSilent(loudFader), "the track is heard with the fader up");
+
+            settle(sendMixer);
+
+            // Pre-fader: pulling the fader right down must not take the send
+            // with it, so the bus still carries the signal.
+            source->setVolume(0.0f);
+            const auto preFaderOnly = renderPeak(sendMixer, true, 8);
+            check(! isSilent(preFaderOnly),
+                  "a pre-fader send survives the fader being pulled to silence");
+
+            settle(sendMixer);
+
+            // Post-fader: the same fader now takes the send down with it.
+            check(sendMixer.setTrackSend(sourceIndex, 0, { busIndex, 1.0f, false }),
+                  "the same slot can be made post-fader");
+            check(isSilent(renderPeak(sendMixer, true, 8)),
+                  "a post-fader send follows the fader down to silence");
+
+            source->setVolume(0.8f);
+        }
+    }
+
+    // --- Removing a track takes the routing with it --------------------------
+    {
+        djr::Mixer removeMixer;
+        removeMixer.prepare(sampleRate, blockSize);
+
+        auto* first = removeMixer.addTrack(std::make_unique<djr::BusTrack>("Bus one"));
+        auto* second = removeMixer.addTrack(std::make_unique<djr::BusTrack>("Bus two"));
+
+        if (first != nullptr && second != nullptr)
+        {
+            const auto firstIndex = removeMixer.indexOf(first);
+            const auto secondIndex = removeMixer.indexOf(second);
+
+            check(removeMixer.setTrackOutput(0, firstIndex), "track 0 feeds the first bus");
+            check(removeMixer.setTrackSend(1, 0, { secondIndex, 0.5f, false }), "track 1 sends to the second");
+
+            // Drop the first bus: track 0 loses its destination, and track 1's
+            // send has to follow the second bus down to its new index.
+            check(removeMixer.removeTrack(firstIndex), "the first bus is removed");
+
+            check(removeMixer.getTrack(0)->getOutputDestination() == djr::Track::masterDestination,
+                  "a track pointing at the removed bus falls back to master");
+            check(removeMixer.getTrack(1)->getSend(0).destination == secondIndex - 1,
+                  "and a send above the hole slides down with it");
+            check(removeMixer.getTrack(1)->getSend(0).destination == removeMixer.indexOf(second),
+                  "which is exactly where that bus now lives");
+        }
+    }
+
+    // --- Routing survives undo and a project round trip ----------------------
+    {
+        djr::Mixer routingMixer;
+        routingMixer.prepare(sampleRate, blockSize);
+
+        auto* bus = routingMixer.addTrack(std::make_unique<djr::BusTrack>("Bus"));
+
+        if (bus != nullptr)
+        {
+            const auto busIndex = routingMixer.indexOf(bus);
+            djr::EditHistory history(routingMixer);
+
+            routingMixer.setTrackOutput(0, busIndex);
+            routingMixer.setTrackSend(0, 0, { busIndex, 0.4f, true });
+
+            history.pushSnapshot("Routing");
+            routingMixer.setTrackOutput(0, djr::Track::masterDestination);
+            routingMixer.setTrackSend(0, 0, {});
+
+            check(routingMixer.getTrack(0)->getOutputDestination() == djr::Track::masterDestination,
+                  "the route was changed");
+            check(history.undo(), "undo runs for routing");
+            check(routingMixer.getTrack(0)->getOutputDestination() == busIndex,
+                  "undo puts the output back on the bus");
+
+            const auto restored = routingMixer.getTrack(0)->getSend(0);
+            check(restored.destination == busIndex && restored.preFader,
+                  "and restores the send with its pre-fader flag");
+            check(std::abs(restored.level - 0.4f) < 1.0e-6f, "at the level it had");
+        }
+    }
+
+    {
+        djr::Project project;
+        djr::ProjectTrackState state;
+        state.name = "Reverb";
+        state.type = "bus";
+        state.outputDestination = 3;
+
+        auto* sendObject = new juce::DynamicObject();
+        sendObject->setProperty("destination", 2);
+        sendObject->setProperty("level", 0.65);
+        sendObject->setProperty("preFader", true);
+        state.sends.add(juce::var(sendObject));
+
+        project.tracks.add(state);
+
+        djr::Project reopened;
+        reopened.fromVar(project.toVar());
+
+        check(reopened.tracks.size() == 1, "the bus track is written to the project");
+
+        if (reopened.tracks.size() == 1)
+        {
+            const auto& loaded = reopened.tracks.getReference(0);
+            check(loaded.type == "bus", "a bus reopens as a bus");
+            check(loaded.outputDestination == 3, "its output destination survives");
+            check(loaded.sends.size() == 1, "and so does its send");
+
+            if (auto* loadedSend = loaded.sends[0].getDynamicObject())
+            {
+                check(static_cast<int>(loadedSend->getProperty("destination")) == 2,
+                      "the send still points where it did");
+                check(static_cast<bool>(loadedSend->getProperty("preFader")),
+                      "and is still pre-fader");
+            }
+        }
+
+        // A file written before routing existed must still open, aimed at master.
+        djr::Project legacy;
+        djr::ProjectTrackState old;
+        old.name = "Bass";
+        old.type = "midi";
+        legacy.tracks.add(old);
+
+        auto legacyVar = legacy.toVar();
+        legacyVar.getDynamicObject()->getProperty("tracks").getArray()
+            ->getReference(0).getDynamicObject()->removeProperty("outputDestination");
+
+        djr::Project legacyReopened;
+        legacyReopened.fromVar(legacyVar);
+        check(legacyReopened.tracks.size() == 1
+                  && legacyReopened.tracks.getReference(0).outputDestination == -1,
+              "a project from before routing opens pointing at master");
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

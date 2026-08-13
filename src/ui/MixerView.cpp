@@ -47,9 +47,19 @@ void MixerView::paint(juce::Graphics& g)
 
     auto content = header.reduced(8, 0);
 
+    // Buses used to be a fixed count of one - the master. Now that a session can
+    // hold real ones, counting them as channels made the header say "7 channels"
+    // for six channels and a bus.
+    auto busCount = 1;
+
+    for (int i = 0; i < mixer.getNumTracks(); ++i)
+        if (const auto* track = mixer.getTrack(i); track != nullptr && track->getKind() == TrackKind::bus)
+            ++busCount;
+
     g.setColour(Theme::faintText());
     g.setFont(Theme::mono(10.0f));
-    g.drawText(juce::String(mixer.getNumTracks()) + " channels - 1 bus",
+    g.drawText(juce::String(mixer.getNumTracks() - busCount + 1) + " channels - "
+                   + juce::String(busCount) + " bus",
                content.removeFromLeft(140),
                juce::Justification::centredLeft,
                false);
@@ -86,6 +96,23 @@ void MixerView::refreshStrips()
                 if (trackSelectedCallback)
                     trackSelectedCallback(i);
             };
+
+            strip->onAutomationChanged = [this]
+            {
+                if (automationChangedCallback)
+                    automationChangedCallback();
+            };
+
+            // Routing is set through the mixer, which is the only thing that can
+            // see the whole graph and refuse a route that would feed back.
+            strip->setMixer(&mixer, i);
+            strip->onRoutingChanged = [this]
+            {
+                if (automationChangedCallback)
+                    automationChangedCallback();
+
+                repaint();
+            };
             strip->setSelected(i == selectedTrack);
             holder.addAndMakeVisible(strip);
         }
@@ -110,6 +137,11 @@ void MixerView::setSelectedTrack(int trackIndex)
 void MixerView::setTrackSelectedCallback(std::function<void(int)> callback)
 {
     trackSelectedCallback = std::move(callback);
+}
+
+void MixerView::setAutomationChangedCallback(std::function<void()> callback)
+{
+    automationChangedCallback = std::move(callback);
 }
 
 } // namespace djr

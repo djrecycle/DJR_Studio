@@ -79,9 +79,11 @@ FetchContent_MakeAvailable(JUCE)
 # so the tests subdirectory can reuse the list.
 set(DJR_ENGINE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Transport.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AutomationLane.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Track.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioTrack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioClip.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/BusTrack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/MidiTrack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Mixer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/MasterBus.cpp
@@ -94,6 +96,7 @@ set(DJR_ENGINE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/MidiEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/PluginChain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/project/Project.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/project/ProjectTrackLayout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/recording/Recorder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/export/ExportManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/utils/Logger.cpp)

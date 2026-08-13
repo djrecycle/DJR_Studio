@@ -178,7 +178,7 @@ void InsertChainPanel::mouseDown(const juce::MouseEvent& event)
             juce::PopupMenu menu;
             menu.addItem(1, "Buka editor instrument");
             menu.addItem(2, "Lepas instrument");
-            menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withStandardItemHeight(21),
+            menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition().withStandardItemHeight(21),
                 [this] (int result)
                 {
                     auto* selected = mixer.getTrack(selectedTrack);
@@ -222,7 +222,7 @@ void InsertChainPanel::mouseDown(const juce::MouseEvent& event)
             juce::PopupMenu menu;
             menu.addItem(1, "Buka editor plugin");
             menu.addItem(2, "Hapus semua insert");
-            menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withStandardItemHeight(21),
+            menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition().withStandardItemHeight(21),
                 [this, i] (int result)
                 {
                     if (result == 1 && openSlotCallback)

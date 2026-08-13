@@ -2,6 +2,7 @@
 
 #include "Theme.h"
 #include "audio/AudioTrack.h"
+#include "audio/BusTrack.h"
 #include "audio/MidiTrack.h"
 
 #include <algorithm>
@@ -19,6 +20,25 @@ namespace
     constexpr int rowEdgeGrab = 4;
     constexpr int minRowHeight = 18;
     constexpr int maxRowHeight = 200;
+    /** How near an automation point or tension handle counts as grabbing it. */
+    constexpr int pointGrab = 6;
+    /** A segment narrower than this has no room for a tension handle. */
+    constexpr int curveHandleMinWidth = 22;
+    /** Top and bottom margin of an automation lane's drawable band. */
+    constexpr int curveInset = 6;
+    /** Pixels of vertical drag that bend a segment all the way to full tension. */
+    constexpr double curveDragTravel = 60.0;
+
+    // Automation menu ids. Anything at or above the base is an encoded target,
+    // so the track menu's own items stay small numbers and never collide.
+    constexpr int automationMenuBase = 100;
+    constexpr int automationMenuVolume = 100;
+    constexpr int automationMenuPan = 101;
+    constexpr int automationMenuPluginBase = 1000;
+    /** Room for this many parameters per plugin inside one id. */
+    constexpr int automationMenuSlotStride = 512;
+    /** A menu longer than this stops being something anyone can read. */
+    constexpr int maxAutomatableParameters = 64;
 }
 
 ArrangementView::ArrangementView(Mixer& mixerToUse, Transport& transportToUse)
@@ -74,6 +94,8 @@ ArrangementView::~ArrangementView()
 
 void ArrangementView::paint(juce::Graphics& g)
 {
+    rebuildRows();
+
     const auto bounds = getLocalBounds();
     g.fillAll(Theme::panelDeep());
 
@@ -143,15 +165,28 @@ void ArrangementView::paint(juce::Graphics& g)
     // Track rows -------------------------------------------------------------
     const auto numTracks = mixer.getNumTracks();
 
-    for (int i = 0; i < numTracks; ++i)
+    for (int rowIndex = 0; rowIndex < getRowCount(); ++rowIndex)
     {
+        // A reference, not a copy: each row carries its curve snapshot, and
+        // copying that per row per frame is the allocation this avoids.
+        const auto& rowEntry = rows[static_cast<size_t>(rowIndex)];
+        const auto i = rowEntry.trackIndex;
+
         const auto* track = mixer.getTrack(i);
         if (track == nullptr)
             continue;
 
-        const auto row = getRowBounds(i);
+        const auto row = getRowBoundsAt(rowIndex);
         if (! row.intersects(lanes))
             continue;
+
+        if (rowEntry.automationLane >= 0)
+        {
+            juce::Graphics::ScopedSaveState automationState(g);
+            g.reduceClipRegion(lanes.withTrimmedTop(rulerHeight));
+            drawAutomationRow(g, rowIndex, rowEntry);
+            continue;
+        }
 
         juce::Graphics::ScopedSaveState state(g);
         g.reduceClipRegion(lanes.withTrimmedTop(rulerHeight));
@@ -408,11 +443,14 @@ void ArrangementView::resized()
 
     zoomSlider.setBounds(header.removeFromRight(80).withSizeKeepingCentre(80, 16));
 
+    rebuildRows();
     clampScroll();
 }
 
 void ArrangementView::mouseDown(const juce::MouseEvent& event)
 {
+    rebuildRows();
+
     const auto position = event.getPosition();
 
     // Everything one click does is a single undo step, however many edits the
@@ -428,44 +466,58 @@ void ArrangementView::mouseDown(const juce::MouseEvent& event)
         if (resizeRow >= 0)
         {
             resizingRow = resizeRow;
-            resizeStartHeight = getRowHeight(resizeRow);
+            resizeStartHeight = getRowHeightAt(resizeRow);
             resizeGrabY = position.y;
             return;
         }
     }
 
-    for (int i = 0; i < mixer.getNumTracks(); ++i)
+    const auto rowIndex = rowAt(position);
+
+    if (rowIndex >= 0)
     {
-        auto* track = mixer.getTrack(i);
-        if (track == nullptr)
-            continue;
+        // Copied out as two ints rather than held as a reference into `rows`:
+        // selecting a track calls out to the host, which may rebuild the list.
+        const auto rowTrack = rows[static_cast<size_t>(rowIndex)].trackIndex;
+        const auto rowLane = rows[static_cast<size_t>(rowIndex)].automationLane;
+        auto* track = mixer.getTrack(rowTrack);
 
-        if (getMuteBounds(i).contains(position))
+        // Mute and solo only exist on a track's own row; its automation lanes
+        // sit underneath it and have their own header.
+        if (track != nullptr && rowLane < 0)
         {
-            track->setMuted(! track->isMuted());
-            repaint();
-            return;
-        }
-
-        if (getSoloBounds(i).contains(position))
-        {
-            track->setSoloed(! track->isSoloed());
-            repaint();
-            return;
-        }
-
-        if (getRowBounds(i).contains(position))
-        {
-            setSelectedTrack(i);
-
-            if (event.mods.isRightButtonDown() && position.x < headerWidth)
+            if (getMuteBounds(rowTrack).contains(position))
             {
-                showTrackContextMenu(i);
+                track->setMuted(! track->isMuted());
+                repaint();
                 return;
             }
 
-            break;
+            if (getSoloBounds(rowTrack).contains(position))
+            {
+                track->setSoloed(! track->isSoloed());
+                repaint();
+                return;
+            }
         }
+
+        setSelectedTrack(rowTrack);
+
+        if (event.mods.isRightButtonDown() && position.x < headerWidth)
+        {
+            if (rowLane >= 0)
+                showAutomationMenu(rowTrack, rowLane, -1);
+            else
+                showTrackContextMenu(rowTrack);
+
+            return;
+        }
+
+        // An automation lane holds no clips, so it takes the whole event -
+        // unless the active tool is one that belongs to the timeline.
+        if (rowLane >= 0 && position.x >= getGridArea().getX()
+            && handleAutomationMouseDown(rowIndex, position, event.mods))
+            return;
     }
 
     // A clip under the pointer takes priority over scrubbing the playhead.
@@ -587,11 +639,18 @@ void ArrangementView::mouseExit(const juce::MouseEvent& event)
 
 void ArrangementView::mouseMove(const juce::MouseEvent& event)
 {
+    rebuildRows();
     updateSlicePreview(event.getPosition());
 
     if (hitTestRowResize(event.getPosition()) >= 0)
     {
         setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+        return;
+    }
+
+    if (hitTestAutomation(event.getPosition()).mode != AutomationDrag::Mode::none)
+    {
+        setMouseCursor(juce::MouseCursor::DraggingHandCursor);
         return;
     }
 
@@ -612,6 +671,14 @@ void ArrangementView::mouseUp(const juce::MouseEvent& event)
         undoGestureCallback(false);
 
     painting = false;
+
+    if (automationDrag.mode != AutomationDrag::Mode::none)
+    {
+        automationDrag = {};
+        notifyClipEdited();
+        repaint();
+        return;
+    }
 
     if (marqueeActive)
     {
@@ -662,8 +729,39 @@ void ArrangementView::mouseDrag(const juce::MouseEvent& event)
 {
     if (resizingRow >= 0)
     {
-        setRowHeight(resizingRow, resizeStartHeight + event.getPosition().y - resizeGrabY);
+        setRowHeightAt(resizingRow, resizeStartHeight + event.getPosition().y - resizeGrabY);
         clampScroll();
+        repaint();
+        return;
+    }
+
+    if (automationDrag.mode != AutomationDrag::Mode::none)
+    {
+        auto* lane = getLane(automationDrag.trackIndex, automationDrag.laneIndex);
+
+        if (lane == nullptr)
+            return;
+
+        if (automationDrag.mode == AutomationDrag::Mode::point)
+        {
+            // A point dragged past its neighbour changes places with it, so the
+            // lane hands back where it ended up rather than the index we had.
+            const auto index = lane->movePoint(automationDrag.pointIndex,
+                                               snapBeat(xToBeat(event.getPosition().x)),
+                                               valueFromY(automationDrag.rowIndex, event.getPosition().y));
+
+            if (index >= 0)
+                automationDrag.pointIndex = index;
+        }
+        else
+        {
+            // Positive tension sags a rising segment but lifts a falling one, so
+            // the drag is flipped to keep "down" meaning "down" on screen.
+            const auto travel = (event.getPosition().y - automationDrag.grabY) / curveDragTravel;
+            lane->setPointCurve(automationDrag.pointIndex,
+                                automationDrag.grabCurve + (automationDrag.falling ? -travel : travel));
+        }
+
         repaint();
         return;
     }
@@ -805,10 +903,26 @@ void ArrangementView::mouseDrag(const juce::MouseEvent& event)
 
 void ArrangementView::mouseDoubleClick(const juce::MouseEvent& event)
 {
+    rebuildRows();
+
+    const auto position = event.getPosition();
+
+    // Double clicking a track's name renames it, the way FL's playlist does.
+    // Only on the track's own row: an automation lane is named by its parameter.
+    if (position.x < headerWidth)
+    {
+        const auto rowIndex = rowAt(position);
+
+        if (rowIndex >= 0 && rows[static_cast<size_t>(rowIndex)].automationLane < 0 && trackRenameCallback)
+            trackRenameCallback(rows[static_cast<size_t>(rowIndex)].trackIndex);
+
+        return;
+    }
+
     int trackIndex = -1;
     int clipIndex = -1;
 
-    if (hitTestClip(event.getPosition(), trackIndex, clipIndex) == ClipDragMode::none)
+    if (hitTestClip(position, trackIndex, clipIndex) == ClipDragMode::none)
         return;
 
     auto* midiTrack = dynamic_cast<MidiTrack*>(mixer.getTrack(trackIndex));
@@ -868,6 +982,8 @@ void ArrangementView::mouseWheelMove(const juce::MouseEvent& event, const juce::
 
 void ArrangementView::timerCallback()
 {
+    rebuildRows();
+
     if (followPlayhead && transport.isPlaying())
     {
         const auto grid = getGridArea();
@@ -923,6 +1039,8 @@ void ArrangementView::showAddTrackMenu()
     juce::PopupMenu menu;
     menu.addItem(1, "Track MIDI baru");
     menu.addItem(2, "Track Audio baru");
+    menu.addSeparator();
+    menu.addItem(3, "Bus baru");
 
     menu.showMenuAsync(juce::PopupMenu::Options()
                            .withTargetComponent(&addTrackButton)
@@ -930,13 +1048,24 @@ void ArrangementView::showAddTrackMenu()
                            .withStandardItemHeight(21),
         [this] (int result)
         {
-            if (result != 1 && result != 2)
+            if (result < 1 || result > 3)
                 return;
 
             const auto number = mixer.getNumTracks() + 1;
-            auto* added = result == 1
-                ? mixer.addTrack(std::make_unique<MidiTrack>("MIDI " + juce::String(number)))
-                : mixer.addTrack(std::make_unique<AudioTrack>("Audio " + juce::String(number)));
+
+            // A bus is named for what it is rather than numbered with the rest:
+            // "Bus 7" says nothing, and a bus is picked from a routing menu by
+            // its name.
+            std::unique_ptr<Track> fresh;
+
+            if (result == 1)
+                fresh = std::make_unique<MidiTrack>("MIDI " + juce::String(number));
+            else if (result == 2)
+                fresh = std::make_unique<AudioTrack>("Audio " + juce::String(number));
+            else
+                fresh = std::make_unique<BusTrack>("Bus " + juce::String(number));
+
+            auto* added = mixer.addTrack(std::move(fresh));
 
             if (added == nullptr)
                 return;
@@ -952,15 +1081,21 @@ void ArrangementView::showTrackContextMenu(int trackIndex)
     if (track == nullptr)
         return;
 
+    juce::PopupMenu automationMenu;
+    fillAutomationTargetMenu(automationMenu, trackIndex);
+
     juce::PopupMenu menu;
     menu.addSectionHeader(track->getName());
+    menu.addItem(4, "Ganti nama track...");
     menu.addItem(1, "Hapus track", mixer.getNumTracks() > 1);
     menu.addSeparator();
     menu.addItem(2, "Monitor input", true, track->isInputMonitoring());
     menu.addItem(3, "Hapus semua plugin", track->getPluginCount() > 0);
+    menu.addSeparator();
+    menu.addSubMenu("Tambah automation", automationMenu);
 
     menu.showMenuAsync(juce::PopupMenu::Options()
-                           .withTargetComponent(this)
+                           .withMousePosition()
                            .withMinimumWidth(160)
                            .withStandardItemHeight(21),
         [this, trackIndex] (int result)
@@ -968,6 +1103,13 @@ void ArrangementView::showTrackContextMenu(int trackIndex)
             auto* selected = mixer.getTrack(trackIndex);
             if (selected == nullptr)
                 return;
+
+            // Everything from the automation submenu is an encoded target.
+            if (result >= automationMenuBase)
+            {
+                addAutomationTarget(trackIndex, result);
+                return;
+            }
 
             switch (result)
             {
@@ -988,10 +1130,200 @@ void ArrangementView::showTrackContextMenu(int trackIndex)
                     notifyTrackListChanged();
                     break;
 
+                case 4:
+                    if (trackRenameCallback)
+                        trackRenameCallback(trackIndex);
+                    break;
+
                 default:
                     break;
             }
 
+            repaint();
+        });
+}
+
+void ArrangementView::fillAutomationTargetMenu(juce::PopupMenu& menu, int trackIndex) const
+{
+    auto* track = mixer.getTrack(trackIndex);
+
+    if (track == nullptr)
+        return;
+
+    menu.addItem(automationMenuVolume, "Volume");
+    menu.addItem(automationMenuPan, "Pan");
+
+    // The plugin's own parameters, one submenu per slot. Ids carry the slot and
+    // the parameter index so the callback never has to rebuild this list.
+    const auto addPluginSubMenu = [&menu] (juce::AudioPluginInstance& plugin, int slot)
+    {
+        const auto& parameters = plugin.getParameters();
+
+        if (parameters.isEmpty())
+            return;
+
+        juce::PopupMenu parameterMenu;
+        const auto shown = juce::jmin(parameters.size(), maxAutomatableParameters);
+
+        for (int i = 0; i < shown; ++i)
+        {
+            auto name = parameters[i]->getName(28);
+            parameterMenu.addItem(automationMenuPluginBase + (slot + 1) * automationMenuSlotStride + i,
+                                  name.isEmpty() ? "Param " + juce::String(i + 1) : name);
+        }
+
+        if (parameters.size() > shown)
+            parameterMenu.addItem(-1, juce::String(parameters.size() - shown) + " parameter lainnya", false);
+
+        menu.addSubMenu(plugin.getName(), parameterMenu);
+    };
+
+    if (auto* instrument = track->getInstrument())
+        addPluginSubMenu(*instrument, AutomationTarget::instrumentSlot);
+
+    for (int slot = 0; slot < track->getPluginCount(); ++slot)
+        if (auto* insert = track->getPlugin(slot))
+            addPluginSubMenu(*insert, slot);
+}
+
+void ArrangementView::addAutomationTarget(int trackIndex, int menuId)
+{
+    auto* track = mixer.getTrack(trackIndex);
+
+    if (track == nullptr)
+        return;
+
+    AutomationTarget target;
+    auto current = 0.0;
+
+    if (menuId == automationMenuVolume)
+    {
+        target.kind = AutomationTarget::Kind::trackVolume;
+        target.label = "Volume";
+        current = track->getVolume();
+    }
+    else if (menuId == automationMenuPan)
+    {
+        target.kind = AutomationTarget::Kind::trackPan;
+        target.label = "Pan";
+        current = track->getPan();
+    }
+    else if (menuId >= automationMenuPluginBase)
+    {
+        const auto encoded = menuId - automationMenuPluginBase;
+        target.kind = AutomationTarget::Kind::pluginParameter;
+        target.pluginSlot = encoded / automationMenuSlotStride - 1;
+        target.parameterIndex = encoded % automationMenuSlotStride;
+
+        auto* plugin = target.pluginSlot == AutomationTarget::instrumentSlot
+            ? track->getInstrument()
+            : track->getPlugin(target.pluginSlot);
+
+        if (plugin == nullptr)
+            return;
+
+        const auto& parameters = plugin->getParameters();
+
+        if (! juce::isPositiveAndBelow(target.parameterIndex, parameters.size()))
+            return;
+
+        auto* parameter = parameters[target.parameterIndex];
+        auto name = parameter->getName(28);
+        target.label = plugin->getName() + ": " + (name.isEmpty() ? "Param " + juce::String(target.parameterIndex + 1)
+                                                                 : name);
+        current = parameter->getValue();
+    }
+    else
+    {
+        return;
+    }
+
+    pushUndo("Tambah lane automation");
+    auto* lane = track->addAutomationLane(target);
+
+    if (lane == nullptr)
+        return;
+
+    // Seeded with one point at the value the control already has, so switching
+    // automation on never moves the sound by itself.
+    if (lane->isEmpty())
+        lane->addPoint(0.0, target.fromParameterValue(current));
+
+    rebuildRows();
+    clampScroll();
+    notifyClipEdited();
+    repaint();
+}
+
+void ArrangementView::showAutomationMenu(int trackIndex, int laneIndex, int pointIndex)
+{
+    auto* track = mixer.getTrack(trackIndex);
+    auto* lane = track != nullptr ? track->getAutomationLane(laneIndex) : nullptr;
+
+    if (lane == nullptr)
+        return;
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader(lane->getTarget().describe());
+
+    if (pointIndex >= 0)
+    {
+        menu.addItem(1, "Hapus titik");
+        menu.addItem(2, "Luruskan kurva");
+        menu.addSeparator();
+    }
+
+    menu.addItem(3, "Aktif", true, lane->isEnabled());
+    menu.addItem(4, "Hapus semua titik", lane->getNumPoints() > 0);
+    menu.addSeparator();
+    menu.addItem(5, "Hapus lane automation");
+
+    menu.showMenuAsync(juce::PopupMenu::Options()
+                           .withMousePosition()
+                           .withMinimumWidth(180)
+                           .withStandardItemHeight(21),
+        [this, trackIndex, laneIndex, pointIndex] (int result)
+        {
+            auto* selected = mixer.getTrack(trackIndex);
+            auto* selectedLane = selected != nullptr ? selected->getAutomationLane(laneIndex) : nullptr;
+
+            if (selectedLane == nullptr || result == 0)
+                return;
+
+            switch (result)
+            {
+                case 1:
+                    pushUndo("Hapus titik automation");
+                    selectedLane->removePoint(pointIndex);
+                    break;
+
+                case 2:
+                    pushUndo("Luruskan kurva automation");
+                    selectedLane->setPointCurve(pointIndex, 0.0);
+                    break;
+
+                case 3:
+                    pushUndo(selectedLane->isEnabled() ? "Bypass automation" : "Aktifkan automation");
+                    selectedLane->setEnabled(! selectedLane->isEnabled());
+                    break;
+
+                case 4:
+                    pushUndo("Kosongkan lane automation");
+                    selectedLane->clearPoints();
+                    break;
+
+                case 5:
+                    pushUndo("Hapus lane automation");
+                    selected->removeAutomationLane(laneIndex);
+                    rebuildRows();
+                    clampScroll();
+                    break;
+
+                default:
+                    return;
+            }
+
+            notifyClipEdited();
             repaint();
         });
 }
@@ -1001,6 +1333,7 @@ void ArrangementView::notifyTrackListChanged()
     // Track indices move when the list changes, so the selection cannot be
     // trusted to still point at the same clips.
     clearClipSelection();
+    rebuildRows();
     clampScroll();
     repaint();
 
@@ -1033,7 +1366,160 @@ juce::Rectangle<int> ArrangementView::getGridArea() const
 
 juce::Rectangle<int> ArrangementView::getRowBounds(int trackIndex) const
 {
-    return { 0, getRowTop(trackIndex), getWidth(), getRowHeight(trackIndex) };
+    return getRowBoundsAt(getRowIndexForTrack(trackIndex));
+}
+
+void ArrangementView::rebuildRows()
+{
+    // Rows are refilled in place rather than cleared: the point snapshots keep
+    // the capacity they grew to, so a steady frame allocates nothing.
+    size_t used = 0;
+
+    const auto nextRow = [this, &used] (int trackIndex, int laneIndex) -> Row&
+    {
+        if (used >= rows.size())
+            rows.emplace_back();
+
+        auto& row = rows[used++];
+        row.trackIndex = trackIndex;
+        row.automationLane = laneIndex;
+        return row;
+    };
+
+    auto top = panelHeaderHeight + rulerHeight - scrollY;
+
+    for (int trackIndex = 0; trackIndex < mixer.getNumTracks(); ++trackIndex)
+    {
+        auto& clipRow = nextRow(trackIndex, -1);
+        clipRow.height = getRowHeight(trackIndex);
+        clipRow.top = top;
+        clipRow.points.clear();
+        clipRow.laneEnabled = true;
+        top += clipRow.height;
+
+        auto* track = mixer.getTrack(trackIndex);
+
+        if (track == nullptr)
+            continue;
+
+        for (int laneIndex = 0; laneIndex < track->getNumAutomationLanes(); ++laneIndex)
+        {
+            auto& laneRow = nextRow(trackIndex, laneIndex);
+            auto* lane = track->getAutomationLane(laneIndex);
+
+            const auto stored = lane != nullptr ? lane->getLaneHeight() : 0;
+            laneRow.height = stored <= 0 ? defaultAutomationRowHeight
+                                         : juce::jlimit(minRowHeight, maxRowHeight, stored);
+            laneRow.top = top;
+            laneRow.laneEnabled = lane != nullptr && lane->isEnabled();
+
+            if (lane != nullptr)
+            {
+                laneRow.target = lane->getTarget();
+                lane->copyPointsInto(laneRow.points);
+            }
+            else
+            {
+                laneRow.points.clear();
+            }
+
+            top += laneRow.height;
+        }
+    }
+
+    rows.resize(used);
+}
+
+void ArrangementView::refreshRowTops()
+{
+    auto top = panelHeaderHeight + rulerHeight - scrollY;
+
+    for (auto& row : rows)
+    {
+        row.top = top;
+        top += row.height;
+    }
+}
+
+int ArrangementView::getRowCount() const noexcept
+{
+    return static_cast<int>(rows.size());
+}
+
+int ArrangementView::getRowIndexForTrack(int trackIndex) const
+{
+    for (int i = 0; i < static_cast<int>(rows.size()); ++i)
+        if (rows[static_cast<size_t>(i)].trackIndex == trackIndex
+            && rows[static_cast<size_t>(i)].automationLane < 0)
+            return i;
+
+    return -1;
+}
+
+AutomationLane* ArrangementView::getLane(int trackIndex, int laneIndex) const
+{
+    if (laneIndex < 0)
+        return nullptr;
+
+    auto* track = mixer.getTrack(trackIndex);
+    return track != nullptr ? track->getAutomationLane(laneIndex) : nullptr;
+}
+
+int ArrangementView::getRowHeightAt(int rowIndex) const
+{
+    return juce::isPositiveAndBelow(rowIndex, static_cast<int>(rows.size()))
+        ? rows[static_cast<size_t>(rowIndex)].height
+        : defaultRowHeight;
+}
+
+void ArrangementView::setRowHeightAt(int rowIndex, int height)
+{
+    if (! juce::isPositiveAndBelow(rowIndex, static_cast<int>(rows.size())))
+        return;
+
+    const auto& row = rows[static_cast<size_t>(rowIndex)];
+
+    if (row.automationLane < 0)
+    {
+        setRowHeight(row.trackIndex, height);
+        return;
+    }
+
+    if (auto* lane = getLane(row.trackIndex, row.automationLane))
+        lane->setLaneHeight(juce::jlimit(minRowHeight, maxRowHeight, height));
+
+    // The heights live in the row cache, so it has to be re-read before the
+    // scroll is clamped against the new total.
+    rebuildRows();
+    clampScroll();
+    repaint();
+}
+
+int ArrangementView::getRowTopAt(int rowIndex) const
+{
+    return juce::isPositiveAndBelow(rowIndex, static_cast<int>(rows.size()))
+        ? rows[static_cast<size_t>(rowIndex)].top
+        : panelHeaderHeight + rulerHeight - scrollY;
+}
+
+juce::Rectangle<int> ArrangementView::getRowBoundsAt(int rowIndex) const
+{
+    if (! juce::isPositiveAndBelow(rowIndex, static_cast<int>(rows.size())))
+        return {};
+
+    return { 0, getRowTopAt(rowIndex), getWidth(), getRowHeightAt(rowIndex) };
+}
+
+int ArrangementView::rowAt(juce::Point<int> position) const
+{
+    if (position.y < panelHeaderHeight + rulerHeight)
+        return -1;
+
+    for (int i = 0; i < static_cast<int>(rows.size()); ++i)
+        if (getRowBoundsAt(i).contains(position))
+            return i;
+
+    return -1;
 }
 
 int ArrangementView::getRowHeight(int trackIndex) const
@@ -1063,12 +1549,7 @@ void ArrangementView::setRowHeight(int trackIndex, int height)
 
 int ArrangementView::getRowTop(int trackIndex) const
 {
-    auto top = panelHeaderHeight + rulerHeight - scrollY;
-
-    for (int i = 0; i < trackIndex; ++i)
-        top += getRowHeight(i);
-
-    return top;
+    return getRowTopAt(getRowIndexForTrack(trackIndex));
 }
 
 int ArrangementView::hitTestRowResize(juce::Point<int> position) const
@@ -1077,9 +1558,9 @@ int ArrangementView::hitTestRowResize(juce::Point<int> position) const
     if (position.x >= headerWidth || position.y < panelHeaderHeight + rulerHeight)
         return -1;
 
-    for (int i = 0; i < mixer.getNumTracks(); ++i)
+    for (int i = 0; i < static_cast<int>(rows.size()); ++i)
     {
-        const auto bottom = getRowBounds(i).getBottom();
+        const auto bottom = getRowBoundsAt(i).getBottom();
 
         if (std::abs(position.y - bottom) <= rowEdgeGrab)
             return i;
@@ -1116,8 +1597,8 @@ int ArrangementView::getContentHeight() const
 {
     auto total = 0;
 
-    for (int i = 0; i < mixer.getNumTracks(); ++i)
-        total += getRowHeight(i);
+    for (int i = 0; i < static_cast<int>(rows.size()); ++i)
+        total += getRowHeightAt(i);
 
     return total;
 }
@@ -1126,6 +1607,9 @@ void ArrangementView::clampScroll()
 {
     const auto viewportHeight = juce::jmax(0, getHeight() - panelHeaderHeight - rulerHeight);
     scrollY = juce::jlimit(0, juce::jmax(0, getContentHeight() - viewportHeight), scrollY);
+
+    // The cached row positions are relative to scrollY, so they move with it.
+    refreshRowTops();
 }
 
 void ArrangementView::zoomToFit()
@@ -1298,6 +1782,325 @@ ArrangementView::ClipDragMode ArrangementView::hitTestClip(juce::Point<int> posi
     }
 
     return ClipDragMode::none;
+}
+
+juce::Rectangle<int> ArrangementView::getCurveArea(int rowIndex) const
+{
+    const auto bounds = getRowBoundsAt(rowIndex);
+    const auto grid = getGridArea();
+
+    // Inset top and bottom so a point parked at 0 or 1 still draws as a whole
+    // dot instead of half of one hanging off the lane.
+    return { grid.getX(),
+             bounds.getY() + curveInset,
+             grid.getWidth(),
+             juce::jmax(4, bounds.getHeight() - curveInset * 2) };
+}
+
+double ArrangementView::valueFromY(int rowIndex, int y) const
+{
+    const auto curve = getCurveArea(rowIndex);
+
+    return juce::jlimit(0.0, 1.0,
+                        1.0 - static_cast<double>(y - curve.getY()) / juce::jmax(1, curve.getHeight()));
+}
+
+int ArrangementView::yFromValue(int rowIndex, double value) const
+{
+    const auto curve = getCurveArea(rowIndex);
+    return curve.getBottom() - juce::roundToInt(juce::jlimit(0.0, 1.0, value) * curve.getHeight());
+}
+
+void ArrangementView::drawAutomationRow(juce::Graphics& g, int rowIndex, const Row& row)
+{
+    // Everything drawn here comes from the snapshot taken in rebuildRows, so a
+    // repaint never contends with the audio thread for the lane's points.
+    const auto bounds = getRowBoundsAt(rowIndex);
+    const auto grid = getGridArea();
+    const auto trackColour = Theme::trackColour(row.trackIndex);
+    // A bypassed lane keeps its shape but stops looking live.
+    const auto laneColour = row.laneEnabled ? Theme::amber() : Theme::mutedText();
+
+    g.setColour(Theme::panelDeep());
+    g.fillRect(bounds);
+    g.setColour(juce::Colour::fromString("ff1e2532"));
+    g.fillRect(bounds.withHeight(1).withY(bounds.getBottom() - 1));
+
+    // Header -----------------------------------------------------------------
+    auto headerCell = bounds.withWidth(headerWidth);
+    g.setColour(Theme::panel().withAlpha(0.75f));
+    g.fillRect(headerCell);
+    g.setColour(juce::Colour::fromString("ff1e2532"));
+    g.fillRect(headerCell.withHeight(1).withY(headerCell.getBottom() - 1));
+
+    auto cell = headerCell.reduced(5, 0);
+
+    // Indented, so a lane reads as belonging to the track above it.
+    cell.removeFromLeft(10);
+    auto chip = cell.removeFromLeft(3).withSizeKeepingCentre(3, bounds.getHeight() - 10);
+    g.setColour(trackColour.withAlpha(0.55f));
+    g.fillRoundedRectangle(chip.toFloat(), 1.5f);
+    cell.removeFromLeft(6);
+
+    g.setColour(row.laneEnabled ? Theme::text() : Theme::faintText());
+    g.setFont(Theme::ui(10.5f, true));
+    g.drawText(row.target.describe(),
+               cell.removeFromTop(juce::jmax(11, bounds.getHeight() / 2)).withTrimmedTop(2),
+               juce::Justification::bottomLeft, true);
+
+    // The value under the playhead, so the lane says what it is doing right now.
+    g.setColour(laneColour.withAlpha(0.85f));
+    g.setFont(Theme::mono(9.0f));
+    g.drawText(row.laneEnabled
+                   ? row.target.describeValue(AutomationLane::valueAt(row.points, transport.getPositionBeats()))
+                   : juce::String("bypass"),
+               cell, juce::Justification::topLeft, true);
+
+    // Curve ------------------------------------------------------------------
+    juce::Graphics::ScopedSaveState state(g);
+    g.reduceClipRegion({ grid.getX(), bounds.getY(), grid.getWidth(), bounds.getHeight() });
+
+    const auto curve = getCurveArea(rowIndex);
+
+    g.setColour(Theme::inset().withAlpha(0.4f));
+    g.fillRect(juce::Rectangle<int>(grid.getX(), bounds.getY() + 1, grid.getWidth(), bounds.getHeight() - 2));
+
+    // Half way marks the middle of the parameter's range - the reference the
+    // eye needs to tell a small rise from a large one.
+    g.setColour(Theme::divider().withAlpha(0.6f));
+    g.fillRect(grid.getX(), curve.getCentreY(), grid.getWidth(), 1);
+
+    const auto& points = row.points;
+
+    const auto toX = [this] (double beat) { return static_cast<float>(beatToX(beat)); };
+    const auto toY = [rowIndex, this] (double value) { return static_cast<float>(yFromValue(rowIndex, value)); };
+
+    if (points.empty())
+    {
+        g.setColour(Theme::faintText());
+        g.setFont(Theme::ui(10.0f));
+        g.drawText("Klik untuk menaruh titik",
+                   juce::Rectangle<int>(grid.getX() + 8, bounds.getY(), 200, bounds.getHeight()),
+                   juce::Justification::centredLeft, false);
+        return;
+    }
+
+    juce::Path path;
+    path.startNewSubPath(static_cast<float>(grid.getX()), toY(points.front().value));
+    path.lineTo(toX(points.front().beat), toY(points.front().value));
+
+    for (size_t i = 1; i < points.size(); ++i)
+    {
+        const auto& from = points[i - 1];
+        const auto& to = points[i];
+
+        if (std::abs(to.curve) < 1.0e-6)
+        {
+            path.lineTo(toX(to.beat), toY(to.value));
+            continue;
+        }
+
+        // A bent segment is sampled; how finely depends on how wide it is on
+        // screen, so a curve costs the same whatever the zoom.
+        const auto span = juce::jmax(1, static_cast<int>(toX(to.beat) - toX(from.beat)));
+        const auto steps = juce::jlimit(4, 96, span / 3);
+
+        for (int step = 1; step <= steps; ++step)
+        {
+            const auto beat = from.beat + (to.beat - from.beat) * (static_cast<double>(step) / steps);
+            path.lineTo(toX(beat), toY(AutomationLane::interpolate(from, to, beat)));
+        }
+    }
+
+    path.lineTo(static_cast<float>(grid.getRight()), toY(points.back().value));
+
+    // Shading under the line makes the lane readable at a glance even when it
+    // is squeezed down to a couple of dozen pixels.
+    auto filled = path;
+    filled.lineTo(static_cast<float>(grid.getRight()), static_cast<float>(curve.getBottom()));
+    filled.lineTo(static_cast<float>(grid.getX()), static_cast<float>(curve.getBottom()));
+    filled.closeSubPath();
+
+    g.setColour(laneColour.withAlpha(row.laneEnabled ? 0.13f : 0.06f));
+    g.fillPath(filled);
+
+    g.setColour(laneColour.withAlpha(row.laneEnabled ? 0.95f : 0.5f));
+    g.strokePath(path, juce::PathStrokeType(1.6f));
+
+    // Tension handles, only where there is room to grab one.
+    for (size_t i = 1; i < points.size(); ++i)
+    {
+        const auto& from = points[i - 1];
+        const auto& to = points[i];
+
+        if (toX(to.beat) - toX(from.beat) < curveHandleMinWidth)
+            continue;
+
+        const auto midBeat = (from.beat + to.beat) * 0.5;
+        const auto centre = juce::Point<float>(toX(midBeat), toY(AutomationLane::interpolate(from, to, midBeat)));
+
+        g.setColour(Theme::windowBackground().withAlpha(0.8f));
+        g.fillEllipse(juce::Rectangle<float>(5.0f, 5.0f).withCentre(centre));
+        g.setColour(laneColour.withAlpha(0.7f));
+        g.drawEllipse(juce::Rectangle<float>(5.0f, 5.0f).withCentre(centre), 1.0f);
+    }
+
+    for (const auto& point : points)
+    {
+        const auto centre = juce::Point<float>(toX(point.beat), toY(point.value));
+
+        if (centre.x < grid.getX() - 8.0f || centre.x > grid.getRight() + 8.0f)
+            continue;
+
+        g.setColour(Theme::windowBackground());
+        g.fillEllipse(juce::Rectangle<float>(7.0f, 7.0f).withCentre(centre));
+        g.setColour(laneColour);
+        g.fillEllipse(juce::Rectangle<float>(4.6f, 4.6f).withCentre(centre));
+    }
+}
+
+ArrangementView::AutomationDrag ArrangementView::hitTestAutomation(juce::Point<int> position) const
+{
+    AutomationDrag hit;
+
+    if (position.x < getGridArea().getX())
+        return hit;
+
+    const auto rowIndex = rowAt(position);
+
+    if (rowIndex < 0)
+        return hit;
+
+    const auto& row = rows[static_cast<size_t>(rowIndex)];
+
+    if (row.automationLane < 0)
+        return hit;
+
+    // Filled in even when nothing is hit: an empty spot on a lane is still a
+    // place a point can go.
+    hit.rowIndex = rowIndex;
+    hit.trackIndex = row.trackIndex;
+    hit.laneIndex = row.automationLane;
+
+    // The snapshot, not the lane: hit testing runs on every mouse move.
+    const auto& points = row.points;
+
+    // Points win over handles: they sit on top of the line and are what the
+    // user is most likely aiming at.
+    for (int i = 0; i < static_cast<int>(points.size()); ++i)
+    {
+        const auto& point = points[static_cast<size_t>(i)];
+        const juce::Point<int> centre { beatToX(point.beat), yFromValue(rowIndex, point.value) };
+
+        if (centre.getDistanceFrom(position) <= pointGrab)
+        {
+            hit.mode = AutomationDrag::Mode::point;
+            hit.pointIndex = i;
+            return hit;
+        }
+    }
+
+    for (int i = 1; i < static_cast<int>(points.size()); ++i)
+    {
+        const auto& from = points[static_cast<size_t>(i - 1)];
+        const auto& to = points[static_cast<size_t>(i)];
+
+        if (beatToX(to.beat) - beatToX(from.beat) < curveHandleMinWidth)
+            continue;
+
+        const auto midBeat = (from.beat + to.beat) * 0.5;
+        const juce::Point<int> centre { beatToX(midBeat),
+                                        yFromValue(rowIndex, AutomationLane::interpolate(from, to, midBeat)) };
+
+        if (centre.getDistanceFrom(position) <= pointGrab)
+        {
+            hit.mode = AutomationDrag::Mode::curve;
+            hit.pointIndex = i;
+            hit.grabCurve = to.curve;
+            hit.falling = to.value < from.value;
+            return hit;
+        }
+    }
+
+    return hit;
+}
+
+bool ArrangementView::handleAutomationMouseDown(int rowIndex,
+                                                juce::Point<int> position,
+                                                const juce::ModifierKeys& mods)
+{
+    const auto rowTrack = rows[static_cast<size_t>(rowIndex)].trackIndex;
+    const auto rowLane = rows[static_cast<size_t>(rowIndex)].automationLane;
+    auto* lane = getLane(rowTrack, rowLane);
+
+    if (lane == nullptr)
+        return false;
+
+    // Zoom and playback act on the timeline wherever the pointer happens to be,
+    // the same way they already ignore the clip underneath them.
+    if (activeTool == Tool::zoom || activeTool == Tool::playback)
+        return false;
+
+    auto hit = hitTestAutomation(position);
+
+    if (mods.isRightButtonDown())
+    {
+        showAutomationMenu(rowTrack,
+                           rowLane,
+                           hit.mode == AutomationDrag::Mode::point ? hit.pointIndex : -1);
+        return true;
+    }
+
+    // Mute is the tool that silences things elsewhere, so on a lane it bypasses
+    // the curve rather than editing it.
+    if (activeTool == Tool::mute)
+    {
+        pushUndo(lane->isEnabled() ? "Bypass automation" : "Aktifkan automation");
+        lane->setEnabled(! lane->isEnabled());
+        notifyClipEdited();
+        repaint();
+        return true;
+    }
+
+    if (activeTool == Tool::erase)
+    {
+        if (hit.mode == AutomationDrag::Mode::point)
+        {
+            pushUndo("Hapus titik automation");
+            lane->removePoint(hit.pointIndex);
+            notifyClipEdited();
+            repaint();
+        }
+
+        return true;
+    }
+
+    if (hit.mode != AutomationDrag::Mode::none)
+    {
+        pushUndo(hit.mode == AutomationDrag::Mode::curve ? "Bengkokkan automation" : "Geser titik automation");
+        automationDrag = hit;
+        automationDrag.grabY = position.y;
+        return true;
+    }
+
+    // An empty spot places a point and keeps hold of it, so one gesture both
+    // puts it down and lands it where it was meant to go.
+    pushUndo("Tambah titik automation");
+    const auto index = lane->addPoint(snapBeat(xToBeat(position.x)), valueFromY(rowIndex, position.y));
+
+    if (index < 0)
+        return true;
+
+    automationDrag = {};
+    automationDrag.mode = AutomationDrag::Mode::point;
+    automationDrag.rowIndex = rowIndex;
+    automationDrag.trackIndex = rowTrack;
+    automationDrag.laneIndex = rowLane;
+    automationDrag.pointIndex = index;
+
+    notifyClipEdited();
+    repaint();
+    return true;
 }
 
 double ArrangementView::getGridStepBeats() const noexcept
@@ -1477,6 +2280,11 @@ void ArrangementView::setPatternLengthProvider(std::function<double(int)> provid
 {
     patternLengthProvider = std::move(provider);
     repaint();
+}
+
+void ArrangementView::setTrackRenameCallback(std::function<void(int)> callback)
+{
+    trackRenameCallback = std::move(callback);
 }
 
 void ArrangementView::setPatternRenameCallback(std::function<void(int)> callback)
@@ -1890,7 +2698,7 @@ void ArrangementView::showPlacementContextMenu(int trackIndex, int placementInde
     menu.addItem(3, "Hapus penempatan");
 
     menu.showMenuAsync(juce::PopupMenu::Options()
-                           .withTargetComponent(this)
+                           .withMousePosition()
                            .withMinimumWidth(190)
                            .withStandardItemHeight(21),
         [this, trackIndex, placementIndex] (int result)
@@ -1956,7 +2764,7 @@ void ArrangementView::showClipContextMenu(int trackIndex, int clipIndex)
     menu.addItem(3, "Hapus clip");
 
     menu.showMenuAsync(juce::PopupMenu::Options()
-                           .withTargetComponent(this)
+                           .withMousePosition()
                            .withMinimumWidth(180)
                            .withStandardItemHeight(21),
         [this, trackIndex, clipIndex] (int result)

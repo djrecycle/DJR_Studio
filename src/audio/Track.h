@@ -1,10 +1,14 @@
 #pragma once
 
+#include "AutomationLane.h"
 #include "plugins/PluginChain.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
+#include <array>
 #include <atomic>
+#include <memory>
+#include <vector>
 
 namespace djr
 {
@@ -30,6 +34,27 @@ struct TrackPlaybackContext
     const juce::AudioBuffer<float>* inputBuffer = nullptr;
     /** Freshly played MIDI, set only for the track that should receive it. */
     const juce::MidiBuffer* liveMidi = nullptr;
+    /** Everything routed into this bus for this block. The mixer fills it before
+        the bus is processed, which the process order guarantees is possible.
+        Only set for bus tracks.
+    */
+    const juce::AudioBuffer<float>* busInput = nullptr;
+};
+
+/** One send: a tap off a track into a bus, on top of wherever the track's main
+    output already goes.
+*/
+struct TrackSend
+{
+    /** Bus track index, or -1 when the slot is unused. */
+    int destination = -1;
+    float level = 0.0f;
+    /** Pre-fader taps the signal before volume and pan, so riding the fader does
+        not also ride the amount going to the reverb.
+    */
+    bool preFader = false;
+
+    bool isActive() const noexcept { return destination >= 0 && level > 0.0f; }
 };
 
 class Track
@@ -39,6 +64,10 @@ public:
     virtual ~Track() = default;
 
     const juce::String& getName() const noexcept;
+    /** Message thread only, like every reader of the name: the audio thread
+        never looks at it, so this needs no lock.
+    */
+    void setName(juce::String newName);
     TrackKind getKind() const noexcept;
 
     void setVolume(float newVolume) noexcept;
@@ -54,6 +83,59 @@ public:
     float getPeakLevel() const noexcept;
     /** Per-channel peak, 0 = left, 1 = right. Falls back to the mono peak. */
     float getPeakLevel(int channel) const noexcept;
+
+    // Routing ----------------------------------------------------------------
+    /** Four is what a mix actually reaches for - reverb, delay, parallel
+        compression, a headphone feed - and keeps the array free of allocation.
+    */
+    static constexpr int maxSends = 4;
+    /** The main output when it is not aimed at a bus. */
+    static constexpr int masterDestination = -1;
+
+    /** Routing is written through the Mixer, never straight onto a track: only
+        the mixer can see the whole graph, and only it can tell that a route
+        would feed back into itself.
+    */
+    void setOutputDestination(int destination) noexcept;
+    int getOutputDestination() const noexcept;
+    void setSend(int slot, const TrackSend& send) noexcept;
+    TrackSend getSend(int slot) const noexcept;
+    /** Whether any slot wants the signal from before the fader, so the mixer
+        only pays for that copy when something is listening.
+    */
+    bool hasPreFaderSend() const noexcept;
+    /** Turns off every send aimed at `destination`, and sends the main output
+        back to master if it pointed there. For a bus that is going away.
+    */
+    void dropRoutesTo(int destination) noexcept;
+    /** Shifts destination indices after a track is removed from the list. */
+    void remapDestinations(int removedIndex) noexcept;
+
+    // Automation -------------------------------------------------------------
+    /** More lanes than this on one track is a mixer, not an automation set. */
+    static constexpr int maxAutomationLanes = 32;
+
+    /** Adds a lane for `target`, or hands back the one already aiming there.
+        Two lanes on one parameter would take turns overwriting each other and
+        nothing on screen would say which one won.
+    */
+    AutomationLane* addAutomationLane(AutomationTarget target);
+    bool removeAutomationLane(int index);
+    int getNumAutomationLanes() const noexcept;
+    AutomationLane* getAutomationLane(int index) noexcept;
+    const AutomationLane* getAutomationLane(int index) const noexcept;
+    int findAutomationLane(const AutomationTarget& target) const noexcept;
+    /** Whole set as plain data, for undo snapshots and project files. */
+    std::vector<AutomationLaneState> captureAutomation() const;
+    void restoreAutomation(const std::vector<AutomationLaneState>& lanes);
+
+    /** Volume and pan as the automation last left them, so a fader can follow
+        the curve instead of sitting at the value nobody is listening to.
+    */
+    float getEffectiveVolume() const noexcept;
+    float getEffectivePan() const noexcept;
+    bool isVolumeAutomated() const noexcept;
+    bool isPanAutomated() const noexcept;
 
     /** Prepares the plugin on the calling thread, then swaps it in under a short lock. */
     void addPlugin(std::unique_ptr<juce::AudioPluginInstance> plugin);
@@ -74,9 +156,13 @@ public:
     juce::StringArray getPluginNames() const;
 
     virtual void prepare(double sampleRate, int blockSize);
+    /** `preFaderOut`, when given, receives the signal as it stands after the
+        inserts but before volume and pan - what a pre-fader send taps.
+    */
     virtual void processAudio(juce::AudioBuffer<float>& buffer,
                               juce::MidiBuffer& midi,
-                              const TrackPlaybackContext& context);
+                              const TrackPlaybackContext& context,
+                              juce::AudioBuffer<float>* preFaderOut = nullptr);
 
 protected:
     virtual void renderAudio(juce::AudioBuffer<float>& buffer,
@@ -85,7 +171,30 @@ protected:
     void updatePeak(const juce::AudioBuffer<float>& buffer) noexcept;
 
 private:
-    void applyPan(juce::AudioBuffer<float>& buffer) const noexcept;
+    /** One plugin parameter this block wants written, gathered before the plugin
+        locks are taken so the read and the write never nest.
+    */
+    struct PendingParameter
+    {
+        int pluginSlot = AutomationTarget::instrumentSlot;
+        int parameterIndex = 0;
+        float value = 0.0f;
+    };
+
+    /** Automation is evaluated this often inside a block rather than once per
+        buffer: at 44.1 kHz that is ~0.7 ms, far finer than any drawn curve, so
+        a steep sweep is followed instead of being flattened into one straight
+        line per buffer.
+    */
+    static constexpr int automationChunkSamples = 32;
+    static constexpr int maxAutomationChunks = 64;
+
+    /** Reads every lane for this block. Audio thread only. */
+    void readAutomation(const TrackPlaybackContext& context, int numSamples) noexcept;
+    /** Writes whatever this block's lanes asked of `pluginSlot`. */
+    void applyParameterAutomation(juce::AudioPluginInstance& plugin, int pluginSlot) noexcept;
+    /** Volume and pan, ramped across the block when automation is moving them. */
+    void applyLevels(juce::AudioBuffer<float>& buffer) const noexcept;
     void mixInInput(juce::AudioBuffer<float>& buffer, const TrackPlaybackContext& context) const noexcept;
 
     juce::String name;
@@ -107,6 +216,40 @@ private:
     std::atomic<float> peakLevel { 0.0f };
     std::atomic<float> peakLevelLeft { 0.0f };
     std::atomic<float> peakLevelRight { 0.0f };
+
+    /** Guards the lane list. Editing a lane's points guards itself; this one is
+        only about lanes coming and going.
+    */
+    mutable juce::SpinLock automationLock;
+    std::vector<std::unique_ptr<AutomationLane>> automationLanes;
+    std::atomic<int> automationLaneCount { 0 };
+
+    // Block-local automation results. Only the audio thread reads or writes
+    // these, so they are deliberately not atomic.
+    std::array<PendingParameter, maxAutomationLanes> pendingParameters {};
+    int pendingParameterCount = 0;
+    /** One value per sub-block boundary, so there is one more of these than
+        there are chunks.
+    */
+    std::array<float, maxAutomationChunks + 1> blockVolumeCurve {};
+    std::array<float, maxAutomationChunks + 1> blockPanCurve {};
+    int blockAutomationChunks = 1;
+    bool blockVolumeAutomated = false;
+    bool blockPanAutomated = false;
+
+    // Published for the mixer faders.
+    std::atomic<float> automatedVolume { 0.8f };
+    std::atomic<float> automatedPan { 0.0f };
+    std::atomic<bool> volumeAutomated { false };
+    std::atomic<bool> panAutomated { false };
+
+    // Routing. Kept as separate atomics rather than one guarded struct: a send
+    // whose level and destination land a block apart is inaudible, and this
+    // keeps the audio thread free of another lock.
+    std::atomic<int> outputDestination { masterDestination };
+    std::array<std::atomic<int>, maxSends> sendDestination {};
+    std::array<std::atomic<float>, maxSends> sendLevel {};
+    std::array<std::atomic<bool>, maxSends> sendPreFader {};
 };
 
 } // namespace djr
