@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AudioClip.h"
 #include "AutomationLane.h"
 #include "plugins/PluginChain.h"
 
@@ -110,6 +111,18 @@ public:
     void dropRoutesTo(int destination) noexcept;
     /** Shifts destination indices after a track is removed from the list. */
     void remapDestinations(int removedIndex) noexcept;
+
+    // Freeze -----------------------------------------------------------------
+    /** Plays `clip` in place of everything this track would otherwise render:
+        its own clips, its instrument and its inserts are all skipped.
+
+        The clip holds the **pre-fader** signal, so volume and pan still apply
+        on top - a frozen track is still yours to mix. Pass nullptr to unfreeze.
+    */
+    void setFrozenAudio(std::unique_ptr<AudioClip> clip);
+    bool isFrozen() const noexcept;
+    /** The file the frozen audio came from, so a project can find it again. */
+    juce::File getFrozenFile() const;
 
     // Automation -------------------------------------------------------------
     /** More lanes than this on one track is a mixer, not an automation set. */
@@ -246,6 +259,13 @@ private:
     // Routing. Kept as separate atomics rather than one guarded struct: a send
     // whose level and destination land a block apart is inaudible, and this
     // keeps the audio thread free of another lock.
+    /** Guards the frozen clip. Swapped from the message thread, try-locked by
+        the audio thread, like everything else here.
+    */
+    mutable juce::SpinLock freezeLock;
+    std::unique_ptr<AudioClip> frozenAudio;
+    std::atomic<bool> frozen { false };
+
     std::atomic<int> outputDestination { masterDestination };
     std::array<std::atomic<int>, maxSends> sendDestination {};
     std::array<std::atomic<float>, maxSends> sendLevel {};

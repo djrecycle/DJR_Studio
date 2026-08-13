@@ -88,6 +88,10 @@ public:
     void setPatternRenameCallback(std::function<void(int)> callback);
     /** Fired when a track's name is double clicked, or asked for from its menu. */
     void setTrackRenameCallback(std::function<void(int)> callback);
+    /** Freeze or unfreeze a track; the host decides which, since it knows. */
+    void setTrackFreezeCallback(std::function<void(int)> callback);
+    /** Render a track onto a new audio track. */
+    void setTrackBounceCallback(std::function<void(int)> callback);
 
     /** Lane height for one track, so it can be saved with the project. Zero or
         anything out of range restores the default height.
@@ -369,6 +373,8 @@ private:
     std::function<double(int)> patternLengthProvider;
     std::function<void(int)> patternRenameCallback;
     std::function<void(int)> trackRenameCallback;
+    std::function<void(int)> trackFreezeCallback;
+    std::function<void(int)> trackBounceCallback;
     ClipDrag clipDrag;
     Tool activeTool = Tool::select;
     /** A paint drag in progress: the pointer keeps laying clips as it sweeps. */

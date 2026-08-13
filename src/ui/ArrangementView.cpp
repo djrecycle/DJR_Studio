@@ -1092,6 +1092,12 @@ void ArrangementView::showTrackContextMenu(int trackIndex)
     menu.addItem(2, "Monitor input", true, track->isInputMonitoring());
     menu.addItem(3, "Hapus semua plugin", track->getPluginCount() > 0);
     menu.addSeparator();
+    // A bus makes no sound of its own until something feeds it, so rendering one
+    // on its own would only ever produce silence.
+    const auto renderable = track->getKind() != TrackKind::bus;
+    menu.addItem(5, track->isFrozen() ? "Unfreeze track" : "Freeze track", renderable);
+    menu.addItem(6, "Bounce ke audio...", renderable);
+    menu.addSeparator();
     menu.addSubMenu("Tambah automation", automationMenu);
 
     menu.showMenuAsync(juce::PopupMenu::Options()
@@ -1133,6 +1139,16 @@ void ArrangementView::showTrackContextMenu(int trackIndex)
                 case 4:
                     if (trackRenameCallback)
                         trackRenameCallback(trackIndex);
+                    break;
+
+                case 5:
+                    if (trackFreezeCallback)
+                        trackFreezeCallback(trackIndex);
+                    break;
+
+                case 6:
+                    if (trackBounceCallback)
+                        trackBounceCallback(trackIndex);
                     break;
 
                 default:
@@ -2285,6 +2301,16 @@ void ArrangementView::setPatternLengthProvider(std::function<double(int)> provid
 void ArrangementView::setTrackRenameCallback(std::function<void(int)> callback)
 {
     trackRenameCallback = std::move(callback);
+}
+
+void ArrangementView::setTrackFreezeCallback(std::function<void(int)> callback)
+{
+    trackFreezeCallback = std::move(callback);
+}
+
+void ArrangementView::setTrackBounceCallback(std::function<void(int)> callback)
+{
+    trackBounceCallback = std::move(callback);
 }
 
 void ArrangementView::setPatternRenameCallback(std::function<void(int)> callback)

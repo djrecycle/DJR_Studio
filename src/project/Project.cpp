@@ -58,6 +58,7 @@ juce::var Project::toVar() const
         trackObject->setProperty("automation", track.automation);
         trackObject->setProperty("outputDestination", track.outputDestination);
         trackObject->setProperty("sends", track.sends);
+        trackObject->setProperty("frozenFile", track.frozenFile);
         trackObject->setProperty("laneHeight", track.laneHeight);
         trackArray.add(trackObject);
     }
@@ -169,6 +170,8 @@ void Project::fromVar(const juce::var& value)
             if (auto* sendArray = trackObject->getProperty("sends").getArray())
                 for (const auto& send : *sendArray)
                     track.sends.add(send);
+
+            track.frozenFile = trackObject->getProperty("frozenFile").toString();
 
             track.laneHeight = static_cast<int>(getOr(*trackObject, "laneHeight", 0));
 

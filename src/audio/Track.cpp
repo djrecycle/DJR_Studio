@@ -28,6 +28,33 @@ Track::Track(juce::String trackName, TrackKind kind)
         preFader.store(false, std::memory_order_release);
 }
 
+void Track::setFrozenAudio(std::unique_ptr<AudioClip> clip)
+{
+    std::unique_ptr<AudioClip> previous;
+
+    {
+        const juce::SpinLock::ScopedLockType scoped(freezeLock);
+        previous = std::move(frozenAudio);
+        frozenAudio = std::move(clip);
+        frozen.store(frozenAudio != nullptr, std::memory_order_release);
+    }
+
+    // Freeing the old clip releases its samples, which can be megabytes; do it
+    // outside the lock the audio thread contends for.
+    previous.reset();
+}
+
+bool Track::isFrozen() const noexcept
+{
+    return frozen.load(std::memory_order_acquire);
+}
+
+juce::File Track::getFrozenFile() const
+{
+    const juce::SpinLock::ScopedLockType scoped(freezeLock);
+    return frozenAudio != nullptr ? frozenAudio->getFile() : juce::File();
+}
+
 void Track::setOutputDestination(int destination) noexcept
 {
     outputDestination.store(destination < 0 ? masterDestination : destination,
@@ -482,7 +509,23 @@ void Track::processAudio(juce::AudioBuffer<float>& buffer,
     if (context.liveMidi != nullptr && ! context.liveMidi->isEmpty())
         midi.addEvents(*context.liveMidi, 0, buffer.getNumSamples(), 0);
 
-    renderAudio(buffer, midi, context);
+    // A frozen track plays its render instead of making the sound again: no
+    // clips, no instrument, no inserts. That is the whole point - it is what
+    // gives the CPU back. Volume and pan still run below, so it stays mixable.
+    const auto playingFrozen = isFrozen();
+
+    if (playingFrozen)
+    {
+        const juce::SpinLock::ScopedTryLockType scoped(freezeLock);
+
+        if (scoped.isLocked() && frozenAudio != nullptr)
+            frozenAudio->addToBuffer(buffer, context.startBeat, context.tempoBpm, context.sampleRate);
+    }
+    else
+    {
+        renderAudio(buffer, midi, context);
+    }
+
     mixInInput(buffer, context);
 
     if (isMuted())
@@ -501,17 +544,20 @@ void Track::processAudio(juce::AudioBuffer<float>& buffer,
         return;
     }
 
+    // The render already went through both of these, so running them again
+    // would apply every effect twice.
+    if (! playingFrozen)
     {
-        // Instrument first: it is what turns this track's MIDI into audio.
-        const juce::SpinLock::ScopedTryLockType scoped(instrumentLock);
-        if (scoped.isLocked() && instrument != nullptr)
         {
-            applyParameterAutomation(*instrument, AutomationTarget::instrumentSlot);
-            PluginChain::processWithChannelAdaptation(*instrument, buffer, midi, instrumentScratch);
+            // Instrument first: it is what turns this track's MIDI into audio.
+            const juce::SpinLock::ScopedTryLockType scoped(instrumentLock);
+            if (scoped.isLocked() && instrument != nullptr)
+            {
+                applyParameterAutomation(*instrument, AutomationTarget::instrumentSlot);
+                PluginChain::processWithChannelAdaptation(*instrument, buffer, midi, instrumentScratch);
+            }
         }
-    }
 
-    {
         // Never block the audio thread for a plugin edit: skip the chain for this
         // block instead, so the worst case is one unprocessed buffer.
         const juce::SpinLock::ScopedTryLockType scoped(pluginLock);

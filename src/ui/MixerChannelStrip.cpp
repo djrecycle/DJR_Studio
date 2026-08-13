@@ -572,8 +572,13 @@ void MixerChannelStrip::timerCallback()
 
 int MixerChannelStrip::getFaderRowHeight() const
 {
-    const auto fixed = stripPadding * 2 + nameRowHeight + rowGap + panRowHeight + rowGap
-                     + rowGap + buttonRowHeight + dbRowHeight;
+    auto fixed = stripPadding * 2 + nameRowHeight + rowGap + panRowHeight + rowGap
+               + rowGap + buttonRowHeight + dbRowHeight;
+
+    // The send row is carved off the bottom, so the fader has to give up the
+    // space or its meters and the send bars end up drawn on top of each other.
+    if (! getAssignedSends().empty())
+        fixed += sendRowHeight;
 
     return juce::jmax(faderRowHeight, getHeight() - fixed);
 }

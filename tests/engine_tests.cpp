@@ -12,6 +12,7 @@
 #include "midi/MidiEngine.h"
 #include "midi/PianoRollModel.h"
 #include "export/ExportManager.h"
+#include "export/TrackRenderer.h"
 #include "project/Project.h"
 #include "project/ProjectTrackLayout.h"
 #include "app/EditHistory.h"
@@ -1975,6 +1976,21 @@ int main()
             }
         }
 
+        // Freeze is remembered by the path of its render, so reopening a project
+        // does not have to render everything again.
+        djr::Project frozenProject;
+        djr::ProjectTrackState frozenState;
+        frozenState.name = "Keys";
+        frozenState.type = "midi";
+        frozenState.frozenFile = "/tmp/djr-freeze-keys.wav";
+        frozenProject.tracks.add(frozenState);
+
+        djr::Project frozenReopened;
+        frozenReopened.fromVar(frozenProject.toVar());
+        check(frozenReopened.tracks.size() == 1
+                  && frozenReopened.tracks.getReference(0).frozenFile == "/tmp/djr-freeze-keys.wav",
+              "a frozen track reopens still pointing at its render");
+
         // A file written before routing existed must still open, aimed at master.
         djr::Project legacy;
         djr::ProjectTrackState old;
@@ -1991,6 +2007,96 @@ int main()
         check(legacyReopened.tracks.size() == 1
                   && legacyReopened.tracks.getReference(0).outputDestination == -1,
               "a project from before routing opens pointing at master");
+    }
+
+    // --- Freeze: render one track, then play the render instead --------------
+    {
+        djr::Mixer freezeMixer;
+        freezeMixer.prepare(sampleRate, blockSize);
+
+        auto* track = findFirstMidiTrack(freezeMixer);
+        check(track != nullptr, "there is a MIDI track to freeze");
+
+        if (track != nullptr)
+        {
+            track->getClip(0).setNotes(makeFourBarChord());
+
+            const auto renderFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                        .getChildFile("djr_freeze_test.wav");
+
+            djr::TrackRenderer renderer;
+            djr::TrackRenderer::Options options;
+            options.sampleRate = sampleRate;
+            options.blockSize = blockSize;
+            options.tempoBpm = tempoBpm;
+            options.lengthBeats = 4.0;
+            options.songMode = false;
+            options.tailSeconds = 0.5;
+
+            juce::String error;
+            const auto rendered = renderer.render(*track, renderFile, options, error);
+            check(rendered, "a single track renders to a file: " + error);
+
+            if (rendered)
+            {
+                check(renderFile.getSize() > 1000, "and the file has audio in it, not just a header");
+
+                juce::AudioFormatManager formats;
+                formats.registerBasicFormats();
+
+                juce::String loadError;
+                auto clip = djr::AudioClip::createFromFile(renderFile, sampleRate, formats, loadError);
+                check(clip != nullptr, "the render loads back as a clip: " + loadError);
+
+                if (clip != nullptr)
+                {
+                    // The render must actually contain the chord, not silence.
+                    juce::AudioBuffer<float> probe(2, blockSize);
+                    probe.clear();
+                    clip->setWarpEnabled(false);
+                    clip->addToBuffer(probe, 0.5, tempoBpm, sampleRate);
+
+                    auto renderPeakLevel = 0.0f;
+                    for (int channel = 0; channel < probe.getNumChannels(); ++channel)
+                        renderPeakLevel = std::max(renderPeakLevel,
+                                                   probe.getMagnitude(channel, 0, probe.getNumSamples()));
+
+                    check(! isSilent(renderPeakLevel), "the rendered audio is not silence");
+
+                    settle(freezeMixer);
+
+                    // Frozen: the notes are still in the clip, but they must not
+                    // be what is heard - the render is.
+                    track->setFrozenAudio(std::move(clip));
+                    check(track->isFrozen(), "the track reports itself frozen");
+                    check(track->getFrozenFile() == renderFile, "and remembers where the render came from");
+                    check(track->getClip(0).getNumNotes() > 0,
+                          "freezing leaves the notes alone, so it can be undone");
+
+                    const auto frozenPeak = renderPeak(freezeMixer, true, 8);
+                    check(! isSilent(frozenPeak), "a frozen track is still audible");
+
+                    settle(freezeMixer);
+
+                    // The fader stays live: the render is pre-fader, so pulling
+                    // the fader down still silences the track.
+                    const auto stored = track->getVolume();
+                    track->setVolume(0.0f);
+                    check(isSilent(renderPeak(freezeMixer, true, 8)),
+                          "the fader still works on a frozen track");
+                    track->setVolume(stored);
+
+                    settle(freezeMixer);
+
+                    track->setFrozenAudio(nullptr);
+                    check(! track->isFrozen(), "unfreezing puts the track back");
+                    check(! isSilent(renderPeak(freezeMixer, true, 8)),
+                          "and it makes its own sound again");
+                }
+            }
+
+            renderFile.deleteFile();
+        }
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

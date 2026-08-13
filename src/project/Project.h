@@ -31,6 +31,11 @@ struct ProjectTrackState
     int outputDestination = -1;
     /** Send slots, each with its destination, level and pre/post fader flag. */
     juce::Array<juce::var> sends;
+    /** The render a frozen track plays instead of its own content. Empty means
+        the track is not frozen; the clips and plugins are saved either way, so
+        unfreezing after reopening still gets everything back.
+    */
+    juce::String frozenFile;
     /** Playlist lane height in pixels. Zero means the default height. */
     int laneHeight = 0;
 };

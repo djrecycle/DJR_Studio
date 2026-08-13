@@ -25,6 +25,7 @@
 #include "plugins/PluginManager.h"
 #include "plugins/PluginWindow.h"
 #include "export/ExportManager.h"
+#include "export/TrackRenderer.h"
 #include "project/ProjectManager.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -128,6 +129,14 @@ private:
     void renamePattern(int patternIndex);
     /** Asks for a new name for a track and pushes it everywhere it is shown. */
     void renameTrack(int trackIndex);
+    /** Renders one track on its own to a wav under Renders/. Empty on failure,
+        which it has already reported.
+    */
+    juce::File renderTrackToFile(int trackIndex, const juce::String& suffix);
+    /** Freezes the track, or unfreezes it when it already is. */
+    void freezeTrack(int trackIndex);
+    /** Renders the track onto a new audio track, leaving the source alone. */
+    void bounceTrackToAudio(int trackIndex);
     /** Pushes the active pattern's name into the editor header. */
     void refreshPatternName();
     /** Beats the active pattern loops for: the manual length, or its content. */
@@ -150,6 +159,10 @@ private:
         because a destination is an index into it.
     */
     void restoreRoutingFromProject();
+    /** Reloads a frozen track's render, or leaves the track unfrozen when the
+        file has gone missing.
+    */
+    void restoreFreezeForTrack(int trackIndex, const juce::String& frozenPath);
     Track* getTrack(int index) noexcept;
 
     DJRLookAndFeel lookAndFeel;
@@ -184,6 +197,7 @@ private:
     std::vector<std::unique_ptr<PluginWindow>> pluginWindows;
 
     ExportManager exportManager;
+    TrackRenderer trackRenderer;
     juce::AudioFormatManager audioFormats;
     double recordingStartBeat = 0.0;
     /** Bars of click before recording starts; 0 disables the count-in. */

@@ -51,8 +51,10 @@ void InsertChainPanel::paint(juce::Graphics& g)
     if (track != nullptr)
     {
         const auto kind = track->getKind() == TrackKind::midi
-            ? "MIDI - CH " + juce::String(selectedTrack + 1)
-            : juce::String("AUDIO");
+                              ? "MIDI - CH " + juce::String(selectedTrack + 1)
+                        : track->getKind() == TrackKind::bus
+                              ? juce::String("BUS")
+                              : juce::String("AUDIO");
 
         g.setColour(Theme::faintText());
         g.setFont(Theme::mono(9.5f));

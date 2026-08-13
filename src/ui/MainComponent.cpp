@@ -125,6 +125,8 @@ MainComponent::MainComponent()
 
     arrangementView.setTrackSelectedCallback([this] (int trackIndex) { selectTrack(trackIndex); });
     arrangementView.setTrackRenameCallback([this] (int trackIndex) { renameTrack(trackIndex); });
+    arrangementView.setTrackFreezeCallback([this] (int trackIndex) { freezeTrack(trackIndex); });
+    arrangementView.setTrackBounceCallback([this] (int trackIndex) { bounceTrackToAudio(trackIndex); });
     arrangementView.setClipEditedCallback([this]
     {
         pianoRollModel.notifyClipChanged();
@@ -1053,6 +1055,146 @@ void MainComponent::exportAudio()
         });
 }
 
+juce::File MainComponent::renderTrackToFile(int trackIndex, const juce::String& suffix)
+{
+    auto* track = getTrack(trackIndex);
+
+    if (track == nullptr)
+        return {};
+
+    const auto folder = FileUtils::getDefaultProjectRoot().getChildFile("Renders");
+
+    // The track name is in the file name so a folder full of renders is still
+    // readable, and the stamp keeps a re-freeze from overwriting a file another
+    // clip might still be reading.
+    const auto stamp = juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S");
+    const auto file = folder.getChildFile(track->getName().retainCharacters(
+                                              "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+                                          + "-" + suffix + "-" + stamp + ".wav");
+
+    TrackRenderer::Options options;
+    options.sampleRate = audioEngine.getCurrentSampleRate();
+    options.blockSize = audioEngine.getCurrentBufferSize();
+    options.tempoBpm = audioEngine.getTransport().getTempoBpm();
+    options.startBeat = 0.0;
+    options.lengthBeats = getSongLengthBeats();
+    options.songMode = sessionState.isSongMode();
+
+    juce::String error;
+    auto succeeded = false;
+
+    // The device must let go of the track before we drive it by hand, exactly
+    // as a full export does.
+    audioEngine.renderOffline([&]
+    {
+        succeeded = trackRenderer.render(*track, file, options, error);
+    });
+
+    if (! succeeded)
+    {
+        showError("Render track gagal", error);
+        return {};
+    }
+
+    return file;
+}
+
+void MainComponent::freezeTrack(int trackIndex)
+{
+    auto* track = getTrack(trackIndex);
+
+    if (track == nullptr)
+        return;
+
+    if (track->isFrozen())
+    {
+        // Unfreeze: the clips, instrument and inserts were never touched, so
+        // dropping the render is all it takes to get them back.
+        track->setFrozenAudio(nullptr);
+        mixerView.repaint();
+        arrangementView.repaint();
+        markDirty();
+        setStatusMessage("Unfreeze: " + track->getName() + " kembali diproses langsung.");
+        return;
+    }
+
+    setStatusMessage("Freeze " + track->getName() + "...");
+
+    const auto file = renderTrackToFile(trackIndex, "freeze");
+
+    if (file == juce::File())
+        return;
+
+    juce::String error;
+    auto clip = AudioClip::createFromFile(file, audioEngine.getCurrentSampleRate(), audioFormats, error);
+
+    if (clip == nullptr)
+    {
+        showError("Freeze gagal", "Hasil render tidak bisa dibaca kembali: " + error);
+        return;
+    }
+
+    // The render is already at the session tempo and must play back sample for
+    // sample, so warping it would resample what was just rendered.
+    clip->setWarpEnabled(false);
+    track->setFrozenAudio(std::move(clip));
+
+    browserPanel.refreshContent();
+    mixerView.repaint();
+    arrangementView.repaint();
+    markDirty();
+    setStatusMessage("Freeze selesai: " + track->getName()
+                         + " (" + juce::File::descriptionOfSizeInBytes(file.getSize()) + ")");
+}
+
+void MainComponent::bounceTrackToAudio(int trackIndex)
+{
+    auto* track = getTrack(trackIndex);
+
+    if (track == nullptr)
+        return;
+
+    setStatusMessage("Bounce " + track->getName() + "...");
+
+    const auto sourceName = track->getName();
+    const auto file = renderTrackToFile(trackIndex, "bounce");
+
+    if (file == juce::File())
+        return;
+
+    // A bounce is a new audio track rather than a replacement: the source is
+    // left exactly as it was, so the render can be thrown away without having
+    // destroyed anything.
+    editHistory.pushSnapshot("Bounce ke audio");
+
+    auto* bounced = audioEngine.getMixer().addTrack(std::make_unique<AudioTrack>(sourceName + " (bounce)"));
+
+    if (bounced == nullptr)
+    {
+        showError("Bounce gagal", "Mixer sudah penuh - track baru tidak bisa ditambahkan.");
+        return;
+    }
+
+    const auto bouncedIndex = audioEngine.getMixer().indexOf(bounced);
+
+    arrangementView.notifyTrackListChanged();
+    mixerView.refreshStrips();
+    insertChainPanel.refresh();
+    pluginBrowserView.refreshTrackList();
+
+    if (! addAudioClipToTrack(bouncedIndex, file, 0.0))
+    {
+        showError("Bounce gagal", "Hasil render tidak bisa ditaruh di track baru.");
+        return;
+    }
+
+    browserPanel.refreshContent();
+    selectTrack(bouncedIndex);
+    markDirty();
+    setStatusMessage("Bounce selesai: " + file.getFileName()
+                         + " (" + juce::File::descriptionOfSizeInBytes(file.getSize()) + ")");
+}
+
 void MainComponent::showError(const juce::String& title, const juce::String& message)
 {
     juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, title, message);
@@ -1451,8 +1593,16 @@ void MainComponent::applySelectionToPanels()
     pianoRollModel.setTargetClip(midiTrack != nullptr ? &midiTrack->getClip() : nullptr);
 
     if (auto* track = getTrack(trackIndex))
-        setStatusMessage("Track aktif: " + track->getName()
-                             + (midiTrack != nullptr ? "" : " (track audio - editor MIDI kosong)"));
+    {
+        // A bus is neither MIDI nor audio, and calling it an audio track was
+        // simply wrong once buses existed.
+        const auto note = track->getKind() == TrackKind::midi ? juce::String()
+                        : track->getKind() == TrackKind::bus
+                              ? juce::String(" (bus - menerima kiriman track lain)")
+                              : juce::String(" (track audio - editor MIDI kosong)");
+
+        setStatusMessage("Track aktif: " + track->getName() + note);
+    }
 }
 
 void MainComponent::synchroniseProjectState()
@@ -1485,6 +1635,7 @@ void MainComponent::synchroniseProjectState()
                    : track->getKind() == TrackKind::bus ? "bus"
                                                         : "audio";
         state.outputDestination = track->getOutputDestination();
+        state.frozenFile = track->isFrozen() ? track->getFrozenFile().getFullPathName() : juce::String();
 
         for (int slot = 0; slot < Track::maxSends; ++slot)
         {
@@ -1704,6 +1855,47 @@ void MainComponent::rebuildTrackListForProject()
     projectDirty = wasDirty;
 }
 
+void MainComponent::restoreFreezeForTrack(int trackIndex, const juce::String& frozenPath)
+{
+    auto* track = getTrack(trackIndex);
+
+    if (track == nullptr)
+        return;
+
+    // Runs even for an empty path, so a track does not keep the previous
+    // session's render.
+    if (frozenPath.isEmpty())
+    {
+        track->setFrozenAudio(nullptr);
+        return;
+    }
+
+    const juce::File file(frozenPath);
+
+    // A missing render is not worth refusing to open the project over: the
+    // track still has its clips and plugins, so it simply plays them again.
+    if (! file.existsAsFile())
+    {
+        track->setFrozenAudio(nullptr);
+        setStatusMessage("Freeze " + track->getName() + " hilang: " + file.getFileName()
+                             + " - track diproses langsung.");
+        return;
+    }
+
+    juce::String error;
+    auto clip = AudioClip::createFromFile(file, audioEngine.getCurrentSampleRate(), audioFormats, error);
+
+    if (clip == nullptr)
+    {
+        track->setFrozenAudio(nullptr);
+        setStatusMessage("Freeze " + track->getName() + " tidak terbaca: " + error);
+        return;
+    }
+
+    clip->setWarpEnabled(false);
+    track->setFrozenAudio(std::move(clip));
+}
+
 void MainComponent::restoreRoutingFromProject()
 {
     const auto& project = projectManager.getProject();
@@ -1805,6 +1997,7 @@ void MainComponent::applyProjectToSession()
         restoreAudioClipsForTrack(i, projectTrack.audioClips);
         restorePluginsForTrack(i, projectTrack.pluginStates);
         restoreAutomationForTrack(i, projectTrack.automation);
+        restoreFreezeForTrack(i, projectTrack.frozenFile);
     }
 
     // Routing comes last and in its own pass: a destination is a track index, so

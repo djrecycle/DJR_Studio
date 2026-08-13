@@ -99,6 +99,7 @@ set(DJR_ENGINE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/project/ProjectTrackLayout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/recording/Recorder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/export/ExportManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/export/TrackRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/utils/Logger.cpp)
 
 set(DJR_STUDIO_SOURCES

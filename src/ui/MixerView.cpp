@@ -123,6 +123,10 @@ void MixerView::refreshStrips()
 
     resized();
     holder.resized();
+
+    // The header counts channels and buses, so it goes stale the moment the
+    // track list changes - laying the strips out again does not redraw it.
+    repaint();
 }
 
 void MixerView::setSelectedTrack(int trackIndex)
