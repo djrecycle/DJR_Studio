@@ -688,6 +688,12 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
         return true;
     }
 
+    // The typing keyboard gets first refusal on every letter it maps, which is
+    // what FL does: with it on, R is F above middle C, not record. Bare-letter
+    // shortcuts only exist for the keys it leaves alone, or when it is off.
+    if (typingKeyboard.isKeyMapped(key))
+        return false;
+
     if (key.getTextCharacter() == 'r' || key.getTextCharacter() == 'R')
     {
         toggleRecording();
@@ -748,6 +754,14 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
         if (character == 'n')
         {
             newProject();
+            return true;
+        }
+
+        // R belongs to the typing keyboard while it is on, so record needs a
+        // combination the note rows can never claim.
+        if (character == 'r')
+        {
+            toggleRecording();
             return true;
         }
     }

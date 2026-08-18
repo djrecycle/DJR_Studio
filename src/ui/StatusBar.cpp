@@ -64,7 +64,7 @@ void StatusBar::paint(juce::Graphics& g)
     auto right = area;
     const auto hintText = message.isNotEmpty()
         ? message
-        : juce::String("Space play - R rec - Ctrl+S save");
+        : juce::String("Space play - Ctrl+R rec - Ctrl+S save");
 
     const auto percentText = juce::String(juce::roundToInt(cpuUsage * 100.0f)) + "%";
 

@@ -135,6 +135,30 @@ juce::Array<TypingKeyboard::KeyMapping> TypingKeyboard::getMappings() const
     return result;
 }
 
+bool TypingKeyboard::isKeyMapped(const juce::KeyPress& key) const
+{
+    if (! enabled)
+        return false;
+
+    const auto modifiers = key.getModifiers();
+
+    if (modifiers.isCtrlDown() || modifiers.isCommandDown() || modifiers.isAltDown())
+        return false;
+
+    // Two codes because JUCE reports punctuation and letters differently
+    // depending on the layout: getKeyCode() is the physical key, the text
+    // character is what it typed. The maps are written in uppercase.
+    const auto code = key.getKeyCode();
+    const auto character = static_cast<int>(
+        juce::CharacterFunctions::toUpperCase(key.getTextCharacter()));
+
+    for (const auto& mapping : mappings)
+        if (mapping.keyCode == code || mapping.keyCode == character)
+            return true;
+
+    return false;
+}
+
 bool TypingKeyboard::shouldListenToKeys()
 {
     // Typing a track name must not also play a tune.
@@ -143,6 +167,11 @@ bool TypingKeyboard::shouldListenToKeys()
             || focused->findParentComponentOfClass<juce::TextEditor>() != nullptr)
             return false;
 
+    // A popup menu or an alert window has the keyboard for its own letter
+    // navigation while it is up.
+    if (juce::Component::getCurrentlyModalComponent() != nullptr)
+        return false;
+
     // Another application has the keyboard; its keys are not ours to read.
     return juce::Process::isForegroundProcess();
 }
@@ -150,6 +179,23 @@ bool TypingKeyboard::shouldListenToKeys()
 void TypingKeyboard::timerCallback()
 {
     if (! enabled || ! shouldListenToKeys())
+    {
+        releaseAllNotes();
+        return;
+    }
+
+    // Polling reads the raw key state, which knows nothing about modifiers, so
+    // without this ctrl+S saved the project and played a C sharp on the way.
+    //
+    // The cached flags rather than getCurrentModifiersRealtime(): that one costs
+    // an X round trip, overwrites JUCE's global modifier state and marks it
+    // stale on every call, and does not even read alt - it only refreshes shift
+    // and ctrl from the pointer query. Sixty of those a second buys nothing the
+    // cache does not already have, since key events keep the cache current and
+    // shouldListenToKeys() has established the events are reaching us.
+    const auto modifiers = juce::ModifierKeys::getCurrentModifiers();
+
+    if (modifiers.isCtrlDown() || modifiers.isCommandDown() || modifiers.isAltDown())
     {
         releaseAllNotes();
         return;

@@ -63,6 +63,15 @@ public:
     */
     void releaseAllNotes();
 
+    /** True when this key is a note key right now, so the window knows not to
+        also fire a shortcut on it: in the FL map R is F, not record.
+
+        False whenever a modifier is held - ctrl+S is a save, not a C sharp -
+        and false whenever the typing keyboard is off, which hands every letter
+        back to the shortcuts.
+    */
+    bool isKeyMapped(const juce::KeyPress& key) const;
+
 private:
     struct KeyMapping
     {
