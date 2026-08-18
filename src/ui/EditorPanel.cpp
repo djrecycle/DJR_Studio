@@ -54,6 +54,16 @@ EditorPanel::EditorPanel(PianoRollModel& modelToUse, Transport& transport)
     keyboard.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, Theme::outline());
     keyboard.setColour(juce::MidiKeyboardComponent::keyDownOverlayColourId, Theme::accent());
     keyboard.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, Theme::accent().withAlpha(0.35f));
+
+    // MidiKeyboardComponent ships its own typing map (a w s e d f t g y h u j k
+    // o l p ;) and asks for focus when clicked, so once you had touched the
+    // strip with the mouse every letter played twice: once from TypingKeyboard's
+    // map and once from JUCE's, on a different note. W gave D and C sharp
+    // together, and A played a C the FL map does not even have. TypingKeyboard
+    // polls regardless of focus, so this one has nothing left to do.
+    keyboard.clearKeyMappings();
+    keyboard.setWantsKeyboardFocus(false);
+
     keyboardState.addListener(&keyboardBridge);
     addAndMakeVisible(keyboard);
 
