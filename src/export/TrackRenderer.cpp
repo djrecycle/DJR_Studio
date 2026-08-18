@@ -11,19 +11,19 @@ bool TrackRenderer::render(Track& track,
 {
     if (options.sampleRate <= 0.0 || options.blockSize <= 0 || options.tempoBpm <= 0.0)
     {
-        errorOut = "Pengaturan render tidak valid.";
+        errorOut = TRANS("The render settings are not valid.");
         return false;
     }
 
     if (options.lengthBeats <= 0.0)
     {
-        errorOut = "Panjang render nol - tidak ada yang bisa dirender.";
+        errorOut = TRANS("Render length is zero - there is nothing to render.");
         return false;
     }
 
     if (! outputFile.getParentDirectory().createDirectory())
     {
-        errorOut = "Folder tujuan tidak bisa dibuat: " + outputFile.getParentDirectory().getFullPathName();
+        errorOut = TRANS("The destination folder could not be created: ") + outputFile.getParentDirectory().getFullPathName();
         return false;
     }
 
@@ -34,7 +34,7 @@ bool TrackRenderer::render(Track& track,
 
     if (stream == nullptr)
     {
-        errorOut = "File tidak bisa ditulis: " + outputFile.getFullPathName();
+        errorOut = TRANS("The file could not be written: ") + outputFile.getFullPathName();
         return false;
     }
 
@@ -50,7 +50,7 @@ bool TrackRenderer::render(Track& track,
 
     if (writer == nullptr)
     {
-        errorOut = "Writer wav gagal dibuat.";
+        errorOut = TRANS("The wav writer could not be created.");
         return false;
     }
 
@@ -102,7 +102,7 @@ bool TrackRenderer::render(Track& track,
 
         if (! renderBlock(samplesThisBlock, true))
         {
-            errorOut = "Penulisan file gagal di tengah render.";
+            errorOut = TRANS("Writing the file failed part way through the render.");
             return false;
         }
 

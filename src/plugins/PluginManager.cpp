@@ -10,9 +10,9 @@ PluginManager::PluginManager()
     formatManager.addDefaultFormats();
 }
 
-void PluginManager::scanVst3Async()
+void PluginManager::scanPluginsAsync()
 {
-    scanner.startVst3Scan([this] (juce::Array<juce::PluginDescription> results)
+    scanner.startScan([this] (juce::Array<juce::PluginDescription> results)
     {
         {
             const juce::ScopedLock scoped(lock);

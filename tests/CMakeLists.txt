@@ -20,6 +20,7 @@ target_compile_definitions(djr_studio_engine_tests
         JUCE_STRICT_REFCOUNTEDPOINTER=1
         JUCE_PLUGINHOST_VST=0
         JUCE_PLUGINHOST_VST3=1
+        JUCE_PLUGINHOST_LV2=1
         JUCE_PLUGINHOST_AU=0
         JUCE_ALSA=1
         JUCE_JACK=0

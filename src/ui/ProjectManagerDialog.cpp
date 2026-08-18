@@ -20,7 +20,7 @@ namespace
     {
         const auto age = juce::Time::getCurrentTime() - time;
 
-        if (age.inMinutes() < 1.0)  return "baru saja";
+        if (age.inMinutes() < 1.0)  return TRANS("just now");
         if (age.inMinutes() < 60.0) return juce::String(static_cast<int>(age.inMinutes())) + " menit lalu";
         if (age.inHours() < 24.0)   return juce::String(static_cast<int>(age.inHours())) + " jam lalu";
         if (age.inDays() < 30.0)    return juce::String(static_cast<int>(age.inDays())) + " hari lalu";
@@ -90,7 +90,7 @@ void ProjectManagerDialog::paint(juce::Graphics& g)
     {
         g.setColour(Theme::faintText());
         g.setFont(Theme::ui(13.0f));
-        g.drawText(selectedTab == 1 ? "Template belum tersedia." : "Belum ada backup otomatis.",
+        g.drawText(selectedTab == 1 ? TRANS("No templates yet.") : TRANS("No automatic backups yet."),
                    card.withTrimmedTop(dialogHeaderHeight + tabRowHeight + 30),
                    juce::Justification::centredTop,
                    false);
@@ -101,7 +101,7 @@ void ProjectManagerDialog::paint(juce::Graphics& g)
     {
         g.setColour(Theme::faintText());
         g.setFont(Theme::ui(13.0f));
-        g.drawText("Belum ada project di " + FileUtils::getDefaultProjectRoot().getFullPathName(),
+        g.drawText(TRANS("No projects in ") + FileUtils::getDefaultProjectRoot().getFullPathName(),
                    card.withTrimmedTop(dialogHeaderHeight + tabRowHeight + 30),
                    juce::Justification::centredTop,
                    true);

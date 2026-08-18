@@ -167,6 +167,8 @@ public:
     juce::AudioPluginInstance* getPlugin(int index) noexcept;
     const juce::AudioPluginInstance* getPlugin(int index) const noexcept;
     juce::StringArray getPluginNames() const;
+    /** The format of each insert, in the same order as getPluginNames. */
+    juce::StringArray getPluginFormatNames() const;
 
     virtual void prepare(double sampleRate, int blockSize);
     /** `preFaderOut`, when given, receives the signal as it stands after the

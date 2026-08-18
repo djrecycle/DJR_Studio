@@ -258,7 +258,7 @@ void MixerChannelStrip::showRoutingMenu()
         if (includeMaster)
             menu.addItem(baseId, "Master", true, current == Track::masterDestination);
         else
-            menu.addItem(baseId, "Mati", true, current < 0);
+            menu.addItem(baseId, TRANS("Off"), true, current < 0);
 
         for (int i = 0; i < mixer->getNumTracks(); ++i)
         {
@@ -357,8 +357,8 @@ void MixerChannelStrip::showAutomationMenu(bool forPan)
 
     juce::PopupMenu menu;
     menu.addSectionHeader(track->getName() + " - " + target.label);
-    menu.addItem(1, "Buat automation clip", existing < 0);
-    menu.addItem(2, "Hapus automation", existing >= 0);
+    menu.addItem(1, TRANS("Create automation clip"), existing < 0);
+    menu.addItem(2, TRANS("Remove automation"), existing >= 0);
 
     menu.showMenuAsync(juce::PopupMenu::Options()
                            .withMousePosition()

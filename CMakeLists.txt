@@ -107,6 +107,8 @@ set(DJR_STUDIO_SOURCES
     src/main.cpp
     src/app/DJRStudioApplication.cpp
     src/app/MainWindow.cpp
+    src/app/Localisation.cpp
+    src/app/TypingKeyboard.cpp
     src/audio/AudioEngine.cpp
     src/plugins/PluginManager.cpp
     src/plugins/PluginScanner.cpp
@@ -163,6 +165,11 @@ target_compile_definitions(djr_studio
         JUCE_STRICT_REFCOUNTEDPOINTER=1
         JUCE_PLUGINHOST_VST=0
         JUCE_PLUGINHOST_VST3=1
+        # The Linux plugin library is overwhelmingly LV2 - on a typical Ubuntu
+        # Studio install it is hundreds of plugins against a handful of VST3.
+        # VST2 stays off: hosting it needs the Steinberg SDK, which is no longer
+        # distributable, and Carla loaded as an LV2 covers that case anyway.
+        JUCE_PLUGINHOST_LV2=1
         JUCE_PLUGINHOST_AU=0
         JUCE_ALSA=1
         JUCE_JACK=1

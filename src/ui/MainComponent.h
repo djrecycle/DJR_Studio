@@ -17,6 +17,8 @@
 
 #include "app/EditHistory.h"
 #include "app/SessionState.h"
+#include "app/Localisation.h"
+#include "app/TypingKeyboard.h"
 #include "audio/AudioEngine.h"
 #include "audio/AudioTrack.h"
 #include "audio/MidiTrack.h"
@@ -69,13 +71,18 @@ private:
     void handleCommand(AppCommand command);
     void setDisplayScalePercent(int percent);
     void applyThemeVariant(ThemeVariant variant);
+    /** Installs a language and re-reads every caption that is not redrawn by a
+        plain repaint - button texts and tooltips are set once, so they have to
+        be asked for again.
+    */
+    void applyLanguage(Localisation::Language language);
     void toggleBrowserCollapsed();
     void toggleBrowserMinimized();
     void cycleBrowserDock();
     void toggleBrowserVisible();
     void refreshBrowserLayoutState();
     void refreshMenuState();
-    void syncBrowserVst3Library();
+    void syncBrowserPluginLibrary();
     void showDialog(juce::Component* dialog);
     void closeDialogs();
     int getBrowserPrimarySize() const noexcept;
@@ -172,6 +179,10 @@ private:
     /** Declared after the engine: it holds a reference to the engine's mixer. */
     EditHistory editHistory { audioEngine.getMixer(), &audioEngine.getTransport(), &sessionState };
     MidiEngine midiEngine;
+    /** The computer keyboard as a MIDI controller, for when there is no
+        hardware one plugged in.
+    */
+    TypingKeyboard typingKeyboard;
     PianoRollModel pianoRollModel;
     PluginManager pluginManager;
     ProjectManager projectManager;

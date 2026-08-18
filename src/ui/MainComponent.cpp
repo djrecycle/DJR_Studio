@@ -86,7 +86,14 @@ MainComponent::MainComponent()
             return;
         }
 
-        setStatusMessage("Preview " + file.getFileName() + " belum didukung.");
+        setStatusMessage("Preview " + file.getFileName() + TRANS(" is not supported yet."));
+    });
+
+    // Double clicking a plugin in the browser loads it onto the selected track,
+    // the same way double clicking a sample drops it on one.
+    browserPanel.setPluginActivatedCallback([this] (int pluginIndex)
+    {
+        loadSelectedPluginIntoTrack(pluginIndex, sessionState.getSelectedTrack());
     });
 
     transportBar.setSnapChangeCallback([this] (SnapUnit unit)
@@ -100,8 +107,8 @@ MainComponent::MainComponent()
     {
         sessionState.setSongMode(! patternMode);
         setStatusMessage(patternMode
-                             ? "Pattern mode: pattern aktif diulang."
-                             : "Song mode: memainkan penempatan pattern di playlist.");
+                             ? TRANS("Pattern mode: the active pattern loops.")
+                             : TRANS("Song mode: plays the pattern placements on the playlist."));
     });
     transportBar.setRecordToggleCallback([this] { toggleRecording(); });
     transportBar.setTimeSignatureChangeCallback([this] (int numerator, int denominator)
@@ -185,12 +192,12 @@ MainComponent::MainComponent()
     });
     editorPanel.setPatternLengthChangedCallback([this] (double beats)
     {
-        editHistory.pushSnapshot("Panjang pattern");
+        editHistory.pushSnapshot(TRANS("Pattern length"));
         sessionState.setPatternLengthBeats(sessionState.getActivePattern(), beats);
         refreshPatternLength();
         setStatusMessage(beats <= 0.0
-                             ? "Panjang pattern mengikuti isinya."
-                             : "Panjang pattern dikunci di "
+                             ? TRANS("Pattern length follows its contents.")
+                             : TRANS("Pattern length locked to ")
                                    + juce::String(beats / audioEngine.getTransport().getBeatsPerBar(), 0)
                                    + " bar.");
     });
@@ -198,6 +205,20 @@ MainComponent::MainComponent()
     {
         midiEngine.postLiveMessage(message);
     });
+
+    // Driving the on-screen keyboard's state rather than the engine directly:
+    // the keys light up and the live MIDI path is the same one the mouse and a
+    // hardware controller already use, so there is only ever one route in.
+    typingKeyboard.onNoteOn = [this] (int note, float velocity)
+    {
+        editorPanel.getKeyboardState().noteOn(1, note, velocity);
+        editorPanel.ensureKeyVisible(note);
+    };
+
+    typingKeyboard.onNoteOff = [this] (int note)
+    {
+        editorPanel.getKeyboardState().noteOff(1, note, 0.0f);
+    };
 
     pluginBrowserView.setLoadPluginCallback([this] (int pluginIndex, int trackIndex)
     {
@@ -227,6 +248,33 @@ MainComponent::MainComponent()
         openProjectFile(file);
     });
 
+    preferencesDialog.setTypingKeyboardEnabledCallback([this] (bool enabled)
+    {
+        typingKeyboard.setEnabled(enabled);
+        setStatusMessage(enabled ? TRANS("Computer keyboard is now a MIDI controller.")
+                                 : TRANS("The computer keyboard no longer plays notes."));
+    });
+
+    preferencesDialog.setTypingKeymapCallback([this] (int keymapIndex)
+    {
+        const auto keymap = keymapIndex == 1 ? TypingKeyboard::Keymap::simple
+                                             : TypingKeyboard::Keymap::flStudio;
+        typingKeyboard.setKeymap(keymap);
+        setStatusMessage("Keymap: " + TypingKeyboard::getKeymapName(keymap));
+    });
+
+    preferencesDialog.setTypingOctaveCallback([this] (int octave)
+    {
+        typingKeyboard.setBaseOctave(octave);
+        setStatusMessage(TRANS("Keyboard octave: ") + juce::String(typingKeyboard.getBaseOctave()));
+    });
+
+    preferencesDialog.setLanguageChangedCallback([this] (int index)
+    {
+        applyLanguage(index == 1 ? Localisation::Language::indonesian
+                                 : Localisation::Language::english);
+    });
+
     preferencesDialog.setCloseCallback([this] { closeDialogs(); });
     preferencesDialog.setThemeChangedCallback([this] (ThemeVariant variant) { applyThemeVariant(variant); });
     preferencesDialog.setScaleChangedCallback([this] (int percent) { setDisplayScalePercent(percent); });
@@ -244,6 +292,10 @@ MainComponent::MainComponent()
         autoOpenPluginEditor = enabled;
     });
     preferencesDialog.setToggleStates(true, arrangementView.isFollowingPlayhead(), autoOpenPluginEditor);
+    preferencesDialog.setLanguageIndex(Localisation::getLanguage() == Localisation::Language::indonesian ? 1 : 0);
+    preferencesDialog.setTypingKeyboardState(typingKeyboard.isEnabled(),
+                                             typingKeyboard.getKeymap() == TypingKeyboard::Keymap::simple ? 1 : 0,
+                                             typingKeyboard.getBaseOctave());
 
     mixerView.setTrackSelectedCallback([this] (int trackIndex) { selectTrack(trackIndex); });
 
@@ -271,7 +323,7 @@ MainComponent::MainComponent()
     startTimerHz(12);
 
     refreshBrowserLayoutState();
-    syncBrowserVst3Library();
+    syncBrowserPluginLibrary();
     selectTrack(0);
     refreshMenuState();
     browserPanel.refreshContent();
@@ -422,7 +474,7 @@ void MainComponent::handleCommand(AppCommand command)
 
         case AppCommand::scanPlugins:
             setStatusMessage("Scanning folder VST3...");
-            pluginManager.scanVst3Async();
+            pluginManager.scanPluginsAsync();
             browserPanel.setScanProgress(true, 0, 0, "");
             break;
 
@@ -451,7 +503,7 @@ void MainComponent::handleCommand(AppCommand command)
 
         case AppCommand::resetPanelLayout:
             panelHost.resetLayout();
-            setStatusMessage("Layout panel dikembalikan ke default.");
+            setStatusMessage(TRANS("Panel layout reset to the default."));
             break;
 
         case AppCommand::toggleBrowser:        toggleBrowserVisible(); break;
@@ -478,6 +530,20 @@ void MainComponent::setDisplayScalePercent(int percent)
     displayScale = static_cast<float>(clamped) / 100.0f;
     preferencesDialog.setScalePercent(clamped);
     resized();
+    repaint();
+}
+
+void MainComponent::applyLanguage(Localisation::Language language)
+{
+    Localisation::setLanguage(language);
+    Localisation::saveChoice(language);
+
+    // Everything drawn in paint() picks the new language up on the next
+    // repaint, which is the great majority of the interface. A handful of
+    // captions were handed to a control once at construction - toolbar tooltips
+    // and a few button labels - and those only change on the next start.
+    setStatusMessage(Localisation::getLanguageName(language)
+                         + " - " + TRANS("some labels change after a restart"));
     repaint();
 }
 
@@ -572,10 +638,10 @@ void MainComponent::refreshMenuState()
     transportBar.setUndoState(state.canUndo, state.canRedo, state.undoName, state.redoName);
 }
 
-void MainComponent::syncBrowserVst3Library()
+void MainComponent::syncBrowserPluginLibrary()
 {
     const auto plugins = pluginManager.getKnownPlugins();
-    browserPanel.setVst3Plugins(plugins);
+    browserPanel.setPluginList(plugins);
     browserPanel.setScanProgress(pluginManager.isScanning(), plugins.size(), plugins.size(), "");
     statusBar.setPluginCount(plugins.size());
 }
@@ -625,6 +691,21 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
     if (key.getTextCharacter() == 'r' || key.getTextCharacter() == 'R')
     {
         toggleRecording();
+        return true;
+    }
+
+    // Octave shift for the typing keyboard. Ctrl is needed rather than a bare
+    // key because the FL layout leaves almost nothing on the letter rows free -
+    // Z and X are notes there, which is where most DAWs put this.
+    if ((key.getModifiers().isCtrlDown() || key.getModifiers().isCommandDown())
+        && (key.isKeyCode(juce::KeyPress::upKey) || key.isKeyCode(juce::KeyPress::downKey)))
+    {
+        const auto shift = key.isKeyCode(juce::KeyPress::upKey) ? 1 : -1;
+        typingKeyboard.setBaseOctave(typingKeyboard.getBaseOctave() + shift);
+        preferencesDialog.setTypingKeyboardState(typingKeyboard.isEnabled(),
+                                                 typingKeyboard.getKeymap() == TypingKeyboard::Keymap::simple ? 1 : 0,
+                                                 typingKeyboard.getBaseOctave());
+        setStatusMessage(TRANS("Keyboard octave: ") + juce::String(typingKeyboard.getBaseOctave()));
         return true;
     }
 
@@ -695,7 +776,7 @@ void MainComponent::toggleMetronome()
     metronome.setEnabled(turningOn);
     transportBar.setMetronomeActive(turningOn);
     refreshMenuState();
-    setStatusMessage(turningOn ? "Metronome nyala." : "Metronome mati.");
+    setStatusMessage(turningOn ? "Metronome nyala." : TRANS("Metronome off."));
 }
 
 void MainComponent::setCountInBars(int bars)
@@ -703,8 +784,8 @@ void MainComponent::setCountInBars(int bars)
     countInBars = juce::jlimit(0, 8, bars);
     refreshMenuState();
     setStatusMessage(countInBars == 0
-                         ? "Count-in mati."
-                         : "Count-in " + juce::String(countInBars) + " bar sebelum record.");
+                         ? TRANS("Count-in off.")
+                         : "Count-in " + juce::String(countInBars) + TRANS(" bars before recording."));
 }
 
 void MainComponent::toggleRecording()
@@ -738,12 +819,12 @@ void MainComponent::toggleRecording()
             const auto trackIndex = findAudioTrackForRecording();
 
             if (trackIndex < 0 || ! addAudioClipToTrack(trackIndex, file, recordingStartBeat))
-                setStatusMessage("Rekaman disimpan: " + file.getFileName()
+                setStatusMessage(TRANS("Recording saved: ") + file.getFileName()
                                      + " (" + juce::File::descriptionOfSizeInBytes(file.getSize()) + ")");
         }
         else
         {
-            setStatusMessage("Recording selesai.");
+            setStatusMessage(TRANS("Recording finished."));
         }
 
         markDirty();
@@ -788,13 +869,13 @@ void MainComponent::beginRecording()
         const auto file = folder.getChildFile("take-" + stamp + ".wav");
 
         if (audioEngine.startAudioRecording(file))
-            setStatusMessage("Recording ke " + file.getFileName() + " - MIDI juga direkam.");
+            setStatusMessage(TRANS("Recording to ") + file.getFileName() + TRANS(" - MIDI was recorded too."));
         else
-            setStatusMessage("Audio input tidak bisa direkam; MIDI tetap direkam.");
+            setStatusMessage(TRANS("Audio input could not be recorded; MIDI still was."));
     }
     else
     {
-        setStatusMessage("Tidak ada input audio - merekam MIDI saja.");
+        setStatusMessage(TRANS("No audio input - recording MIDI only."));
     }
 }
 
@@ -804,7 +885,7 @@ bool MainComponent::addAudioClipToTrack(int trackIndex, const juce::File& file, 
 
     if (audioTrack == nullptr)
     {
-        setStatusMessage("Pilih track audio dulu - " + file.getFileName() + " tidak bisa ditaruh di track MIDI.");
+        setStatusMessage(TRANS("Pick an audio track first - ") + file.getFileName() + TRANS(" cannot be placed on a MIDI track."));
         return false;
     }
 
@@ -865,7 +946,7 @@ void MainComponent::collectRecordedNotes()
     notes.addArray(captured);
     pianoRollModel.setNotes(notes);
 
-    setStatusMessage(juce::String(captured.size()) + " note MIDI direkam.");
+    setStatusMessage(juce::String(captured.size()) + TRANS(" MIDI notes recorded."));
 }
 
 void MainComponent::newProject()
@@ -885,7 +966,7 @@ void MainComponent::newProject()
     pianoRollModel.notifyClipChanged();
     projectDirty = false;
     refreshMenuState();
-    setStatusMessage("Project baru dibuat.");
+    setStatusMessage(TRANS("New project created."));
 }
 
 void MainComponent::saveProject(bool forceChooser)
@@ -901,7 +982,7 @@ void MainComponent::saveProject(bool forceChooser)
         {
             projectDirty = false;
             refreshMenuState();
-            setStatusMessage("Tersimpan: " + currentFile.getFileName());
+            setStatusMessage(TRANS("Saved: ") + currentFile.getFileName());
         }
         else
         {
@@ -938,7 +1019,7 @@ void MainComponent::saveProject(bool forceChooser)
 
             projectDirty = false;
             refreshMenuState();
-            setStatusMessage("Tersimpan: " + file.getFileName());
+            setStatusMessage(TRANS("Saved: ") + file.getFileName());
         });
 }
 
@@ -968,7 +1049,7 @@ void MainComponent::openProjectFile(const juce::File& file)
     }
 
     projectDirty = false;
-    setStatusMessage("Project dibuka: " + file.getFileName());
+    setStatusMessage(TRANS("Project opened: ") + file.getFileName());
 }
 
 double MainComponent::getSongLengthBeats()
@@ -1007,7 +1088,7 @@ void MainComponent::exportAudio()
         ? start.getSiblingFile(start.getFileNameWithoutExtension() + ".wav")
         : FileUtils::getDefaultProjectRoot().getChildFile("Export.wav");
 
-    fileChooser = std::make_unique<juce::FileChooser>("Export audio ke WAV", start, "*.wav");
+    fileChooser = std::make_unique<juce::FileChooser>(TRANS("Export audio to WAV"), start, "*.wav");
 
     fileChooser->launchAsync(juce::FileBrowserComponent::saveMode
                            | juce::FileBrowserComponent::canSelectFiles
@@ -1045,12 +1126,12 @@ void MainComponent::exportAudio()
 
             if (! succeeded)
             {
-                showError("Export gagal", error);
+                showError(TRANS("Export failed"), error);
                 return;
             }
 
             browserPanel.refreshContent();
-            setStatusMessage("Export selesai: " + file.getFileName()
+            setStatusMessage(TRANS("Export finished: ") + file.getFileName()
                                  + " (" + juce::File::descriptionOfSizeInBytes(file.getSize()) + ")");
         });
 }
@@ -1092,7 +1173,7 @@ juce::File MainComponent::renderTrackToFile(int trackIndex, const juce::String& 
 
     if (! succeeded)
     {
-        showError("Render track gagal", error);
+        showError(TRANS("Track render failed"), error);
         return {};
     }
 
@@ -1130,7 +1211,7 @@ void MainComponent::freezeTrack(int trackIndex)
 
     if (clip == nullptr)
     {
-        showError("Freeze gagal", "Hasil render tidak bisa dibaca kembali: " + error);
+        showError(TRANS("Freeze failed"), TRANS("The render could not be read back: ") + error);
         return;
     }
 
@@ -1143,7 +1224,7 @@ void MainComponent::freezeTrack(int trackIndex)
     mixerView.repaint();
     arrangementView.repaint();
     markDirty();
-    setStatusMessage("Freeze selesai: " + track->getName()
+    setStatusMessage(TRANS("Freeze finished: ") + track->getName()
                          + " (" + juce::File::descriptionOfSizeInBytes(file.getSize()) + ")");
 }
 
@@ -1165,13 +1246,13 @@ void MainComponent::bounceTrackToAudio(int trackIndex)
     // A bounce is a new audio track rather than a replacement: the source is
     // left exactly as it was, so the render can be thrown away without having
     // destroyed anything.
-    editHistory.pushSnapshot("Bounce ke audio");
+    editHistory.pushSnapshot(TRANS("Bounce to audio"));
 
     auto* bounced = audioEngine.getMixer().addTrack(std::make_unique<AudioTrack>(sourceName + " (bounce)"));
 
     if (bounced == nullptr)
     {
-        showError("Bounce gagal", "Mixer sudah penuh - track baru tidak bisa ditambahkan.");
+        showError(TRANS("Bounce failed"), TRANS("The mixer is full - no more tracks can be added."));
         return;
     }
 
@@ -1184,14 +1265,14 @@ void MainComponent::bounceTrackToAudio(int trackIndex)
 
     if (! addAudioClipToTrack(bouncedIndex, file, 0.0))
     {
-        showError("Bounce gagal", "Hasil render tidak bisa ditaruh di track baru.");
+        showError(TRANS("Bounce failed"), TRANS("The render could not be placed on the new track."));
         return;
     }
 
     browserPanel.refreshContent();
     selectTrack(bouncedIndex);
     markDirty();
-    setStatusMessage("Bounce selesai: " + file.getFileName()
+    setStatusMessage(TRANS("Bounce finished: ") + file.getFileName()
                          + " (" + juce::File::descriptionOfSizeInBytes(file.getSize()) + ")");
 }
 
@@ -1252,7 +1333,7 @@ void MainComponent::changeListenerCallback(juce::ChangeBroadcaster* source)
 
     if (source == &pluginManager)
     {
-        syncBrowserVst3Library();
+        syncBrowserPluginLibrary();
         insertChainPanel.refresh();
     }
 }
@@ -1264,7 +1345,7 @@ void MainComponent::loadSelectedPluginIntoTrack(int pluginIndex, int trackIndex)
 
     if (! juce::isPositiveAndBelow(pluginIndex, plugins.size()) || track == nullptr)
     {
-        setStatusMessage("Pilih dulu plugin di panel PLUGINS.");
+        setStatusMessage(TRANS("Pick a plugin in the PLUGINS panel first."));
         return;
     }
 
@@ -1278,7 +1359,7 @@ void MainComponent::loadSelectedPluginIntoTrack(int pluginIndex, int trackIndex)
         {
             if (instance == nullptr)
             {
-                setStatusMessage(error.isNotEmpty() ? error : "Plugin gagal dibuat.");
+                setStatusMessage(error.isNotEmpty() ? error : TRANS("The plugin could not be created."));
                 return;
             }
 
@@ -1294,7 +1375,7 @@ void MainComponent::loadSelectedPluginIntoTrack(int pluginIndex, int trackIndex)
                 insertChainPanel.refresh();
                 pluginBrowserView.refreshTrackList();
                 setStatusMessage(description.name
-                                     + (description.isInstrument ? " jadi instrument di " : " jadi insert di ")
+                                     + (description.isInstrument ? TRANS(" loaded as the instrument on ") : TRANS(" loaded as an insert on "))
                                      + targetTrack->getName() + ".");
 
                 if (autoOpenPluginEditor)
@@ -1327,14 +1408,14 @@ void MainComponent::openTrackPlugin(int trackIndex, PluginSlot slot, int insertI
 
         if (slot == PluginSlot::instrument)
         {
-            setStatusMessage("Track ini belum punya instrument.");
+            setStatusMessage(TRANS("This track has no instrument yet."));
             return;
         }
     }
 
     if (track->getPluginCount() == 0)
     {
-        setStatusMessage("Track ini belum punya plugin yang bisa dibuka.");
+        setStatusMessage(TRANS("This track has no plugin to open."));
         return;
     }
 
@@ -1447,7 +1528,7 @@ void MainComponent::undoEdit()
 {
     if (! editHistory.canUndo())
     {
-        setStatusMessage("Tidak ada yang bisa di-undo.");
+        setStatusMessage(TRANS("Nothing to undo."));
         return;
     }
 
@@ -1460,7 +1541,7 @@ void MainComponent::redoEdit()
 {
     if (! editHistory.canRedo())
     {
-        setStatusMessage("Tidak ada yang bisa di-redo.");
+        setStatusMessage(TRANS("Nothing to redo."));
         return;
     }
 
@@ -1476,13 +1557,13 @@ void MainComponent::renameTrack(int trackIndex)
     if (track == nullptr)
         return;
 
-    auto* window = new juce::AlertWindow("Ganti nama track",
-                                         "Nama untuk track " + juce::String(trackIndex + 1) + ":",
+    auto* window = new juce::AlertWindow(TRANS("Rename track"),
+                                         TRANS("Name for track ") + juce::String(trackIndex + 1) + ":",
                                          juce::AlertWindow::NoIcon);
 
     window->addTextEditor("name", track->getName(), juce::String());
-    window->addButton("Simpan", 1, juce::KeyPress(juce::KeyPress::returnKey));
-    window->addButton("Batal", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    window->addButton(TRANS("Save"), 1, juce::KeyPress(juce::KeyPress::returnKey));
+    window->addButton(TRANS("Cancel"), 0, juce::KeyPress(juce::KeyPress::escapeKey));
 
     window->enterModalState(true,
         juce::ModalCallbackFunction::create([this, trackIndex, window] (int result)
@@ -1497,7 +1578,7 @@ void MainComponent::renameTrack(int trackIndex)
             if (renamed == nullptr)
                 return;
 
-            editHistory.pushSnapshot("Ganti nama track");
+            editHistory.pushSnapshot(TRANS("Rename track"));
             renamed->setName(owned->getTextEditorContents("name"));
 
             // The name is shown in four places at once, so all of them are
@@ -1507,7 +1588,7 @@ void MainComponent::renameTrack(int trackIndex)
             mixerView.setSelectedTrack(sessionState.getSelectedTrack());
             insertChainPanel.refresh();
             markDirty();
-            setStatusMessage("Track: " + renamed->getName());
+            setStatusMessage(TRANS("Track: ") + renamed->getName());
         }),
         false);
 }
@@ -1517,13 +1598,13 @@ void MainComponent::renamePattern(int patternIndex)
     if (! juce::isPositiveAndBelow(patternIndex, SessionState::maxPatterns))
         return;
 
-    auto* window = new juce::AlertWindow("Ganti nama pattern",
-                                         "Nama untuk PAT " + juce::String(patternIndex + 1) + ":",
+    auto* window = new juce::AlertWindow(TRANS("Rename pattern"),
+                                         TRANS("Name for PAT ") + juce::String(patternIndex + 1) + ":",
                                          juce::AlertWindow::NoIcon);
 
     window->addTextEditor("name", sessionState.getCustomPatternName(patternIndex), juce::String());
-    window->addButton("Simpan", 1, juce::KeyPress(juce::KeyPress::returnKey));
-    window->addButton("Batal", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    window->addButton(TRANS("Save"), 1, juce::KeyPress(juce::KeyPress::returnKey));
+    window->addButton(TRANS("Cancel"), 0, juce::KeyPress(juce::KeyPress::escapeKey));
 
     window->enterModalState(true,
         juce::ModalCallbackFunction::create([this, patternIndex, window] (int result)
@@ -1534,7 +1615,7 @@ void MainComponent::renamePattern(int patternIndex)
                 return;
 
             // An empty name is how you go back to the "PAT n" default.
-            editHistory.pushSnapshot("Ganti nama pattern");
+            editHistory.pushSnapshot(TRANS("Rename pattern"));
             sessionState.setPatternName(patternIndex, owned->getTextEditorContents("name"));
             refreshPatternName();
             arrangementView.repaint();
@@ -1598,10 +1679,10 @@ void MainComponent::applySelectionToPanels()
         // simply wrong once buses existed.
         const auto note = track->getKind() == TrackKind::midi ? juce::String()
                         : track->getKind() == TrackKind::bus
-                              ? juce::String(" (bus - menerima kiriman track lain)")
-                              : juce::String(" (track audio - editor MIDI kosong)");
+                              ? juce::String(TRANS(" (bus - receives sends from other tracks)"))
+                              : juce::String(TRANS(" (audio track - the MIDI editor is empty)"));
 
-        setStatusMessage("Track aktif: " + track->getName() + note);
+        setStatusMessage(TRANS("Active track: ") + track->getName() + note);
     }
 }
 
@@ -1745,7 +1826,7 @@ void MainComponent::restorePluginsForTrack(int trackIndex, const juce::Array<juc
 
         if (auto xml = juce::parseXML(xmlText); xml == nullptr || ! description.loadFromXml(*xml))
         {
-            setStatusMessage("Plugin " + name + " tidak bisa dipulihkan: deskripsi rusak.");
+            setStatusMessage("Plugin " + name + TRANS(" could not be restored: its description is damaged."));
             continue;
         }
 
@@ -1757,7 +1838,7 @@ void MainComponent::restorePluginsForTrack(int trackIndex, const juce::Array<juc
             {
                 if (instance == nullptr)
                 {
-                    setStatusMessage("Plugin " + name + " tidak ditemukan lagi"
+                    setStatusMessage("Plugin " + name + TRANS(" could not be found")
                                          + (error.isNotEmpty() ? ": " + error : "."));
                     return;
                 }
@@ -1878,7 +1959,7 @@ void MainComponent::restoreFreezeForTrack(int trackIndex, const juce::String& fr
     {
         track->setFrozenAudio(nullptr);
         setStatusMessage("Freeze " + track->getName() + " hilang: " + file.getFileName()
-                             + " - track diproses langsung.");
+                             + TRANS(" - the track is processed live again."));
         return;
     }
 
@@ -1888,7 +1969,7 @@ void MainComponent::restoreFreezeForTrack(int trackIndex, const juce::String& fr
     if (clip == nullptr)
     {
         track->setFrozenAudio(nullptr);
-        setStatusMessage("Freeze " + track->getName() + " tidak terbaca: " + error);
+        setStatusMessage("Freeze " + track->getName() + TRANS(" could not be read: ") + error);
         return;
     }
 
@@ -2020,7 +2101,7 @@ void MainComponent::applyProjectToSession()
     mixerView.repaint();
     arrangementView.repaint();
     insertChainPanel.refresh();
-    setStatusMessage("Project dibuka: pattern, clip audio, plugin dan layout panel dipulihkan.");
+    setStatusMessage(TRANS("Project opened: patterns, audio clips, plugins and the panel layout were restored."));
 }
 
 Track* MainComponent::getTrack(int index) noexcept

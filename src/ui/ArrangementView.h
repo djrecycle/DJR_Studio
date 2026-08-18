@@ -357,8 +357,8 @@ private:
     void pushUndo(const juce::String& actionName);
 
     juce::OwnedArray<IconChipButton> toolButtons;
-    IconChipButton snapButton { "Snap ke grid", Icon::magnet };
-    IconChipButton addTrackButton { "Tambah track", Icon::plus };
+    IconChipButton snapButton { TRANS("Snap to grid"), Icon::magnet };
+    IconChipButton addTrackButton { TRANS("Add track"), Icon::plus };
     IconChipButton followButton { "Ikuti playhead", Icon::chevronRight };
     IconChipButton zoomFitButton { "Zoom to fit", Icon::grid };
     juce::Slider zoomSlider;

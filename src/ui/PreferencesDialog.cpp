@@ -14,23 +14,26 @@ namespace
     constexpr int contentPadding = 18;
     constexpr int themeCardWidth = 150;
     constexpr int themeCardHeight = 74;
+    /** Room under the MIDI device list for the typing keyboard settings. */
+    constexpr int typingSectionHeight = 104;
     constexpr int toggleRowHeight = 38;
 
     const char* const toggleLabels[] = {
-        "Tampilkan tooltip di semua kontrol",
-        "Auto-scroll playlist saat playback",
-        "Buka plugin editor otomatis setelah load"
+        "Show tooltips on every control",
+        "Auto-scroll the playlist during playback",
+        "Open the plugin editor automatically after loading"
     };
 
     const char* const shortcutRows[] = {
         "Space", "Play / pause",
         "R", "Arm / disarm recording",
-        "Ctrl + S", "Simpan project",
-        "Ctrl + O", "Buka project",
-        "Ctrl + N", "Project baru",
+        "Ctrl + S", "Save project",
+        "Ctrl + O", "Open project",
+        "Ctrl + N", "New project",
         "Ctrl + scroll", "Zoom playlist / piano roll",
-        "Shift + scroll", "Geser horizontal",
-        "Klik kanan (note)", "Hapus note"
+        "Shift + scroll", "Scroll horizontally",
+        "Right click (note)", "Delete note",
+        "Ctrl + Up / Down", "Raise / lower the keyboard octave"
     };
 }
 
@@ -62,6 +65,37 @@ PreferencesDialog::PreferencesDialog(juce::AudioDeviceManager& deviceManagerToUs
     tooltipsSwitch.setToggleState(true, juce::dontSendNotification);
     autoScrollSwitch.setToggleState(true, juce::dontSendNotification);
 
+    typingKeyboardSwitch.addListener(this);
+    addChildComponent(typingKeyboardSwitch);
+    typingKeyboardSwitch.setToggleState(true, juce::dontSendNotification);
+
+    for (auto* chip : { &flKeymapChip, &simpleKeymapChip })
+    {
+        chip->setClickingTogglesState(true);
+        chip->setRadioGroupId(0xC22);
+        chip->addListener(this);
+        addChildComponent(chip);
+    }
+
+    flKeymapChip.setToggleState(true, juce::dontSendNotification);
+
+    for (auto* chip : { &englishChip, &indonesianChip })
+    {
+        chip->setClickingTogglesState(true);
+        chip->setRadioGroupId(0xC23);
+        chip->addListener(this);
+        addChildComponent(chip);
+    }
+
+    englishChip.setToggleState(true, juce::dontSendNotification);
+
+    for (auto* button : { &octaveDownButton, &octaveUpButton })
+    {
+        button->setCornerSize(5.0f);
+        button->addListener(this);
+        addChildComponent(button);
+    }
+
     audioSelector = std::make_unique<juce::AudioDeviceSelectorComponent>(
         deviceManager, 0, 2, 0, 2, false, false, true, false);
     addChildComponent(audioSelector.get());
@@ -81,6 +115,14 @@ PreferencesDialog::~PreferencesDialog()
 
     for (auto* toggle : { &tooltipsSwitch, &autoScrollSwitch, &autoOpenEditorSwitch })
         toggle->removeListener(this);
+
+    typingKeyboardSwitch.removeListener(this);
+    flKeymapChip.removeListener(this);
+    simpleKeymapChip.removeListener(this);
+    octaveDownButton.removeListener(this);
+    octaveUpButton.removeListener(this);
+    englishChip.removeListener(this);
+    indonesianChip.removeListener(this);
 }
 
 void PreferencesDialog::paint(juce::Graphics& g)
@@ -131,19 +173,75 @@ void PreferencesDialog::paint(juce::Graphics& g)
 
     content.removeFromTop(14);
 
-    if (currentPage == 2)
+    if (currentPage == 1)
     {
-        Theme::drawCaption(g, content.removeFromTop(16), "VST3 search paths");
-        content.removeFromTop(6);
+        // Labels only; the controls themselves are laid out in resized().
+        auto typingArea = getContentBounds().withTrimmedTop(30 + 14).removeFromBottom(typingSectionHeight);
 
-        const auto paths = PluginScanner::getDefaultVst3Paths();
+        Theme::drawCaption(g, typingArea.removeFromTop(18), TRANS("Computer keyboard as MIDI"));
+
+        auto switchRow = typingArea.removeFromTop(22);
         g.setColour(Theme::textSoft());
-        g.setFont(Theme::mono(11.5f));
+        g.setFont(Theme::ui(12.0f));
+        g.drawText(TRANS("Play notes from the keyboard when there is no controller"),
+                   switchRow.withTrimmedRight(46), juce::Justification::centredLeft, true);
 
-        for (int i = 0; i < paths.getNumPaths(); ++i)
-            g.drawText(paths[i].getFullPathName(), content.removeFromTop(20), juce::Justification::centredLeft, true);
+        typingArea.removeFromTop(20);
+        auto keymapRow = typingArea.removeFromTop(22);
+
+        g.setColour(Theme::mutedText());
+        g.setFont(Theme::mono(10.5f));
+        g.drawText(TRANS("Octave") + " " + juce::String(typingOctave) + "   (Ctrl + Up/Down)",
+                   keymapRow.withTrimmedRight(48), juce::Justification::centredRight, false);
+
+        typingArea.removeFromTop(6);
+        g.setColour(Theme::faintText());
+        g.setFont(Theme::mono(10.0f));
+        g.drawText(flKeymapChip.getToggleState()
+                       ? TRANS("Z X C V B N M  +  Q W E R T Y U   (two octaves, like FL)")
+                       : TRANS("A S D F G H J = C D E F G A B,  sharps on W E T Y U"),
+                   typingArea.removeFromTop(16), juce::Justification::centredLeft, true);
 
         return;
+    }
+
+    if (currentPage == 2)
+    {
+        Theme::drawCaption(g, content.removeFromTop(16), TRANS("Plugin search paths"));
+        content.removeFromTop(6);
+
+        // Asked of the formats themselves, so this page cannot drift out of
+        // step with what the scanner actually looks at.
+        juce::AudioPluginFormatManager formats;
+        formats.addDefaultFormats();
+
+        for (auto* format : formats.getFormats())
+        {
+            if (format == nullptr || content.getHeight() < 20)
+                continue;
+
+            g.setColour(Theme::mutedText());
+            g.setFont(Theme::ui(11.0f, true));
+            g.drawText(format->getName(), content.removeFromTop(18), juce::Justification::centredLeft, false);
+
+            const auto paths = PluginScanner::getSearchPathsFor(*format);
+            g.setColour(Theme::textSoft());
+            g.setFont(Theme::mono(11.0f));
+
+            for (int i = 0; i < paths.getNumPaths() && content.getHeight() >= 18; ++i)
+                g.drawText("   " + paths[i].getFullPathName(),
+                           content.removeFromTop(18), juce::Justification::centredLeft, true);
+
+            content.removeFromTop(4);
+        }
+
+        return;
+    }
+
+    if (currentPage == 3)
+    {
+        Theme::drawCaption(g, getToggleRowBounds(2).translated(0, toggleRowHeight + 4).withHeight(16),
+                           TRANS("Language"));
     }
 
     if (currentPage == 4)
@@ -235,12 +333,41 @@ void PreferencesDialog::resized()
         audioSelector->setBounds(page);
 
     if (midiSelector != nullptr)
-        midiSelector->setBounds(page);
+    {
+        // The typing keyboard settings sit under the device list, so the MIDI
+        // page answers both "which controller" and "no controller at all".
+        auto midiPage = page;
+        auto typingArea = midiPage.removeFromBottom(typingSectionHeight);
+        midiSelector->setBounds(midiPage.withTrimmedBottom(10));
+
+        typingArea.removeFromTop(18);
+        auto switchRow = typingArea.removeFromTop(22);
+        typingKeyboardSwitch.setBounds(switchRow.removeFromRight(40).withSizeKeepingCentre(40, 18));
+
+        typingArea.removeFromTop(20);
+        auto keymapRow = typingArea.removeFromTop(22);
+        flKeymapChip.setBounds(keymapRow.removeFromLeft(flKeymapChip.getPreferredWidth())
+                                   .withSizeKeepingCentre(flKeymapChip.getPreferredWidth(), 18));
+        keymapRow.removeFromLeft(4);
+        simpleKeymapChip.setBounds(keymapRow.removeFromLeft(simpleKeymapChip.getPreferredWidth())
+                                       .withSizeKeepingCentre(simpleKeymapChip.getPreferredWidth(), 18));
+
+        octaveUpButton.setBounds(keymapRow.removeFromRight(20).withSizeKeepingCentre(20, 20));
+        keymapRow.removeFromRight(4);
+        octaveDownButton.setBounds(keymapRow.removeFromRight(20).withSizeKeepingCentre(20, 20));
+    }
 
     scanButton.setBounds(juce::Rectangle<int>(page.getX(),
                                               card.getBottom() - contentPadding - 30,
                                               scanButton.getPreferredWidth(),
                                               30));
+
+    auto languageRow = getToggleRowBounds(2).translated(0, toggleRowHeight + 22).withHeight(20);
+    englishChip.setBounds(languageRow.removeFromLeft(englishChip.getPreferredWidth())
+                              .withSizeKeepingCentre(englishChip.getPreferredWidth(), 18));
+    languageRow.removeFromLeft(4);
+    indonesianChip.setBounds(languageRow.removeFromLeft(indonesianChip.getPreferredWidth())
+                                 .withSizeKeepingCentre(indonesianChip.getPreferredWidth(), 18));
 
     const auto scaleTop = page.getY() + 16 + themeCardHeight + 18 + 16 + 6;
     scaleSlider.setBounds(page.getX(), scaleTop, page.getWidth() - 70, 20);
@@ -378,6 +505,72 @@ void PreferencesDialog::buttonClicked(juce::Button* button)
         if (autoOpenEditorChangedCallback)
             autoOpenEditorChangedCallback(autoOpenEditorSwitch.getToggleState());
     }
+    else if (button == &typingKeyboardSwitch)
+    {
+        if (typingKeyboardEnabledCallback)
+            typingKeyboardEnabledCallback(typingKeyboardSwitch.getToggleState());
+    }
+    else if (button == &flKeymapChip || button == &simpleKeymapChip)
+    {
+        // Read the resulting state, not which chip was clicked: a radio group
+        // also notifies the one it switched off.
+        if (typingKeymapCallback)
+            typingKeymapCallback(simpleKeymapChip.getToggleState() ? 1 : 0);
+
+        repaint();
+    }
+    else if (button == &englishChip || button == &indonesianChip)
+    {
+        // The resulting state, not which chip was clicked: a radio group also
+        // notifies the one it switched off.
+        if (languageChangedCallback)
+            languageChangedCallback(indonesianChip.getToggleState() ? 1 : 0);
+    }
+    else if (button == &octaveDownButton || button == &octaveUpButton)
+    {
+        typingOctave = juce::jlimit(0, 8, typingOctave + (button == &octaveUpButton ? 1 : -1));
+
+        if (typingOctaveCallback)
+            typingOctaveCallback(typingOctave);
+
+        repaint();
+    }
+}
+
+void PreferencesDialog::setTypingKeyboardState(bool enabled, int keymapIndex, int octave)
+{
+    typingKeyboardSwitch.setToggleState(enabled, juce::dontSendNotification);
+    flKeymapChip.setToggleState(keymapIndex == 0, juce::dontSendNotification);
+    simpleKeymapChip.setToggleState(keymapIndex == 1, juce::dontSendNotification);
+    typingOctave = juce::jlimit(0, 8, octave);
+    repaint();
+}
+
+void PreferencesDialog::setLanguageIndex(int index)
+{
+    englishChip.setToggleState(index == 0, juce::dontSendNotification);
+    indonesianChip.setToggleState(index == 1, juce::dontSendNotification);
+    repaint();
+}
+
+void PreferencesDialog::setLanguageChangedCallback(std::function<void(int)> callback)
+{
+    languageChangedCallback = std::move(callback);
+}
+
+void PreferencesDialog::setTypingKeyboardEnabledCallback(std::function<void(bool)> callback)
+{
+    typingKeyboardEnabledCallback = std::move(callback);
+}
+
+void PreferencesDialog::setTypingKeymapCallback(std::function<void(int)> callback)
+{
+    typingKeymapCallback = std::move(callback);
+}
+
+void PreferencesDialog::setTypingOctaveCallback(std::function<void(int)> callback)
+{
+    typingOctaveCallback = std::move(callback);
 }
 
 void PreferencesDialog::sliderValueChanged(juce::Slider* slider)
@@ -398,6 +591,14 @@ void PreferencesDialog::refreshPageVisibility()
 
     if (midiSelector != nullptr)
         midiSelector->setVisible(currentPage == 1);
+
+    englishChip.setVisible(currentPage == 3);
+    indonesianChip.setVisible(currentPage == 3);
+    typingKeyboardSwitch.setVisible(currentPage == 1);
+    flKeymapChip.setVisible(currentPage == 1);
+    simpleKeymapChip.setVisible(currentPage == 1);
+    octaveDownButton.setVisible(currentPage == 1);
+    octaveUpButton.setVisible(currentPage == 1);
 
     scanButton.setVisible(currentPage == 2);
     scaleSlider.setVisible(currentPage == 3);

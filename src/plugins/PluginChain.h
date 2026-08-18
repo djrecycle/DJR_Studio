@@ -44,6 +44,10 @@ public:
     juce::AudioPluginInstance* getPlugin(int index) noexcept;
     const juce::AudioPluginInstance* getPlugin(int index) const noexcept;
     juce::StringArray getPluginNames() const;
+    /** The format each insert came from, so a slot can say LV2 or VST3 rather
+        than assuming.
+    */
+    juce::StringArray getPluginFormatNames() const;
 
 private:
     std::vector<std::unique_ptr<juce::AudioPluginInstance>> plugins;

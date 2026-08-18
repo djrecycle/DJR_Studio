@@ -11,19 +11,19 @@ bool ExportManager::render(Mixer& mixer,
 {
     if (options.sampleRate <= 0.0 || options.blockSize <= 0 || options.tempoBpm <= 0.0)
     {
-        errorOut = "Pengaturan export tidak valid.";
+        errorOut = TRANS("The export settings are not valid.");
         return false;
     }
 
     if (options.lengthBeats <= 0.0)
     {
-        errorOut = "Panjang export nol - tidak ada yang bisa dirender.";
+        errorOut = TRANS("Export length is zero - there is nothing to render.");
         return false;
     }
 
     if (! outputFile.getParentDirectory().createDirectory())
     {
-        errorOut = "Folder tujuan tidak bisa dibuat: " + outputFile.getParentDirectory().getFullPathName();
+        errorOut = TRANS("The destination folder could not be created: ") + outputFile.getParentDirectory().getFullPathName();
         return false;
     }
 
@@ -34,7 +34,7 @@ bool ExportManager::render(Mixer& mixer,
 
     if (stream == nullptr)
     {
-        errorOut = "File tidak bisa ditulis: " + outputFile.getFullPathName();
+        errorOut = TRANS("The file could not be written: ") + outputFile.getFullPathName();
         return false;
     }
 
@@ -50,7 +50,7 @@ bool ExportManager::render(Mixer& mixer,
 
     if (writer == nullptr)
     {
-        errorOut = "Writer wav gagal dibuat.";
+        errorOut = TRANS("The wav writer could not be created.");
         return false;
     }
 
@@ -87,7 +87,7 @@ bool ExportManager::render(Mixer& mixer,
 
         if (! writer->writeFromAudioSampleBuffer(view, 0, samplesThisBlock))
         {
-            errorOut = "Penulisan file gagal di tengah render.";
+            errorOut = TRANS("Writing the file failed part way through the render.");
             return false;
         }
 

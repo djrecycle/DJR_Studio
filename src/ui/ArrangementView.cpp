@@ -52,12 +52,12 @@ ArrangementView::ArrangementView(Mixer& mixerToUse, Transport& transportToUse)
 
     addTrackButton.setIconInset(4.0f);
     addTrackButton.addListener(this);
-    addTrackButton.setTooltip("Tambah track");
+    addTrackButton.setTooltip(TRANS("Add track"));
     addAndMakeVisible(addTrackButton);
 
     followButton.setIconInset(4.0f);
     followButton.addListener(this);
-    followButton.setTooltip("Ikuti playhead saat playback");
+    followButton.setTooltip(TRANS("Follow playhead during playback"));
     addAndMakeVisible(followButton);
 
     zoomFitButton.setIconInset(4.0f);
@@ -357,7 +357,7 @@ void ArrangementView::paint(juce::Graphics& g)
     {
         g.setColour(Theme::faintText());
         g.setFont(Theme::ui(13.0f));
-        g.drawText("Belum ada track", grid, juce::Justification::centred, false);
+        g.drawText(TRANS("No tracks yet"), grid, juce::Justification::centred, false);
     }
 
     // Zoom rubber band --------------------------------------------------------
@@ -829,7 +829,7 @@ void ArrangementView::mouseDrag(const juce::MouseEvent& event)
 
     if (clipDrag.mode != ClipDragMode::none)
     {
-        pushUndo(clipDrag.mode == ClipDragMode::move ? "Geser clip" : "Trim clip");
+        pushUndo(clipDrag.mode == ClipDragMode::move ? TRANS("Move clip") : "Trim clip");
 
         const auto tempo = transport.getTempoBpm();
         const auto pointerBeat = xToBeat(event.getPosition().x);
@@ -1037,10 +1037,10 @@ void ArrangementView::buttonClicked(juce::Button* button)
 void ArrangementView::showAddTrackMenu()
 {
     juce::PopupMenu menu;
-    menu.addItem(1, "Track MIDI baru");
-    menu.addItem(2, "Track Audio baru");
+    menu.addItem(1, TRANS("New MIDI track"));
+    menu.addItem(2, TRANS("New audio track"));
     menu.addSeparator();
-    menu.addItem(3, "Bus baru");
+    menu.addItem(3, TRANS("New bus"));
 
     menu.showMenuAsync(juce::PopupMenu::Options()
                            .withTargetComponent(&addTrackButton)
@@ -1086,19 +1086,19 @@ void ArrangementView::showTrackContextMenu(int trackIndex)
 
     juce::PopupMenu menu;
     menu.addSectionHeader(track->getName());
-    menu.addItem(4, "Ganti nama track...");
-    menu.addItem(1, "Hapus track", mixer.getNumTracks() > 1);
+    menu.addItem(4, TRANS("Rename track..."));
+    menu.addItem(1, TRANS("Delete track"), mixer.getNumTracks() > 1);
     menu.addSeparator();
-    menu.addItem(2, "Monitor input", true, track->isInputMonitoring());
-    menu.addItem(3, "Hapus semua plugin", track->getPluginCount() > 0);
+    menu.addItem(2, TRANS("Monitor input"), true, track->isInputMonitoring());
+    menu.addItem(3, TRANS("Remove all plugins"), track->getPluginCount() > 0);
     menu.addSeparator();
     // A bus makes no sound of its own until something feeds it, so rendering one
     // on its own would only ever produce silence.
     const auto renderable = track->getKind() != TrackKind::bus;
-    menu.addItem(5, track->isFrozen() ? "Unfreeze track" : "Freeze track", renderable);
-    menu.addItem(6, "Bounce ke audio...", renderable);
+    menu.addItem(5, track->isFrozen() ? TRANS("Unfreeze track") : TRANS("Freeze track"), renderable);
+    menu.addItem(6, TRANS("Bounce to audio..."), renderable);
     menu.addSeparator();
-    menu.addSubMenu("Tambah automation", automationMenu);
+    menu.addSubMenu(TRANS("Add automation"), automationMenu);
 
     menu.showMenuAsync(juce::PopupMenu::Options()
                            .withMousePosition()
@@ -1254,7 +1254,7 @@ void ArrangementView::addAutomationTarget(int trackIndex, int menuId)
         return;
     }
 
-    pushUndo("Tambah lane automation");
+    pushUndo(TRANS("Add automation lane"));
     auto* lane = track->addAutomationLane(target);
 
     if (lane == nullptr)
@@ -1284,15 +1284,15 @@ void ArrangementView::showAutomationMenu(int trackIndex, int laneIndex, int poin
 
     if (pointIndex >= 0)
     {
-        menu.addItem(1, "Hapus titik");
+        menu.addItem(1, TRANS("Delete point"));
         menu.addItem(2, "Luruskan kurva");
         menu.addSeparator();
     }
 
-    menu.addItem(3, "Aktif", true, lane->isEnabled());
-    menu.addItem(4, "Hapus semua titik", lane->getNumPoints() > 0);
+    menu.addItem(3, TRANS("On"), true, lane->isEnabled());
+    menu.addItem(4, TRANS("Delete all points"), lane->getNumPoints() > 0);
     menu.addSeparator();
-    menu.addItem(5, "Hapus lane automation");
+    menu.addItem(5, TRANS("Remove automation lane"));
 
     menu.showMenuAsync(juce::PopupMenu::Options()
                            .withMousePosition()
@@ -1309,27 +1309,27 @@ void ArrangementView::showAutomationMenu(int trackIndex, int laneIndex, int poin
             switch (result)
             {
                 case 1:
-                    pushUndo("Hapus titik automation");
+                    pushUndo(TRANS("Delete automation point"));
                     selectedLane->removePoint(pointIndex);
                     break;
 
                 case 2:
-                    pushUndo("Luruskan kurva automation");
+                    pushUndo(TRANS("Straighten automation curve"));
                     selectedLane->setPointCurve(pointIndex, 0.0);
                     break;
 
                 case 3:
-                    pushUndo(selectedLane->isEnabled() ? "Bypass automation" : "Aktifkan automation");
+                    pushUndo(selectedLane->isEnabled() ? TRANS("Bypass automation") : TRANS("Enable automation"));
                     selectedLane->setEnabled(! selectedLane->isEnabled());
                     break;
 
                 case 4:
-                    pushUndo("Kosongkan lane automation");
+                    pushUndo(TRANS("Clear automation lane"));
                     selectedLane->clearPoints();
                     break;
 
                 case 5:
-                    pushUndo("Hapus lane automation");
+                    pushUndo(TRANS("Remove automation lane"));
                     selected->removeAutomationLane(laneIndex);
                     rebuildRows();
                     clampScroll();
@@ -1895,7 +1895,7 @@ void ArrangementView::drawAutomationRow(juce::Graphics& g, int rowIndex, const R
     {
         g.setColour(Theme::faintText());
         g.setFont(Theme::ui(10.0f));
-        g.drawText("Klik untuk menaruh titik",
+        g.drawText(TRANS("Click to place a point"),
                    juce::Rectangle<int>(grid.getX() + 8, bounds.getY(), 200, bounds.getHeight()),
                    juce::Justification::centredLeft, false);
         return;
@@ -2071,7 +2071,7 @@ bool ArrangementView::handleAutomationMouseDown(int rowIndex,
     // the curve rather than editing it.
     if (activeTool == Tool::mute)
     {
-        pushUndo(lane->isEnabled() ? "Bypass automation" : "Aktifkan automation");
+        pushUndo(lane->isEnabled() ? TRANS("Bypass automation") : TRANS("Enable automation"));
         lane->setEnabled(! lane->isEnabled());
         notifyClipEdited();
         repaint();
@@ -2082,7 +2082,7 @@ bool ArrangementView::handleAutomationMouseDown(int rowIndex,
     {
         if (hit.mode == AutomationDrag::Mode::point)
         {
-            pushUndo("Hapus titik automation");
+            pushUndo(TRANS("Delete automation point"));
             lane->removePoint(hit.pointIndex);
             notifyClipEdited();
             repaint();
@@ -2093,7 +2093,7 @@ bool ArrangementView::handleAutomationMouseDown(int rowIndex,
 
     if (hit.mode != AutomationDrag::Mode::none)
     {
-        pushUndo(hit.mode == AutomationDrag::Mode::curve ? "Bengkokkan automation" : "Geser titik automation");
+        pushUndo(hit.mode == AutomationDrag::Mode::curve ? TRANS("Bend automation") : TRANS("Move automation point"));
         automationDrag = hit;
         automationDrag.grabY = position.y;
         return true;
@@ -2101,7 +2101,7 @@ bool ArrangementView::handleAutomationMouseDown(int rowIndex,
 
     // An empty spot places a point and keeps hold of it, so one gesture both
     // puts it down and lands it where it was meant to go.
-    pushUndo("Tambah titik automation");
+    pushUndo(TRANS("Add automation point"));
     const auto index = lane->addPoint(snapBeat(xToBeat(position.x)), valueFromY(rowIndex, position.y));
 
     if (index < 0)
@@ -2183,19 +2183,19 @@ void ArrangementView::setSnapUnit(SnapUnit unit)
 void ArrangementView::buildToolButtons()
 {
     static const ToolButton definitions[] = {
-        { Tool::select,   Icon::marquee,     "Select - geser & trim clip" },
-        { Tool::paint,    Icon::pencil,      "Paint - taruh clip" },
-        { Tool::erase,    Icon::eraser,      "Delete - hapus clip" },
-        { Tool::mute,     Icon::speakerMute, "Mute - bisukan clip" },
-        { Tool::slip,     Icon::slip,        "Slip - geser isi di dalam clip" },
-        { Tool::slice,    Icon::slice,       "Slice - potong clip jadi dua" },
-        { Tool::zoom,     Icon::zoom,        "Zoom - tarik area untuk memperbesar" },
-        { Tool::playback, Icon::play,        "Playback - klik untuk memutar dari situ" }
+        { Tool::select,   Icon::marquee,     "Select - move and trim clips" },
+        { Tool::paint,    Icon::pencil,      "Paint - place clips" },
+        { Tool::erase,    Icon::eraser,      "Delete - remove clips" },
+        { Tool::mute,     Icon::speakerMute, "Mute - silence a clip" },
+        { Tool::slip,     Icon::slip,        "Slip - slide the audio inside a clip" },
+        { Tool::slice,    Icon::slice,       "Slice - cut a clip in two" },
+        { Tool::zoom,     Icon::zoom,        "Zoom - drag out an area" },
+        { Tool::playback, Icon::play,        "Playback - click to play from there" }
     };
 
     for (const auto& definition : definitions)
     {
-        auto* button = toolButtons.add(new IconChipButton(definition.tooltip, definition.icon));
+        auto* button = toolButtons.add(new IconChipButton(juce::translate(definition.tooltip), definition.icon));
         // The default inset leaves a 6px glyph on an 18px chip - far too small
         // to tell a razor from a magnet.
         button->setIconInset(3.5f);
@@ -2216,8 +2216,8 @@ void ArrangementView::refreshToolButtons()
             button->setHighlighted(order[i] == activeTool);
 
     snapButton.setHighlighted(snapEnabled);
-    snapButton.setTooltip(snapEnabled ? "Snap aktif - klik untuk mematikan"
-                                      : "Snap mati - klik untuk menyalakan");
+    snapButton.setTooltip(snapEnabled ? TRANS("Snap on - click to turn off")
+                                      : TRANS("Snap off - click to turn on"));
 }
 
 void ArrangementView::setTool(Tool tool)
@@ -2443,7 +2443,7 @@ void ArrangementView::beginGroupDrag()
 
 void ArrangementView::moveSelectedClips(double deltaBeats)
 {
-    pushUndo("Geser clip terpilih");
+    pushUndo(TRANS("Move selected clips"));
 
     auto applied = deltaBeats;
 
@@ -2460,7 +2460,7 @@ void ArrangementView::deleteSelectedClips()
     if (selectedClips.empty())
         return;
 
-    pushUndo(selectedClips.size() > 1 ? "Hapus clip terpilih" : "Hapus clip");
+    pushUndo(selectedClips.size() > 1 ? TRANS("Delete selected clips") : TRANS("Delete clip"));
 
     // Removing a clip shifts the indices behind it, so delete back to front.
     auto ordered = selectedClips;
@@ -2597,7 +2597,7 @@ bool ArrangementView::paintPatternAt(juce::Point<int> position)
         if (placement.lengthBeats < PatternPlacement::minimumLengthBeats)
             return false;
 
-        pushUndo("Taruh clip");
+        pushUndo(TRANS("Place clip"));
         midiTrack->addPlacement(placement);
         notifyClipEdited();
         return true;
@@ -2615,7 +2615,7 @@ bool ArrangementView::applyToolToClip(int trackIndex, int clipIndex, double beat
     switch (activeTool)
     {
         case Tool::erase:
-            pushUndo("Hapus clip");
+            pushUndo(TRANS("Delete clip"));
 
             if (midiTrack != nullptr)
                 midiTrack->removePlacementAt(clipIndex);
@@ -2715,13 +2715,13 @@ void ArrangementView::showPlacementContextMenu(int trackIndex, int placementInde
     juce::PopupMenu menu;
     menu.addSectionHeader(patternLabel(placement.patternIndex));
     const auto fullLength = patternLengthFor(placement.patternIndex);
-    menu.addItem(1, "Kembalikan panjang penuh",
+    menu.addItem(1, TRANS("Restore full length"),
                  placement.sourceOffsetBeats > 0.0 || placement.lengthBeats < fullLength - 1.0e-9);
-    menu.addItem(2, "Panjangkan 1 bar");
+    menu.addItem(2, TRANS("Extend by 1 bar"));
     menu.addSeparator();
-    menu.addItem(4, "Ganti nama pattern...");
+    menu.addItem(4, TRANS("Rename pattern..."));
     menu.addSeparator();
-    menu.addItem(3, "Hapus penempatan");
+    menu.addItem(3, TRANS("Remove placement"));
 
     menu.showMenuAsync(juce::PopupMenu::Options()
                            .withMousePosition()
@@ -2785,9 +2785,9 @@ void ArrangementView::showClipContextMenu(int trackIndex, int clipIndex)
     juce::PopupMenu menu;
     menu.addSectionHeader(clip->getName());
     menu.addItem(1, "Warp ikut tempo", true, clip->isWarpEnabled());
-    menu.addItem(2, "Kembalikan panjang penuh");
+    menu.addItem(2, TRANS("Restore full length"));
     menu.addSeparator();
-    menu.addItem(3, "Hapus clip");
+    menu.addItem(3, TRANS("Delete clip"));
 
     menu.showMenuAsync(juce::PopupMenu::Options()
                            .withMousePosition()
@@ -2802,7 +2802,7 @@ void ArrangementView::showClipContextMenu(int trackIndex, int clipIndex)
                 return;
 
             if (result >= 1 && result <= 3)
-                pushUndo(result == 3 ? "Hapus clip" : "Ubah clip");
+                pushUndo(result == 3 ? TRANS("Delete clip") : "Ubah clip");
 
             switch (result)
             {

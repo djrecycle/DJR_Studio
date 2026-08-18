@@ -13,7 +13,7 @@ class PluginManager final : public juce::ChangeBroadcaster
 public:
     PluginManager();
 
-    void scanVst3Async();
+    void scanPluginsAsync();
     bool isScanning() const noexcept;
     juce::Array<juce::PluginDescription> getKnownPlugins() const;
 

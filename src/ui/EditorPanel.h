@@ -55,6 +55,15 @@ public:
 
     /** Notes played on the on-screen keyboard, ready for the live MIDI path. */
     void setKeyboardMessageCallback(std::function<void(const juce::MidiMessage&)> callback);
+    /** The state behind the on-screen keyboard. Driving it lights the keys up
+        and feeds the live MIDI path in one go, so the typing keyboard does not
+        need a second route to the engine.
+    */
+    juce::MidiKeyboardState& getKeyboardState() noexcept;
+    /** Keeps the visible range around `note`, so playing high or low on the
+        typing keyboard does not run off the end of the strip.
+    */
+    void ensureKeyVisible(int note);
 
 private:
     class KeyboardBridge final : public juce::MidiKeyboardState::Listener

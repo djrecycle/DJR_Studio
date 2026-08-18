@@ -18,7 +18,7 @@ std::unique_ptr<AudioClip> AudioClip::createFromFile(const juce::File& file,
 {
     if (! file.existsAsFile())
     {
-        errorOut = "File tidak ditemukan: " + file.getFileName();
+        errorOut = TRANS("File not found: ") + file.getFileName();
         return nullptr;
     }
 
@@ -26,19 +26,19 @@ std::unique_ptr<AudioClip> AudioClip::createFromFile(const juce::File& file,
 
     if (reader == nullptr)
     {
-        errorOut = "Format tidak didukung: " + file.getFileName();
+        errorOut = TRANS("Unsupported format: ") + file.getFileName();
         return nullptr;
     }
 
     if (reader->lengthInSamples <= 0)
     {
-        errorOut = "File kosong: " + file.getFileName();
+        errorOut = TRANS("Empty file: ") + file.getFileName();
         return nullptr;
     }
 
     if (reader->lengthInSamples > maxSourceSamples)
     {
-        errorOut = "File terlalu panjang untuk dimuat ke memori: " + file.getFileName();
+        errorOut = TRANS("File too long to load into memory: ") + file.getFileName();
         return nullptr;
     }
 

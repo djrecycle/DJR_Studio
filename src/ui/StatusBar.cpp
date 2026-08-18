@@ -39,7 +39,7 @@ void StatusBar::paint(juce::Graphics& g)
 
     const auto deviceText = device != nullptr
         ? juce::String::fromUTF8("\xe2\x97\x8f ") + deviceManager.getCurrentAudioDeviceType() + " - " + device->getName()
-        : juce::String::fromUTF8("\xe2\x97\x8f ") + "Tidak ada audio device";
+        : juce::String::fromUTF8("\xe2\x97\x8f ") + TRANS("No audio device");
 
     g.setColour(device != nullptr ? Theme::green() : Theme::pink());
     g.drawText(deviceText, area.removeFromLeft(measure(deviceText)), juce::Justification::centredLeft, false);
@@ -56,7 +56,7 @@ void StatusBar::paint(juce::Graphics& g)
     g.drawText(formatText, area.removeFromLeft(measure(formatText)), juce::Justification::centredLeft, false);
     area.removeFromLeft(11);
 
-    const auto pluginText = "VST3: " + juce::String(pluginCount) + " scanned";
+    const auto pluginText = "Plugin: " + juce::String(pluginCount) + " scanned";
     g.drawText(pluginText, area.removeFromLeft(measure(pluginText)), juce::Justification::centredLeft, false);
     area.removeFromLeft(11);
 

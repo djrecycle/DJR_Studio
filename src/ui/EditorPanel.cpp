@@ -67,18 +67,18 @@ void EditorPanel::buildToolButtons()
 {
     // The playlist's Slip has no meaning for a note, so this set is one shorter.
     static const ToolButton definitions[] = {
-        { PianoRollView::Tool::select,   Icon::marquee,     "Select - pilih & geser note" },
-        { PianoRollView::Tool::draw,     Icon::pencil,      "Draw - taruh note" },
-        { PianoRollView::Tool::erase,    Icon::eraser,      "Delete - hapus note" },
-        { PianoRollView::Tool::mute,     Icon::speakerMute, "Mute - bisukan note" },
-        { PianoRollView::Tool::slice,    Icon::slice,       "Slice - potong note" },
-        { PianoRollView::Tool::zoom,     Icon::zoom,        "Zoom - tarik area" },
-        { PianoRollView::Tool::playback, Icon::play,        "Playback - klik untuk memutar" }
+        { PianoRollView::Tool::select,   Icon::marquee,     "Select - pick and move notes" },
+        { PianoRollView::Tool::draw,     Icon::pencil,      "Draw - place notes" },
+        { PianoRollView::Tool::erase,    Icon::eraser,      "Delete - remove notes" },
+        { PianoRollView::Tool::mute,     Icon::speakerMute, "Mute - silence a note" },
+        { PianoRollView::Tool::slice,    Icon::slice,       "Slice - cut a note" },
+        { PianoRollView::Tool::zoom,     Icon::zoom,        "Zoom - drag out an area" },
+        { PianoRollView::Tool::playback, Icon::play,        "Playback - click to play" }
     };
 
     for (const auto& definition : definitions)
     {
-        auto* button = toolButtons.add(new IconChipButton(definition.tooltip, definition.icon));
+        auto* button = toolButtons.add(new IconChipButton(juce::translate(definition.tooltip), definition.icon));
         // Small chips need a tighter inset or the glyph is unreadable.
         button->setIconInset(3.5f);
         button->addListener(this);
@@ -252,7 +252,7 @@ void EditorPanel::setPatternRenameCallback(std::function<void()> callback)
 void EditorPanel::showPatternLengthMenu()
 {
     juce::PopupMenu menu;
-    menu.addSectionHeader("Panjang pattern");
+    menu.addSectionHeader(TRANS("Pattern length"));
     menu.addItem(1, "Ikuti isi (auto)", true, ! patternLengthLocked);
     menu.addSeparator();
 
@@ -429,6 +429,22 @@ bool EditorPanel::isVelocityLaneVisible() const noexcept
 void EditorPanel::setViewChangedCallback(std::function<void()> callback)
 {
     viewChangedCallback = std::move(callback);
+}
+
+juce::MidiKeyboardState& EditorPanel::getKeyboardState() noexcept
+{
+    return keyboardState;
+}
+
+void EditorPanel::ensureKeyVisible(int note)
+{
+    const auto lowest = static_cast<int>(keyboard.getLowestVisibleKey());
+    const auto span = juce::jmax(12, static_cast<int>(keyboard.getWidth() / juce::jmax(1.0f, keyboard.getKeyWidth())));
+
+    if (note < lowest)
+        keyboard.setLowestVisibleKey(juce::jmax(0, note - 2));
+    else if (note >= lowest + span)
+        keyboard.setLowestVisibleKey(juce::jlimit(0, 108, note - span + 3));
 }
 
 void EditorPanel::setKeyboardMessageCallback(std::function<void(const juce::MidiMessage&)> callback)

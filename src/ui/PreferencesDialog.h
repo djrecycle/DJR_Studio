@@ -36,6 +36,16 @@ public:
     void setAutoScrollChangedCallback(std::function<void(bool)> callback);
     void setAutoOpenEditorChangedCallback(std::function<void(bool)> callback);
     void setScanRequestedCallback(std::function<void()> callback);
+    /** 0 = English, 1 = Bahasa Indonesia. */
+    void setLanguageIndex(int index);
+    void setLanguageChangedCallback(std::function<void(int)> callback);
+
+    /** The computer-keyboard-as-MIDI settings on the MIDI page. */
+    void setTypingKeyboardState(bool enabled, int keymapIndex, int octave);
+    void setTypingKeyboardEnabledCallback(std::function<void(bool)> callback);
+    /** 0 = FL Studio layout, 1 = the plain A S D F one. */
+    void setTypingKeymapCallback(std::function<void(int)> callback);
+    void setTypingOctaveCallback(std::function<void(int)> callback);
 
 private:
     void buttonClicked(juce::Button* button) override;
@@ -55,7 +65,15 @@ private:
     int currentPage = 3;
 
     IconChipButton closeButton { "Tutup", Icon::close };
-    PillButton scanButton { "Scan VST3 sekarang", Icon::plus, PillButton::Style::filled };
+    PillButton scanButton { TRANS("Scan plugins now"), Icon::plus, PillButton::Style::filled };
+    SwitchButton typingKeyboardSwitch { "typing keyboard" };
+    TabChip englishChip { "English" };
+    TabChip indonesianChip { "Bahasa Indonesia" };
+    TabChip flKeymapChip { "FL Studio" };
+    TabChip simpleKeymapChip { "A S D F" };
+    IconChipButton octaveDownButton { TRANS("Octave down"), Icon::chevronLeft };
+    IconChipButton octaveUpButton { TRANS("Octave up"), Icon::chevronRight };
+    int typingOctave = 4;
     juce::Slider scaleSlider;
     SwitchButton tooltipsSwitch { "tooltips" };
     SwitchButton autoScrollSwitch { "autoScroll" };
@@ -71,6 +89,10 @@ private:
     std::function<void(bool)> autoScrollChangedCallback;
     std::function<void(bool)> autoOpenEditorChangedCallback;
     std::function<void()> scanRequestedCallback;
+    std::function<void(int)> languageChangedCallback;
+    std::function<void(bool)> typingKeyboardEnabledCallback;
+    std::function<void(int)> typingKeymapCallback;
+    std::function<void(int)> typingOctaveCallback;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PreferencesDialog)
 };

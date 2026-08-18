@@ -205,8 +205,8 @@ void MenuBarView::showMenuFor(int menuIndex, juce::Button& source)
         case 3: // Tools
             menu.addItem(42, "Metronome", true, viewState.metronomeOn);
             menu.addSeparator();
-            menu.addSectionHeader("Count-in sebelum record");
-            menu.addItem(43, "Mati", true, viewState.countInBars == 0);
+            menu.addSectionHeader(TRANS("Count-in before recording"));
+            menu.addItem(43, TRANS("Off"), true, viewState.countInBars == 0);
             menu.addItem(44, "1 bar", true, viewState.countInBars == 1);
             menu.addItem(45, "2 bar", true, viewState.countInBars == 2);
             menu.addSeparator();

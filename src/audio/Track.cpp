@@ -476,6 +476,12 @@ juce::StringArray Track::getPluginNames() const
     return pluginChain.getPluginNames();
 }
 
+juce::StringArray Track::getPluginFormatNames() const
+{
+    const juce::SpinLock::ScopedLockType scoped(const_cast<juce::SpinLock&>(pluginLock));
+    return pluginChain.getPluginFormatNames();
+}
+
 void Track::prepare(double sampleRate, int blockSize)
 {
     preparedSampleRate.store(sampleRate, std::memory_order_release);
