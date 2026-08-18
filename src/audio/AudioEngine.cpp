@@ -71,6 +71,11 @@ float AudioEngine::getMasterPeak() const noexcept
     return masterPeak.load(std::memory_order_acquire);
 }
 
+float AudioEngine::getInputPeak() const noexcept
+{
+    return inputPeak.load(std::memory_order_acquire);
+}
+
 juce::String AudioEngine::getAudioStatus() const
 {
     if (auto* device = deviceManager.getCurrentAudioDevice())
@@ -168,6 +173,7 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
 void AudioEngine::audioDeviceStopped()
 {
     masterPeak.store(0.0f, std::memory_order_release);
+    inputPeak.store(0.0f, std::memory_order_release);
 }
 
 void AudioEngine::audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
@@ -190,6 +196,15 @@ void AudioEngine::audioDeviceIOCallbackWithContext(const float* const* inputChan
             if (inputChannelData[channel] != nullptr)
                 inputBuffer.copyFrom(channel, 0, inputChannelData[channel], numSamples);
     }
+
+    // Track input peak for level meter in preferences
+    auto inputPeakLevel = 0.0f;
+    if (usableInputs > 0)
+    {
+        for (int channel = 0; channel < usableInputs; ++channel)
+            inputPeakLevel = juce::jmax(inputPeakLevel, inputBuffer.getMagnitude(channel, 0, numSamples));
+    }
+    inputPeak.store(inputPeakLevel, std::memory_order_release);
 
     if (usableInputs > 0 && recorder.isRecording())
         recorder.processInputBlock(inputChannelData, numInputChannels, numSamples);

@@ -1,5 +1,6 @@
 #include "PreferencesDialog.h"
 
+#include "audio/AudioEngine.h"
 #include "plugins/PluginScanner.h"
 
 namespace djr
@@ -37,8 +38,9 @@ namespace
     };
 }
 
-PreferencesDialog::PreferencesDialog(juce::AudioDeviceManager& deviceManagerToUse)
-    : deviceManager(deviceManagerToUse)
+PreferencesDialog::PreferencesDialog(juce::AudioDeviceManager& deviceManagerToUse,
+                                     AudioEngine& engineToUse)
+    : deviceManager(deviceManagerToUse), audioEngine(engineToUse)
 {
     closeButton.setDangerHover(true);
     closeButton.setCornerSize(6.0f);
@@ -318,6 +320,26 @@ void PreferencesDialog::paint(juce::Graphics& g)
         g.setFont(Theme::ui(12.5f));
         g.drawText(toggleLabels[i], row.withTrimmedRight(50), juce::Justification::centredLeft, true);
     }
+
+    // Input level meter pada audio page
+    if (currentPage == 0)
+    {
+        const auto meterArea = getContentBounds().withTrimmedTop(30 + 14).removeFromBottom(50).reduced(10, 10);
+        
+        // Smooth input level untuk visual yang lebih halus
+        const auto inputLevel = audioEngine.getInputPeak();
+        const auto smoothFactor = 0.7f;
+        smoothedInputLevel = smoothedInputLevel * smoothFactor + inputLevel * (1.0f - smoothFactor);
+
+        // Draw label
+        g.setColour(Theme::textSoft());
+        g.setFont(Theme::ui(11.0f));
+        g.drawText("Input Level", meterArea.withHeight(16), juce::Justification::centredLeft, false);
+
+        // Draw meter
+        auto meterBounds = meterArea.withY(meterArea.getY() + 18).withHeight(14);
+        Theme::drawLevelMeter(g, meterBounds.toFloat(), smoothedInputLevel, false, 2.5f);
+    }
 }
 
 void PreferencesDialog::resized()
@@ -330,7 +352,11 @@ void PreferencesDialog::resized()
     auto page = getContentBounds().withTrimmedTop(30 + 14);
 
     if (audioSelector != nullptr)
-        audioSelector->setBounds(page);
+    {
+        // Leave 60px at bottom for input level meter
+        auto audioPage = page.withTrimmedBottom(60);
+        audioSelector->setBounds(audioPage);
+    }
 
     if (midiSelector != nullptr)
     {

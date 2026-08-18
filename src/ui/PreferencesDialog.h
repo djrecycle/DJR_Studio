@@ -10,6 +10,8 @@
 namespace djr
 {
 
+class AudioEngine;
+
 /** In-app preferences modal: audio device, MIDI, plugin paths, appearance and a
     shortcut reference.
 */
@@ -18,7 +20,8 @@ class PreferencesDialog final : public juce::Component,
                                 private juce::Slider::Listener
 {
 public:
-    explicit PreferencesDialog(juce::AudioDeviceManager& deviceManager);
+    explicit PreferencesDialog(juce::AudioDeviceManager& deviceManager,
+                                  AudioEngine& audioEngine);
     ~PreferencesDialog() override;
 
     void paint(juce::Graphics& g) override;
@@ -60,9 +63,11 @@ private:
     juce::Rectangle<int> getToggleRowBounds(int index) const;
 
     juce::AudioDeviceManager& deviceManager;
+    AudioEngine& audioEngine;
+    float smoothedInputLevel = 0.0f;
 
     juce::StringArray pageNames { "Audio Device", "MIDI", "Plugins", "Appearance", "Shortcuts" };
-    int currentPage = 3;
+    int currentPage = 0;  // Audio Device halaman default
 
     IconChipButton closeButton { "Tutup", Icon::close };
     PillButton scanButton { TRANS("Scan plugins now"), Icon::plus, PillButton::Style::filled };

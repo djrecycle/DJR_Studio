@@ -31,6 +31,7 @@ public:
     int getCurrentBufferSize() const noexcept;
     int getInputChannelCount() const noexcept;
     float getMasterPeak() const noexcept;
+    float getInputPeak() const noexcept;
     juce::String getAudioStatus() const;
 
     /** Live MIDI merged into every block; pass nullptr to detach. */
@@ -70,6 +71,7 @@ private:
     std::atomic<int> bufferSize { 512 };
     std::atomic<int> inputChannelCount { 0 };
     std::atomic<float> masterPeak { 0.0f };
+    std::atomic<float> inputPeak { 0.0f };
 };
 
 } // namespace djr

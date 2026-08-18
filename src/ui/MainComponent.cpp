@@ -32,7 +32,7 @@ MainComponent::MainComponent()
       insertChainPanel(audioEngine.getMixer()),
       mixerView(audioEngine.getMixer()),
       statusBar(audioEngine),
-      preferencesDialog(audioEngine.getDeviceManager())
+      preferencesDialog(audioEngine.getDeviceManager(), audioEngine)
 {
     juce::LookAndFeel::setDefaultLookAndFeel(&lookAndFeel);
     tooltipWindow = std::make_unique<juce::TooltipWindow>(this, 600);
