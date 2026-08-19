@@ -412,6 +412,30 @@ int main()
                               "a fade out makes the clip's ending quieter");
                     }
                 }
+
+                // A fade that vanishes when the project is reopened is worse
+                // than no fade: the click comes back and nothing says why.
+                {
+                    clip->setFadeInSeconds(0.05);
+                    clip->setFadeOutSeconds(0.2);
+
+                    juce::String reloadError;
+                    auto reopened = djr::AudioClip::createFromFile(wav, sampleRate, formats, reloadError);
+                    check(reopened != nullptr, "the clip's file loads a second time");
+
+                    if (reopened != nullptr)
+                    {
+                        reopened->applyStateFromVar(clip->toVar());
+                        check(std::abs(reopened->getFadeInSeconds() - 0.05) < 1.0e-6,
+                              "a fade in survives saving and reopening");
+                        check(std::abs(reopened->getFadeOutSeconds() - 0.2) < 1.0e-6,
+                              "a fade out survives saving and reopening");
+                    }
+
+                    // The rest of this block expects the clip as it was.
+                    clip->setFadeInSeconds(0.0);
+                    clip->setFadeOutSeconds(0.0);
+                }
             }
 
             djr::Mixer audioMixer;
