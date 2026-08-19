@@ -41,6 +41,11 @@ public:
 
     /** The size this shell wants for the page currently showing. */
     juce::Rectangle<int> getPreferredBounds() const;
+    /** The smallest this shell may be without breaking what it holds. A plugin
+        GUI drawn into a native X11 child window is not clipped by anything
+        JUCE owns, so shrinking past it does not scroll - it spills.
+    */
+    juce::Rectangle<int> getMinimumBounds() const;
 
     std::function<void()> onPageChanged;
 
@@ -86,6 +91,12 @@ private:
     Page currentPage = Page::generator;
 
     juce::Component generatorPage;
+    /** A plugin GUI is a fixed-size picture, not a layout: it is never
+        stretched to the window. The viewport lets one bigger than the screen
+        be reached, and the holder centres one smaller than the window.
+    */
+    juce::Viewport generatorViewport;
+    juce::Component generatorHolder;
     juce::Component envelopePage;
     juce::Component miscPage;
     /** The plugin's own editor, or the generic panel when it has none. */
@@ -121,6 +132,9 @@ public:
     void closeButtonPressed() override;
 
 private:
+    /** Keeps the window from being dragged smaller than the page can survive. */
+    void applyResizeLimits();
+
     juce::AudioProcessor& audioProcessor;
     PluginShell* shell = nullptr;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginWindow)

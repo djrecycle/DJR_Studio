@@ -67,7 +67,11 @@ PluginShell::PluginShell(juce::AudioProcessor& processor, Track* track)
         generatorEditor.reset(generic);
     }
 
-    generatorPage.addAndMakeVisible(generatorEditor.get());
+    generatorViewport.setViewedComponent(&generatorHolder, false);
+    generatorViewport.setScrollBarsShown(true, true);
+    generatorPage.addAndMakeVisible(generatorViewport);
+
+    generatorHolder.addAndMakeVisible(generatorEditor.get());
     generatorEditor->addComponentListener(this);
 
     buildTopStrip();
@@ -97,7 +101,7 @@ PluginShell::~PluginShell()
     if (generatorEditor != nullptr)
     {
         generatorEditor->removeComponentListener(this);
-        generatorPage.removeChildComponent(generatorEditor.get());
+        generatorHolder.removeChildComponent(generatorEditor.get());
 
         if (auto* editor = dynamic_cast<juce::AudioProcessorEditor*>(generatorEditor.get()))
             if (audioProcessor.getActiveEditor() == editor)
@@ -240,6 +244,8 @@ void PluginShell::refreshPageVisibility()
 
 juce::Rectangle<int> PluginShell::getPreferredBounds() const
 {
+    auto wanted = juce::Rectangle<int>(settingsPageWidth, stripHeight + settingsPageHeight);
+
     if (currentPage == Page::generator && generatorEditor != nullptr)
     {
         // A plugin editor that has not sized itself yet reports nothing, and a
@@ -247,10 +253,32 @@ juce::Rectangle<int> PluginShell::getPreferredBounds() const
         const auto width = generatorEditor->getWidth() > 0 ? generatorEditor->getWidth() : 640;
         const auto height = generatorEditor->getHeight() > 0 ? generatorEditor->getHeight() : 420;
 
-        return { juce::jmax(460, width), stripHeight + height };
+        wanted = { juce::jmax(460, width), stripHeight + height };
     }
 
-    return { settingsPageWidth, stripHeight + settingsPageHeight };
+    // A GUI taller than the screen is one nobody can reach the bottom of, and
+    // the window manager will not save us from asking for it. Capped here; the
+    // viewport gives the rest back as scrolling.
+    if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+    {
+        const auto room = display->userArea;
+        wanted.setWidth(juce::jmin(wanted.getWidth(), room.getWidth() - 40));
+        wanted.setHeight(juce::jmin(wanted.getHeight(), room.getHeight() - 60));
+    }
+
+    return wanted;
+}
+
+juce::Rectangle<int> PluginShell::getMinimumBounds() const
+{
+    if (currentPage != Page::generator || generatorEditor == nullptr)
+        return { 360, stripHeight + 160 };
+
+    // The plugin's own size is the floor. Its GUI usually lives in a native
+    // child window, which the viewport cannot clip: made any smaller, the GUI
+    // spills over the window instead of scrolling inside it.
+    return { juce::jmax(360, generatorEditor->getWidth()),
+             stripHeight + juce::jmax(120, generatorEditor->getHeight()) };
 }
 
 void PluginShell::componentMovedOrResized(juce::Component& component, bool, bool wasResized)
@@ -260,7 +288,17 @@ void PluginShell::componentMovedOrResized(juce::Component& component, bool, bool
 
     // Only while its page is the one on screen; a resize behind the settings
     // pages would yank the window out from under whoever is using them.
-    if (currentPage == Page::generator && onPageChanged)
+    if (currentPage != Page::generator)
+        return;
+
+    // Only grow. The editor is centred in a holder that is at least as big as
+    // the viewport, so laying the page out resizes the holder, not the editor -
+    // but a plugin that reports its size late must still be able to open the
+    // window up. Shrinking here would fight a window the user made bigger.
+    const auto wanted = getPreferredBounds();
+
+    if (onPageChanged != nullptr
+        && (wanted.getWidth() > getWidth() || wanted.getHeight() > getHeight()))
         onPageChanged();
 }
 
@@ -454,8 +492,25 @@ void PluginShell::resized()
     envelopePage.setBounds(area.reduced(pagePadding));
     miscPage.setBounds(area.reduced(pagePadding));
 
+    generatorViewport.setBounds(generatorPage.getLocalBounds());
+
     if (generatorEditor != nullptr)
-        generatorEditor->setBounds(generatorPage.getLocalBounds());
+    {
+        // The holder is whichever is bigger, so a small GUI sits centred in the
+        // window and a large one gets somewhere to scroll to.
+        const auto editorSize = generatorEditor->getLocalBounds();
+        const auto visible = generatorViewport.getMaximumVisibleWidth() > 0
+            ? juce::Rectangle<int>(generatorViewport.getMaximumVisibleWidth(),
+                                   generatorViewport.getMaximumVisibleHeight())
+            : generatorPage.getLocalBounds();
+
+        generatorHolder.setSize(juce::jmax(editorSize.getWidth(), visible.getWidth()),
+                                juce::jmax(editorSize.getHeight(), visible.getHeight()));
+
+        generatorEditor->setTopLeftPosition(
+            (generatorHolder.getWidth() - editorSize.getWidth()) / 2,
+            (generatorHolder.getHeight() - editorSize.getHeight()) / 2);
+    }
 
     // Envelope page ----------------------------------------------------------
     {
@@ -562,6 +617,10 @@ PluginWindow::PluginWindow(juce::AudioProcessor& processor, Track* track)
         if (shell == nullptr)
             return;
 
+        // Limits before size: setContentComponentSize is clamped by them, and a
+        // stale floor from the previous page would clamp to the wrong number.
+        applyResizeLimits();
+
         const auto wanted = shell->getPreferredBounds();
         setContentComponentSize(wanted.getWidth(), wanted.getHeight());
     };
@@ -569,14 +628,39 @@ PluginWindow::PluginWindow(juce::AudioProcessor& processor, Track* track)
     const auto wanted = content->getPreferredBounds();
     setContentOwned(content.release(), false);
     setResizable(true, false);
-    centreWithSize(wanted.getWidth(), wanted.getHeight());
     setVisible(true);
+
+    // Order matters: the peer only exists once the window is on screen, and the
+    // X11 peer publishes the limits as WM_NORMAL_HINTS the next time its bounds
+    // change - so the sizing has to come after the limits, not before.
+    applyResizeLimits();
+    centreWithSize(wanted.getWidth(), wanted.getHeight());
 }
 
 PluginWindow::~PluginWindow()
 {
     shell = nullptr;
     clearContentComponent();
+}
+
+void PluginWindow::applyResizeLimits()
+{
+    if (shell == nullptr)
+        return;
+
+    const auto minimum = shell->getMinimumBounds();
+    const auto border = getBorderThickness().getTopAndBottom() + getTitleBarHeight();
+
+    setResizeLimits(minimum.getWidth(), minimum.getHeight() + border, 4000, 3000);
+
+    // Known gap: on this desktop the limits do not reach the window manager as
+    // WM_NORMAL_HINTS, so dragging the frame smaller than a plugin's own GUI is
+    // still possible, and that GUI - a native child window no JUCE viewport can
+    // clip - spills instead of scrolling. The constrainer is set anyway: it is
+    // what JUCE resizes by where the frame is not the window manager's, and it
+    // costs nothing where the hints are honoured.
+    if (auto* peer = getPeer())
+        peer->setConstrainer(getConstrainer());
 }
 
 juce::AudioProcessor& PluginWindow::getProcessor() noexcept
