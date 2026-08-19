@@ -106,6 +106,7 @@ PreferencesDialog::PreferencesDialog(juce::AudioDeviceManager& deviceManagerToUs
         deviceManager, 0, 0, 0, 0, true, true, true, false);
     addChildComponent(midiSelector.get());
 
+    refreshPluginPaths();
     refreshPageVisibility();
 }
 
@@ -210,31 +211,38 @@ void PreferencesDialog::paint(juce::Graphics& g)
     if (currentPage == 2)
     {
         Theme::drawCaption(g, content.removeFromTop(16), TRANS("Plugin search paths"));
-        content.removeFromTop(6);
 
-        // Asked of the formats themselves, so this page cannot drift out of
-        // step with what the scanner actually looks at.
-        juce::AudioPluginFormatManager formats;
-        formats.addDefaultFormats();
-
-        for (auto* format : formats.getFormats())
+        // Rectangles come from layOutPluginPaths, so the text lands exactly
+        // where the remove buttons were placed.
+        for (int i = 0; i < pluginFormatNames.size(); ++i)
         {
-            if (format == nullptr || content.getHeight() < 20)
-                continue;
+            if (i >= static_cast<int>(pluginFormatHeaders.size()))
+                break;
 
             g.setColour(Theme::mutedText());
             g.setFont(Theme::ui(11.0f, true));
-            g.drawText(format->getName(), content.removeFromTop(18), juce::Justification::centredLeft, false);
+            g.drawText(pluginFormatNames[i], pluginFormatHeaders[static_cast<size_t>(i)],
+                       juce::Justification::centredLeft, false);
+        }
 
-            const auto paths = PluginScanner::getSearchPathsFor(*format);
-            g.setColour(Theme::textSoft());
+        for (const auto& row : pluginPathRows)
+        {
+            if (row.bounds.isEmpty())
+                continue;
+
+            auto textArea = row.bounds.withTrimmedLeft(12);
+
+            if (row.removable)
+                textArea = textArea.withTrimmedRight(22);
+
+            // A missing folder is worth seeing: it is the usual reason a plugin
+            // the user swears is installed never turns up in a scan.
+            const auto missing = ! row.path.isDirectory();
+
+            g.setColour(missing ? Theme::amber()
+                                : row.removable ? Theme::textSoft() : Theme::faintText());
             g.setFont(Theme::mono(11.0f));
-
-            for (int i = 0; i < paths.getNumPaths() && content.getHeight() >= 18; ++i)
-                g.drawText("   " + paths[i].getFullPathName(),
-                           content.removeFromTop(18), juce::Justification::centredLeft, true);
-
-            content.removeFromTop(4);
+            g.drawText(row.path.getFullPathName(), textArea, juce::Justification::centredLeft, true);
         }
 
         return;
@@ -388,6 +396,8 @@ void PreferencesDialog::resized()
                                               scanButton.getPreferredWidth(),
                                               30));
 
+    layOutPluginPaths();
+
     auto languageRow = getToggleRowBounds(2).translated(0, toggleRowHeight + 22).withHeight(20);
     englishChip.setBounds(languageRow.removeFromLeft(englishChip.getPreferredWidth())
                               .withSizeKeepingCentre(englishChip.getPreferredWidth(), 18));
@@ -506,6 +516,41 @@ void PreferencesDialog::setScanRequestedCallback(std::function<void()> callback)
 
 void PreferencesDialog::buttonClicked(juce::Button* button)
 {
+    // The path buttons are rebuilt whenever the list changes, so they are
+    // matched by position rather than by a stored pointer.
+    for (int i = 0; i < addPathButtons.size(); ++i)
+    {
+        if (button != addPathButtons[i] || i >= pluginFormatNames.size())
+            continue;
+
+        chooseFolderForFormat(pluginFormatNames[i]);
+        return;
+    }
+
+    for (int i = 0; i < removePathButtons.size(); ++i)
+    {
+        if (button != removePathButtons[i])
+            continue;
+
+        // The nth remove button belongs to the nth removable row.
+        auto removableIndex = 0;
+
+        for (const auto& row : pluginPathRows)
+        {
+            if (! row.removable)
+                continue;
+
+            if (removableIndex++ != i)
+                continue;
+
+            PluginScanner::removeUserPath(row.formatName, row.path);
+            refreshPluginPaths();
+            return;
+        }
+
+        return;
+    }
+
     if (button == &closeButton)
     {
         if (closeCallback)
@@ -610,6 +655,121 @@ void PreferencesDialog::sliderValueChanged(juce::Slider* slider)
     repaint();
 }
 
+void PreferencesDialog::refreshPluginPaths()
+{
+    pluginPathRows.clear();
+    pluginFormatNames.clear();
+    removePathButtons.clear();
+    addPathButtons.clear();
+
+    // Asked of the formats themselves, so this page cannot drift out of step
+    // with what the scanner actually looks at.
+    juce::AudioPluginFormatManager formats;
+    formats.addDefaultFormats();
+
+    for (auto* format : formats.getFormats())
+    {
+        if (format == nullptr)
+            continue;
+
+        const auto formatName = format->getName();
+        pluginFormatNames.add(formatName);
+
+        const auto builtIn = PluginScanner::getBuiltInPathsFor(*format);
+
+        for (int i = 0; i < builtIn.getNumPaths(); ++i)
+            pluginPathRows.push_back({ formatName, builtIn[i], false, {} });
+
+        const auto userPaths = PluginScanner::getUserPathsFor(formatName);
+
+        for (int i = 0; i < userPaths.getNumPaths(); ++i)
+        {
+            pluginPathRows.push_back({ formatName, userPaths[i], true, {} });
+
+            auto* remove = new IconChipButton(TRANS("Remove this folder"), Icon::close);
+            remove->setDangerHover(true);
+            remove->setCornerSize(4.0f);
+            remove->setIconInset(5.0f);
+            remove->addListener(this);
+            addChildComponent(remove);
+            removePathButtons.add(remove);
+        }
+
+        auto* add = new PillButton(TRANS("Add folder"), Icon::plus, PillButton::Style::outline);
+        add->setCornerSize(5.0f);
+        add->addListener(this);
+        addChildComponent(add);
+        addPathButtons.add(add);
+    }
+
+    refreshPageVisibility();
+    resized();
+    repaint();
+}
+
+void PreferencesDialog::layOutPluginPaths()
+{
+    auto content = getContentBounds().withTrimmedTop(30 + 14);
+    content.removeFromTop(16 + 6);  // the "Plugin search paths" caption
+
+    pluginFormatHeaders.clear();
+
+    auto rowIndex = size_t {};
+    auto removeIndex = 0;
+
+    for (int formatIndex = 0; formatIndex < pluginFormatNames.size(); ++formatIndex)
+    {
+        const auto& formatName = pluginFormatNames[formatIndex];
+
+        pluginFormatHeaders.push_back(content.removeFromTop(18));
+
+        for (; rowIndex < pluginPathRows.size(); ++rowIndex)
+        {
+            auto& row = pluginPathRows[rowIndex];
+
+            if (row.formatName != formatName)
+                break;
+
+            auto bounds = content.removeFromTop(18);
+            row.bounds = bounds;
+
+            if (! row.removable)
+                continue;
+
+            if (auto* button = removePathButtons[removeIndex++])
+                button->setBounds(bounds.removeFromRight(18).withSizeKeepingCentre(16, 16));
+        }
+
+        auto buttonRow = content.removeFromTop(24);
+
+        if (auto* add = addPathButtons[formatIndex])
+            add->setBounds(buttonRow.removeFromLeft(add->getPreferredWidth())
+                               .withSizeKeepingCentre(add->getPreferredWidth(), 22));
+
+        content.removeFromTop(8);
+    }
+}
+
+void PreferencesDialog::chooseFolderForFormat(const juce::String& formatName)
+{
+    pathChooser = std::make_unique<juce::FileChooser>(
+        TRANS("Choose a folder to search for ") + formatName + TRANS(" plugins"),
+        juce::File::getSpecialLocation(juce::File::userHomeDirectory));
+
+    pathChooser->launchAsync(juce::FileBrowserComponent::openMode
+                                 | juce::FileBrowserComponent::canSelectDirectories,
+        [this, formatName] (const juce::FileChooser& chooser)
+        {
+            const auto folder = chooser.getResult();
+
+            if (folder == juce::File() || ! folder.isDirectory())
+                return;
+
+            if (PluginScanner::addUserPath(formatName, folder))
+                refreshPluginPaths();
+        });
+}
+
 void PreferencesDialog::refreshPageVisibility()
 {
     if (audioSelector != nullptr)
@@ -627,6 +787,12 @@ void PreferencesDialog::refreshPageVisibility()
     octaveUpButton.setVisible(currentPage == 1);
 
     scanButton.setVisible(currentPage == 2);
+
+    for (auto* button : removePathButtons)
+        button->setVisible(currentPage == 2);
+
+    for (auto* button : addPathButtons)
+        button->setVisible(currentPage == 2);
     scaleSlider.setVisible(currentPage == 3);
     tooltipsSwitch.setVisible(currentPage == 3);
     autoScrollSwitch.setVisible(currentPage == 3);

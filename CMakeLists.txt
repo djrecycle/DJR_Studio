@@ -108,6 +108,7 @@ set(DJR_STUDIO_SOURCES
     src/app/DJRStudioApplication.cpp
     src/app/MainWindow.cpp
     src/app/Localisation.cpp
+    src/app/Settings.cpp
     src/app/TypingKeyboard.cpp
     src/audio/AudioEngine.cpp
     src/plugins/PluginManager.cpp

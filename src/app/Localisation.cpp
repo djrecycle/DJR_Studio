@@ -1,5 +1,7 @@
 #include "Localisation.h"
 
+#include "Settings.h"
+
 namespace djr
 {
 
@@ -49,45 +51,17 @@ juce::String Localisation::languageToString(Language language)
     return language == Language::indonesian ? "id" : "en";
 }
 
-namespace
-{
-    juce::File getSettingsFile()
-    {
-        return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-            .getChildFile("DJR_Studio")
-            .getChildFile("settings.properties");
-    }
-}
-
 void Localisation::saveChoice(Language language)
 {
-    const auto file = getSettingsFile();
-    file.getParentDirectory().createDirectory();
-
-    // A tiny XML file rather than a PropertiesFile: this is the only setting
-    // that needs to outlive a run, and juce_data_structures is not linked here.
-    juce::PropertySet settings;
-    settings.setValue("language", languageToString(language));
-
-    if (auto xml = settings.createXml("DJR_Studio"))
-        xml->writeTo(file);
+    // Through the shared store rather than writing the file directly: the
+    // plugin search paths live in the same file, and a write that carried only
+    // the language used to take them with it.
+    Settings::set("language", languageToString(language));
 }
 
 Localisation::Language Localisation::loadSavedChoice()
 {
-    const auto file = getSettingsFile();
-
-    if (! file.existsAsFile())
-        return Language::english;
-
-    auto xml = juce::parseXML(file);
-
-    if (xml == nullptr)
-        return Language::english;
-
-    juce::PropertySet settings;
-    settings.restoreFromXml(*xml);
-    return languageFromString(settings.getValue("language", "en"));
+    return languageFromString(Settings::get("language", "en"));
 }
 
 juce::String Localisation::getIndonesianTranslations()

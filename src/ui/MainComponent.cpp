@@ -459,7 +459,10 @@ void MainComponent::handleCommand(AppCommand command)
             break;
 
         case AppCommand::showPreferences:
-            preferencesDialog.showPage(3);
+            // Audio Device, not Appearance: the first thing a new user needs is
+            // an input and an output, and the page was reachable only by
+            // knowing to click past the theme picker.
+            preferencesDialog.showPage(0);
             showDialog(&preferencesDialog);
             break;
 

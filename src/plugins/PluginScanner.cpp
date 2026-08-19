@@ -1,5 +1,7 @@
 #include "PluginScanner.h"
 
+#include "app/Settings.h"
+
 #include "utils/Logger.h"
 
 namespace djr
@@ -65,7 +67,7 @@ juce::FileSearchPath PluginScanner::getExtraPathsFor(const juce::String& formatN
     return paths;
 }
 
-juce::FileSearchPath PluginScanner::getSearchPathsFor(juce::AudioPluginFormat& format)
+juce::FileSearchPath PluginScanner::getBuiltInPathsFor(juce::AudioPluginFormat& format)
 {
     auto paths = format.getDefaultLocationsToSearch();
 
@@ -74,6 +76,78 @@ juce::FileSearchPath PluginScanner::getSearchPathsFor(juce::AudioPluginFormat& f
 
     for (int i = 0; i < extra.getNumPaths(); ++i)
         paths.addIfNotAlreadyThere(extra[i]);
+
+    return paths;
+}
+
+namespace
+{
+    /** One key per format, so adding an LV2 folder cannot disturb the VST3 list. */
+    juce::String userPathsKeyFor(const juce::String& formatName)
+    {
+        return "pluginPaths." + formatName;
+    }
+}
+
+juce::FileSearchPath PluginScanner::getUserPathsFor(const juce::String& formatName)
+{
+    // FileSearchPath round-trips through a semicolon-separated string, which is
+    // exactly what the settings file wants to hold.
+    return juce::FileSearchPath(Settings::get(userPathsKeyFor(formatName)));
+}
+
+bool PluginScanner::addUserPath(const juce::String& formatName, const juce::File& folder)
+{
+    if (! folder.isDirectory())
+        return false;
+
+    juce::AudioPluginFormatManager formats;
+    formats.addDefaultFormats();
+
+    // Already covered means nothing to add: a folder listed twice would be
+    // walked twice and every plugin in it reported twice.
+    for (auto* format : formats.getFormats())
+    {
+        if (format == nullptr || format->getName() != formatName)
+            continue;
+
+        const auto builtIn = getBuiltInPathsFor(*format);
+
+        for (int i = 0; i < builtIn.getNumPaths(); ++i)
+            if (builtIn[i] == folder)
+                return false;
+    }
+
+    auto paths = getUserPathsFor(formatName);
+
+    for (int i = 0; i < paths.getNumPaths(); ++i)
+        if (paths[i] == folder)
+            return false;
+
+    paths.add(folder);
+    Settings::set(userPathsKeyFor(formatName), paths.toString());
+    return true;
+}
+
+void PluginScanner::removeUserPath(const juce::String& formatName, const juce::File& folder)
+{
+    const auto paths = getUserPathsFor(formatName);
+    juce::FileSearchPath remaining;
+
+    for (int i = 0; i < paths.getNumPaths(); ++i)
+        if (paths[i] != folder)
+            remaining.add(paths[i]);
+
+    Settings::set(userPathsKeyFor(formatName), remaining.toString());
+}
+
+juce::FileSearchPath PluginScanner::getSearchPathsFor(juce::AudioPluginFormat& format)
+{
+    auto paths = getBuiltInPathsFor(format);
+    const auto userPaths = getUserPathsFor(format.getName());
+
+    for (int i = 0; i < userPaths.getNumPaths(); ++i)
+        paths.addIfNotAlreadyThere(userPaths[i]);
 
     return paths;
 }

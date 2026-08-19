@@ -34,8 +34,20 @@ public:
         somewhere it does not expect, and a missing folder costs nothing.
     */
     static juce::FileSearchPath getExtraPathsFor(const juce::String& formatName);
-    /** Every search path actually used for `formatName`, for the preferences
-        dialog to display.
+    /** The paths this build knows about on its own: the format's own defaults
+        plus getExtraPathsFor. These are never removable in the UI - drop one
+        and the app stops finding the plugins the distro installed.
+    */
+    static juce::FileSearchPath getBuiltInPathsFor(juce::AudioPluginFormat& format);
+
+    /** Folders the user added by hand, remembered between runs. */
+    static juce::FileSearchPath getUserPathsFor(const juce::String& formatName);
+    /** Returns false when the folder is already searched, built-in or not. */
+    static bool addUserPath(const juce::String& formatName, const juce::File& folder);
+    static void removeUserPath(const juce::String& formatName, const juce::File& folder);
+
+    /** Every search path actually used for `formatName`: built-in, then the
+        user's own. What the scanner walks and what the preferences dialog shows.
     */
     static juce::FileSearchPath getSearchPathsFor(juce::AudioPluginFormat& format);
     /** Names of the formats this build can host, for the UI to describe itself. */

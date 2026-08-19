@@ -6,6 +6,8 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <functional>
+#include <memory>
+#include <vector>
 
 namespace djr
 {
@@ -51,9 +53,30 @@ public:
     void setTypingOctaveCallback(std::function<void(int)> callback);
 
 private:
+    /** One line on the Plugins page. Built-in rows carry no remove button:
+        dropping a distro's own folder would quietly lose every plugin in it.
+    */
+    struct PluginPathRow
+    {
+        juce::String formatName;
+        juce::File path;
+        bool removable = false;
+        juce::Rectangle<int> bounds;
+    };
+
     void buttonClicked(juce::Button* button) override;
     void sliderValueChanged(juce::Slider* slider) override;
     void refreshPageVisibility();
+
+    /** Rebuilds the row list and the buttons that go with it, after a path is
+        added or removed and once at construction.
+    */
+    void refreshPluginPaths();
+    /** Places the rows and their buttons. Called from resized() so paint() only
+        ever reads rectangles somebody else worked out.
+    */
+    void layOutPluginPaths();
+    void chooseFolderForFormat(const juce::String& formatName);
 
     juce::Rectangle<int> getCardBounds() const;
     juce::Rectangle<int> getSidebarBounds() const;
@@ -98,6 +121,13 @@ private:
     std::function<void(bool)> typingKeyboardEnabledCallback;
     std::function<void(int)> typingKeymapCallback;
     std::function<void(int)> typingOctaveCallback;
+
+    std::vector<PluginPathRow> pluginPathRows;
+    juce::StringArray pluginFormatNames;
+    std::vector<juce::Rectangle<int>> pluginFormatHeaders;
+    juce::OwnedArray<IconChipButton> removePathButtons;
+    juce::OwnedArray<PillButton> addPathButtons;
+    std::unique_ptr<juce::FileChooser> pathChooser;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PreferencesDialog)
 };
