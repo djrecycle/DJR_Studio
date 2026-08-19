@@ -21,9 +21,9 @@ namespace
         const auto age = juce::Time::getCurrentTime() - time;
 
         if (age.inMinutes() < 1.0)  return TRANS("just now");
-        if (age.inMinutes() < 60.0) return juce::String(static_cast<int>(age.inMinutes())) + " menit lalu";
-        if (age.inHours() < 24.0)   return juce::String(static_cast<int>(age.inHours())) + " jam lalu";
-        if (age.inDays() < 30.0)    return juce::String(static_cast<int>(age.inDays())) + " hari lalu";
+        if (age.inMinutes() < 60.0) return juce::String(static_cast<int>(age.inMinutes())) + TRANS(" minutes ago");
+        if (age.inHours() < 24.0)   return juce::String(static_cast<int>(age.inHours())) + TRANS(" hours ago");
+        if (age.inDays() < 30.0)    return juce::String(static_cast<int>(age.inDays())) + TRANS(" days ago");
 
         return time.toString(true, false);
     }

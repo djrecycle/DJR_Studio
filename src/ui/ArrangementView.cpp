@@ -2685,7 +2685,7 @@ bool ArrangementView::applyToolToClip(int trackIndex, int clipIndex, double beat
             return true;
 
         case Tool::mute:
-            pushUndo("Mute clip");
+            pushUndo(TRANS("Mute clip"));
 
             if (midiTrack != nullptr)
             {
@@ -2709,7 +2709,7 @@ bool ArrangementView::applyToolToClip(int trackIndex, int clipIndex, double beat
             return true;
 
         case Tool::slice:
-            pushUndo("Potong clip");
+            pushUndo(TRANS("Slice clip"));
 
             if (midiTrack != nullptr)
             {
@@ -2740,7 +2740,7 @@ bool ArrangementView::applyToolToClip(int trackIndex, int clipIndex, double beat
             return true;
 
         case Tool::slip:
-            pushUndo("Slip clip");
+            pushUndo(TRANS("Slip clip"));
             // Handled as a drag, not a click.
             clipDrag.mode = ClipDragMode::move;
             clipDrag.trackIndex = trackIndex;
@@ -2792,7 +2792,7 @@ void ArrangementView::showPlacementContextMenu(int trackIndex, int placementInde
             auto edited = track->getPlacement(placementIndex);
 
             if (result >= 1 && result <= 3)
-                pushUndo("Ubah clip");
+                pushUndo(TRANS("Edit clip"));
 
             switch (result)
             {
@@ -2872,7 +2872,7 @@ void ArrangementView::showClipContextMenu(int trackIndex, int clipIndex)
 
     juce::PopupMenu menu;
     menu.addSectionHeader(clip->getName());
-    menu.addItem(1, "Warp ikut tempo", true, clip->isWarpEnabled());
+    menu.addItem(1, TRANS("Warp to tempo"), true, clip->isWarpEnabled());
     menu.addSubMenu(TRANS("Warp mode"), warpMenu, clip->isWarpEnabled());
     menu.addItem(2, TRANS("Restore full length"));
     menu.addSeparator();
@@ -2894,11 +2894,11 @@ void ArrangementView::showClipContextMenu(int trackIndex, int clipIndex)
                 return;
 
             if (result >= 1 && result <= 3)
-                pushUndo(result == 3 ? TRANS("Delete clip") : "Ubah clip");
+                pushUndo(result == 3 ? TRANS("Delete clip") : TRANS("Edit clip"));
 
             if (result == 10 || result == 11)
             {
-                pushUndo("Ubah warp");
+                pushUndo(TRANS("Change warp mode"));
                 selected->setWarpMode(result == 11 ? AudioClip::WarpMode::stretch
                                                    : AudioClip::WarpMode::resample);
 
@@ -2911,7 +2911,7 @@ void ArrangementView::showClipContextMenu(int trackIndex, int clipIndex)
 
             if (result >= 100)
             {
-                pushUndo("Ubah fade");
+                pushUndo(TRANS("Change fade"));
 
                 static constexpr double lengths[] = { 0.005, 0.01, 0.05, 0.25, 1.0 };
                 const auto isFadeOut = result >= 200;

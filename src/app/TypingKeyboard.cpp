@@ -88,7 +88,7 @@ TypingKeyboard::Keymap TypingKeyboard::getKeymap() const noexcept
 juce::String TypingKeyboard::getKeymapName(Keymap keymap)
 {
     return keymap == Keymap::flStudio ? "FL Studio (Z X C V / Q W E R)"
-                                      : "Sederhana (A S D F = C D E F)";
+                                      : TRANS("Simple (A S D F = C D E F)");
 }
 
 void TypingKeyboard::setBaseOctave(int octave)

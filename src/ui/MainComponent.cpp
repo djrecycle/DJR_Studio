@@ -486,7 +486,7 @@ void MainComponent::handleCommand(AppCommand command)
             // be tied back to the exact commit it came from.
             showError("DJR_Studio",
                       "DJR_Studio " + juce::String(DJR_STUDIO_VERSION_STRING)
-                          + "\nLinux DAW - masih beta"
+                          + "\n" + TRANS("Linux DAW - still in beta")
                           + "\nJUCE " + juce::SystemStats::getJUCEVersion());
             break;
 
@@ -852,7 +852,7 @@ void MainComponent::toggleRecording()
         audioEngine.getMetronome().cancelCountIn();
         audioEngine.getMetronome().setEnabled(metronomeWasEnabled);
         waitingForCountIn = false;
-        setStatusMessage("Count-in dibatalkan.");
+        setStatusMessage(TRANS("Count-in cancelled."));
         return;
     }
 
@@ -973,8 +973,8 @@ bool MainComponent::addAudioClipToTrack(int trackIndex, const juce::File& file, 
     arrangementView.repaint();
     markDirty();
 
-    setStatusMessage(name + " (" + juce::String(lengthSeconds, 1) + " s) masuk ke "
-                         + audioTrack->getName() + " di beat " + juce::String(startBeat, 2) + ".");
+    setStatusMessage(name + " (" + juce::String(lengthSeconds, 1) + TRANS(" s) landed on ")
+                         + audioTrack->getName() + TRANS(" at beat ") + juce::String(startBeat, 2) + ".");
     return true;
 }
 
@@ -1261,7 +1261,7 @@ void MainComponent::freezeTrack(int trackIndex)
         mixerView.repaint();
         arrangementView.repaint();
         markDirty();
-        setStatusMessage("Unfreeze: " + track->getName() + " kembali diproses langsung.");
+        setStatusMessage("Unfreeze: " + track->getName() + TRANS(" is processed live again."));
         return;
     }
 
@@ -1416,7 +1416,7 @@ void MainComponent::loadSelectedPluginIntoTrack(int pluginIndex, int trackIndex)
     }
 
     const auto description = plugins[pluginIndex];
-    setStatusMessage("Loading " + description.name + " ke " + track->getName() + "...");
+    setStatusMessage(TRANS("Loading ") + description.name + TRANS(" into ") + track->getName() + "...");
 
     pluginManager.createPluginAsync(description,
                                     audioEngine.getCurrentSampleRate(),
