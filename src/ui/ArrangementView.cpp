@@ -2862,9 +2862,18 @@ void ArrangementView::showClipContextMenu(int trackIndex, int clipIndex)
         return fadeMenu;
     };
 
+    // Two ways to follow the tempo, and which one is right depends on the
+    // material: a drum one-shot survives resampling, a melodic loop does not.
+    juce::PopupMenu warpMenu;
+    warpMenu.addItem(10, TRANS("Resample (pitch follows tempo)"), true,
+                     clip->getWarpMode() == AudioClip::WarpMode::resample);
+    warpMenu.addItem(11, TRANS("Stretch (keep pitch)"), true,
+                     clip->getWarpMode() == AudioClip::WarpMode::stretch);
+
     juce::PopupMenu menu;
     menu.addSectionHeader(clip->getName());
     menu.addItem(1, "Warp ikut tempo", true, clip->isWarpEnabled());
+    menu.addSubMenu(TRANS("Warp mode"), warpMenu, clip->isWarpEnabled());
     menu.addItem(2, TRANS("Restore full length"));
     menu.addSeparator();
     menu.addSubMenu(TRANS("Fade in"), buildFadeMenu(100, clip->getFadeInSeconds()));
@@ -2886,6 +2895,19 @@ void ArrangementView::showClipContextMenu(int trackIndex, int clipIndex)
 
             if (result >= 1 && result <= 3)
                 pushUndo(result == 3 ? TRANS("Delete clip") : "Ubah clip");
+
+            if (result == 10 || result == 11)
+            {
+                pushUndo("Ubah warp");
+                selected->setWarpMode(result == 11 ? AudioClip::WarpMode::stretch
+                                                   : AudioClip::WarpMode::resample);
+
+                // Built here rather than waiting for the next tempo change, or
+                // switching to stretch would keep resampling until one happened.
+                selected->prepareWarp(transport.getTempoBpm());
+                notifyClipEdited();
+                return;
+            }
 
             if (result >= 100)
             {
@@ -2911,6 +2933,7 @@ void ArrangementView::showClipContextMenu(int trackIndex, int clipIndex)
             {
                 case 1:
                     selected->setWarpEnabled(! selected->isWarpEnabled());
+                    selected->prepareWarp(transport.getTempoBpm());
                     break;
 
                 case 2:

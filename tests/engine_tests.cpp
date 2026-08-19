@@ -2,6 +2,7 @@
 // driven by hand so the assertions are deterministic.
 
 #include "audio/AlignmentDelay.h"
+#include "audio/TimeStretch.h"
 #include "audio/AudioClip.h"
 #include "audio/AutomationLane.h"
 #include "audio/BusTrack.h"
@@ -436,6 +437,62 @@ int main()
                     // The rest of this block expects the clip as it was.
                     clip->setFadeInSeconds(0.0);
                     clip->setFadeOutSeconds(0.0);
+                }
+
+                // Warp modes, on the clip rather than on the stretcher alone.
+                // The source is a 220 Hz tone recorded at 120 BPM; played at
+                // 240 the two modes must disagree about the pitch.
+                {
+                    const auto readPitch = [&] (double tempo)
+                    {
+                        // Enough blocks to cover a good stretch of the clip.
+                        const auto blocks = 60;
+                        juce::AudioBuffer<float> rendered(2, blockSize * blocks);
+                        rendered.clear();
+
+                        const auto beatsPerBlock = static_cast<double>(blockSize) / sampleRate
+                                                 * (tempo / 60.0);
+
+                        for (int block = 0; block < blocks; ++block)
+                        {
+                            juce::AudioBuffer<float> one(2, blockSize);
+                            one.clear();
+                            clip->addToBuffer(one, block * beatsPerBlock, tempo, sampleRate);
+
+                            for (int channel = 0; channel < 2; ++channel)
+                                rendered.copyFrom(channel, block * blockSize, one, channel, 0, blockSize);
+                        }
+
+                        auto crossings = 0;
+
+                        for (int i = 1; i < rendered.getNumSamples(); ++i)
+                            if (rendered.getSample(0, i - 1) <= 0.0f && rendered.getSample(0, i) > 0.0f)
+                                ++crossings;
+
+                        return crossings / (rendered.getNumSamples() / sampleRate);
+                    };
+
+                    clip->setStartBeat(0.0);
+                    clip->setOriginalTempo(120.0);
+                    clip->setWarpEnabled(true);
+
+                    clip->setWarpMode(djr::AudioClip::WarpMode::resample);
+                    const auto resampledPitch = readPitch(240.0);
+                    check(resampledPitch > 300.0,
+                          "resampling warp drags the pitch up with the tempo");
+
+                    clip->setWarpMode(djr::AudioClip::WarpMode::stretch);
+                    clip->prepareWarp(240.0);
+                    check(clip->isWarpPrepared(240.0),
+                          "the stretched copy is built for the tempo asked for");
+
+                    const auto stretchedPitch = readPitch(240.0);
+                    check(std::abs(stretchedPitch - 220.0) < 25.0,
+                          "stretch warp plays the same clip at the same pitch");
+
+                    // Back to how the rest of this block expects to find it.
+                    clip->setWarpMode(djr::AudioClip::WarpMode::resample);
+                    clip->setWarpEnabled(true);
                 }
             }
 
@@ -1118,6 +1175,64 @@ int main()
         midi.postLiveMessage(juce::MidiMessage::noteOn(1, 62, 0.8f));
         midi.postLiveMessage(juce::MidiMessage::noteOff(1, 62));
         check(midi.takeRecordedNotes().isEmpty(), "nothing is captured once disarmed");
+    }
+
+    // --- Time stretch: the tempo moves, the pitch does not ------------------
+    {
+        const auto stretchRate = 44100.0;
+        const auto seconds = 2.0;
+        const auto toneHz = 440.0;
+        const auto length = static_cast<int>(stretchRate * seconds);
+
+        juce::AudioBuffer<float> tone(1, length);
+
+        for (int i = 0; i < length; ++i)
+            tone.setSample(0, i, std::sin(juce::MathConstants<double>::twoPi * toneHz
+                                              * static_cast<double>(i) / stretchRate));
+
+        // Counting rising zero crossings is enough to read a sine's pitch, and
+        // needs nothing a test would have to pull in.
+        const auto measureHz = [stretchRate] (const juce::AudioBuffer<float>& buffer)
+        {
+            auto crossings = 0;
+
+            for (int i = 1; i < buffer.getNumSamples(); ++i)
+                if (buffer.getSample(0, i - 1) <= 0.0f && buffer.getSample(0, i) > 0.0f)
+                    ++crossings;
+
+            const auto duration = buffer.getNumSamples() / stretchRate;
+            return duration > 0.0 ? crossings / duration : 0.0;
+        };
+
+        check(std::abs(measureHz(tone) - toneHz) < 2.0, "the test tone reads as its own pitch");
+
+        // Slower: the same audio spread over more time.
+        const auto slower = djr::TimeStretch::process(tone, 0.5);
+        check(std::abs(slower.getNumSamples() - length * 2) < stretchRate * 0.05,
+              "stretching to half speed makes the audio about twice as long");
+        check(std::abs(measureHz(slower) - toneHz) < 10.0,
+              "and leaves the pitch where it was");
+
+        // Faster, the direction a warped loop usually goes.
+        const auto faster = djr::TimeStretch::process(tone, 2.0);
+        check(std::abs(faster.getNumSamples() - length / 2) < stretchRate * 0.05,
+              "stretching to double speed makes it about half as long");
+        check(std::abs(measureHz(faster) - toneHz) < 10.0,
+              "and still leaves the pitch alone");
+
+        // The comparison that gives the feature its name: resampling, which is
+        // what the old warp did, moves the pitch by exactly the rate.
+        juce::AudioBuffer<float> resampled(1, length / 2);
+
+        for (int i = 0; i < resampled.getNumSamples(); ++i)
+            resampled.setSample(0, i, tone.getSample(0, juce::jmin(length - 1, i * 2)));
+
+        check(measureHz(resampled) > toneHz * 1.5,
+              "resampling the same tone does move its pitch, which is the difference");
+
+        const auto unchanged = djr::TimeStretch::process(tone, 1.0);
+        check(unchanged.getNumSamples() == length,
+              "a rate of one returns the audio at its own length");
     }
 
     // --- Latency compensation: the delay that lines tracks up ---------------

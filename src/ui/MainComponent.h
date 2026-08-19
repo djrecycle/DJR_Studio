@@ -124,6 +124,8 @@ private:
     void openTrackPluginEditor(int trackIndex);
     void openTrackPlugin(int trackIndex, PluginSlot slot, int insertIndex);
     void showPluginWindow(juce::AudioPluginInstance& plugin, Track* track);
+    /** Rebuilds the pitch-preserved copies when the tempo has moved. */
+    void prepareWarpedClips();
     void selectTrack(int trackIndex);
     /** Pushes the current selection into every panel and the audio engine. */
     void applySelectionToPanels();
@@ -223,6 +225,9 @@ private:
     bool browserVisible = true;
     bool autoOpenPluginEditor = true;
     bool projectDirty = false;
+
+    /** Tempo the warped clips were last stretched for. */
+    double lastWarpTempo = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };

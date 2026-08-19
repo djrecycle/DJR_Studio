@@ -1,5 +1,7 @@
 #include "AudioClip.h"
 
+#include "TimeStretch.h"
+
 #include <cmath>
 
 namespace djr
@@ -236,6 +238,43 @@ void AudioClip::clampFadesToLength() noexcept
     setFadeOutSeconds(getFadeOutSeconds());
 }
 
+void AudioClip::setWarpMode(WarpMode mode) noexcept
+{
+    warpMode.store(mode, std::memory_order_release);
+}
+
+AudioClip::WarpMode AudioClip::getWarpMode() const noexcept
+{
+    return warpMode.load(std::memory_order_acquire);
+}
+
+bool AudioClip::isWarpPrepared(double tempoBpm) const noexcept
+{
+    const juce::SpinLock::ScopedLockType scoped(stretchLock);
+    return stretched != nullptr && std::abs(stretchedForTempo - tempoBpm) < 1.0e-9;
+}
+
+void AudioClip::prepareWarp(double tempoBpm)
+{
+    if (! isWarpEnabled() || getWarpMode() != WarpMode::stretch || samples == nullptr)
+        return;
+
+    if (isWarpPrepared(tempoBpm))
+        return;
+
+    const auto rate = getPlaybackRate(tempoBpm);
+
+    // At the tempo it was recorded at there is nothing to stretch, and running
+    // it through the stretcher anyway would only cost quality.
+    auto built = std::abs(rate - 1.0) < 1.0e-9
+        ? std::make_shared<const juce::AudioBuffer<float>>(*samples)
+        : std::make_shared<const juce::AudioBuffer<float>>(TimeStretch::process(*samples, rate));
+
+    const juce::SpinLock::ScopedLockType scoped(stretchLock);
+    stretched = std::move(built);
+    stretchedForTempo = tempoBpm;
+}
+
 double AudioClip::getFadeInSeconds() const noexcept
 {
     return fadeInSeconds.load(std::memory_order_acquire);
@@ -266,24 +305,55 @@ void AudioClip::addToBuffer(juce::AudioBuffer<float>& destination,
                             double sampleRate) const
 {
     const auto numSamples = destination.getNumSamples();
-    const auto totalSourceSamples = samples != nullptr ? samples->getNumSamples() : 0;
 
-    if (numSamples <= 0 || totalSourceSamples <= 0 || tempoBpm <= 0.0 || sampleRate <= 0.0)
+    if (numSamples <= 0 || samples == nullptr || tempoBpm <= 0.0 || sampleRate <= 0.0)
         return;
 
     if (isMuted())
         return;
 
-    const auto rate = getPlaybackRate(tempoBpm);
+    auto rate = getPlaybackRate(tempoBpm);
+
+    // In stretch mode the tempo has already been applied, once, to a copy of
+    // the audio. Playing that copy straight through is what keeps the pitch
+    // still: the resampling path below is exactly what moves it.
+    std::shared_ptr<const juce::AudioBuffer<float>> playing = samples;
+    auto sourceScale = 1.0;
+
+    if (isWarpEnabled() && getWarpMode() == WarpMode::stretch)
+    {
+        const juce::SpinLock::ScopedTryLockType scoped(stretchLock);
+
+        // A failed try-lock, or a copy built for another tempo, falls back to
+        // resampling for this block rather than dropping the clip.
+        if (scoped.isLocked() && stretched != nullptr
+            && std::abs(stretchedForTempo - tempoBpm) < 1.0e-9)
+        {
+            playing = stretched;
+
+            // Everything below measures in source samples; the stretched copy
+            // holds the same audio at a different length, so the trim points
+            // move with it.
+            sourceScale = 1.0 / rate;
+            rate = 1.0;
+        }
+    }
+
+    const auto totalSourceSamples = playing != nullptr ? playing->getNumSamples() : 0;
+
+    if (totalSourceSamples <= 0)
+        return;
+
     const auto secondsPerBeat = 60.0 / tempoBpm;
 
     // Timeline seconds elapsed inside the clip, converted to source seconds.
     const auto timelineSeconds = (blockStartBeat - getStartBeat()) * secondsPerBeat;
-    auto readPosition = (getSourceOffsetSeconds() + timelineSeconds * rate) * sampleRate;
+    const auto offsetSamples = getSourceOffsetSeconds() * sampleRate * sourceScale;
+    auto readPosition = offsetSamples + timelineSeconds * rate * sampleRate;
 
-    const auto firstSample = getSourceOffsetSeconds() * sampleRate;
+    const auto firstSample = offsetSamples;
     const auto lastSample = juce::jmin(static_cast<double>(totalSourceSamples),
-                                       (getSourceOffsetSeconds() + getPlayLengthSeconds()) * sampleRate);
+                                       offsetSamples + getPlayLengthSeconds() * sampleRate * sourceScale);
 
     auto writeOffset = 0;
 
@@ -345,8 +415,8 @@ void AudioClip::addToBuffer(juce::AudioBuffer<float>& destination,
 
         for (int channel = 0; channel < numChannels; ++channel)
         {
-            const auto sourceChannel = juce::jmin(channel, samples->getNumChannels() - 1);
-            const auto* data = samples->getReadPointer(sourceChannel);
+            const auto sourceChannel = juce::jmin(channel, playing->getNumChannels() - 1);
+            const auto* data = playing->getReadPointer(sourceChannel);
 
             // Linear interpolation: enough for varispeed playback of a clip.
             const auto value = data[index] + (data[nextIndex] - data[index]) * fraction;
@@ -370,6 +440,7 @@ juce::var AudioClip::toVar() const
     object->setProperty("muted", isMuted());
     object->setProperty("fadeIn", getFadeInSeconds());
     object->setProperty("fadeOut", getFadeOutSeconds());
+    object->setProperty("warpMode", getWarpMode() == WarpMode::stretch ? "stretch" : "resample");
     return object;
 }
 
@@ -384,6 +455,12 @@ void AudioClip::applyStateFromVar(const juce::var& value)
     setOriginalTempo(static_cast<double>(object->getProperty("originalTempo")));
     setGain(static_cast<float>(static_cast<double>(object->getProperty("gain"))));
     setWarpEnabled(static_cast<bool>(object->getProperty("warp")));
+
+    // Absent in files written before there was a choice, and those clips were
+    // all resampling - so that is what the fallback has to be.
+    setWarpMode(object->getProperty("warpMode").toString() == "stretch"
+                    ? WarpMode::stretch
+                    : WarpMode::resample);
     setMuted(static_cast<bool>(object->getProperty("muted")));
 
     // Trim last, and clamped to what the decoded file actually holds.
@@ -447,6 +524,7 @@ std::unique_ptr<AudioClip> AudioClip::duplicate() const
     copy->gain.store(getGain(), std::memory_order_release);
     copy->fadeInSeconds.store(getFadeInSeconds(), std::memory_order_release);
     copy->fadeOutSeconds.store(getFadeOutSeconds(), std::memory_order_release);
+    copy->warpMode.store(getWarpMode(), std::memory_order_release);
 
     return copy;
 }

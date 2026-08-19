@@ -49,8 +49,34 @@ public:
     /** Drags the right edge. */
     void trimEnd(double newEndBeat, double tempoBpm) noexcept;
 
-    /** When warped the clip keeps a fixed length in beats and follows the tempo
-        by resampling, so its pitch moves with it. Off, it plays at its own rate.
+    /** How a warped clip follows the tempo. */
+    enum class WarpMode
+    {
+        /** Plays the source faster or slower. Cheap, and the pitch moves with
+            the tempo - right for a one-shot, wrong for a melodic loop.
+        */
+        resample,
+        /** Keeps the pitch where it was. Costs a stretched copy of the audio,
+            rebuilt whenever the tempo changes.
+        */
+        stretch
+    };
+
+    void setWarpMode(WarpMode mode) noexcept;
+    WarpMode getWarpMode() const noexcept;
+
+    /** Builds the stretched copy this clip needs at `tempoBpm`, if it needs one.
+
+        Message thread only, and not cheap: a few-second clip is instant, a long
+        take takes about a second. Does nothing when the clip is not warped, not
+        in stretch mode, or already holds the copy for this tempo.
+    */
+    void prepareWarp(double tempoBpm);
+    /** True when a stretched copy for `tempoBpm` is ready to play. */
+    bool isWarpPrepared(double tempoBpm) const noexcept;
+
+    /** When warped the clip keeps a fixed length in beats and follows the tempo.
+        Off, it plays at its own rate.
     */
     void setWarpEnabled(bool shouldWarp) noexcept;
     bool isWarpEnabled() const noexcept;
@@ -134,6 +160,15 @@ private:
     std::atomic<float> gain { 1.0f };
     std::atomic<double> fadeInSeconds { 0.0 };
     std::atomic<double> fadeOutSeconds { 0.0 };
+    std::atomic<WarpMode> warpMode { WarpMode::resample };
+
+    /** The pitch-preserved copy and the tempo it was built for. Guarded like
+        the rest of this codebase guards audio-thread reads: a try-lock, and a
+        lost race costs one block of the un-stretched path.
+    */
+    mutable juce::SpinLock stretchLock;
+    std::shared_ptr<const juce::AudioBuffer<float>> stretched;
+    double stretchedForTempo = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioClip)
 };

@@ -772,6 +772,33 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
     return false;
 }
 
+void MainComponent::prepareWarpedClips()
+{
+    const auto tempo = audioEngine.getTransport().getTempoBpm();
+
+    if (std::abs(tempo - lastWarpTempo) < 1.0e-9)
+        return;
+
+    // Only clips that asked for pitch-preserved warp do any work here, and each
+    // one keeps its own copy once built. Stretching a long take costs about a
+    // second, which is why it is not attempted for every clip in the session.
+    auto& mixer = audioEngine.getMixer();
+
+    for (int i = 0; i < mixer.getNumTracks(); ++i)
+    {
+        auto* track = dynamic_cast<AudioTrack*>(mixer.getTrack(i));
+
+        if (track == nullptr)
+            continue;
+
+        for (int clipIndex = 0; clipIndex < track->getNumClips(); ++clipIndex)
+            if (auto* clip = track->getClip(clipIndex))
+                clip->prepareWarp(tempo);
+    }
+
+    lastWarpTempo = tempo;
+}
+
 void MainComponent::timerCallback()
 {
     // Here rather than at startup: the device can be swapped in Preferences,
@@ -783,6 +810,7 @@ void MainComponent::timerCallback()
     // latency while it runs - an oversampling switch is the usual reason - and
     // nothing tells the host when it does.
     audioEngine.getMixer().refreshLatencyCompensation();
+    prepareWarpedClips();
 
     // The count-in runs on the audio thread; this is where we notice it ended.
     if (waitingForCountIn && ! audioEngine.getMetronome().isCountingIn())

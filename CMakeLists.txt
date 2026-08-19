@@ -83,6 +83,7 @@ set(DJR_ENGINE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Track.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioTrack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioClip.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/TimeStretch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/BusTrack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/MidiTrack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AlignmentDelay.cpp
