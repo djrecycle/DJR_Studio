@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # The numeric part is set here; the rest is derived from git so a build can
 # always be traced back to the exact commit it came from. Bump DJR_VERSION_BASE
 # for a release and tag it; everything else follows.
-set(DJR_VERSION_BASE "0.2.0")
+set(DJR_VERSION_BASE "0.2.1")
 set(DJR_VERSION_STAGE "beta")
 
 # Deliberately the commit hash, not "git describe": once a release is tagged,
