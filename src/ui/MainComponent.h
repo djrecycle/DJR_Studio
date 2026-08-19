@@ -123,7 +123,7 @@ private:
     void loadSelectedPluginIntoTrack(int pluginIndex, int trackIndex);
     void openTrackPluginEditor(int trackIndex);
     void openTrackPlugin(int trackIndex, PluginSlot slot, int insertIndex);
-    void showPluginWindow(juce::AudioPluginInstance& plugin);
+    void showPluginWindow(juce::AudioPluginInstance& plugin, Track* track);
     void selectTrack(int trackIndex);
     /** Pushes the current selection into every panel and the audio engine. */
     void applySelectionToPanels();

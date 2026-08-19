@@ -1419,7 +1419,7 @@ void MainComponent::openTrackPlugin(int trackIndex, PluginSlot slot, int insertI
     {
         if (auto* synth = track->getInstrument())
         {
-            showPluginWindow(*synth);
+            showPluginWindow(*synth, track);
             return;
         }
 
@@ -1440,10 +1440,10 @@ void MainComponent::openTrackPlugin(int trackIndex, PluginSlot slot, int insertI
                                     slot == PluginSlot::insert ? insertIndex : track->getPluginCount() - 1);
 
     if (auto* plugin = track->getPlugin(index))
-        showPluginWindow(*plugin);
+        showPluginWindow(*plugin, track);
 }
 
-void MainComponent::showPluginWindow(juce::AudioPluginInstance& plugin)
+void MainComponent::showPluginWindow(juce::AudioPluginInstance& plugin, Track* track)
 {
     for (auto& window : pluginWindows)
     {
@@ -1455,7 +1455,7 @@ void MainComponent::showPluginWindow(juce::AudioPluginInstance& plugin)
         }
     }
 
-    auto window = std::make_unique<PluginWindow>(plugin);
+    auto window = std::make_unique<PluginWindow>(plugin, track);
     window->toFront(true);
     pluginWindows.push_back(std::move(window));
 }
