@@ -68,6 +68,10 @@ private:
     juce::Rectangle<int> getFaderHandle() const;
     juce::Rectangle<int> getMeterArea() const;
     juce::Rectangle<int> getPanKnobArea() const;
+    /** Everything under the fader, in one place, so the send row and the button
+        row cannot be measured from opposite ends and land on each other.
+    */
+    juce::Rectangle<int> getRowsBelowFader() const;
     juce::Rectangle<int> getButtonRow() const;
     juce::Rectangle<int> getMuteBounds() const;
     juce::Rectangle<int> getSoloBounds() const;

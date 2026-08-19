@@ -220,10 +220,7 @@ juce::Rectangle<int> MixerChannelStrip::getSendRowBounds() const
     if (getAssignedSends().empty())
         return {};
 
-    auto area = getLocalBounds().reduced(stripPadding);
-    area.removeFromBottom(dbRowHeight);
-    area.removeFromBottom(buttonRowHeight + rowGap);
-    return area.removeFromBottom(sendRowHeight);
+    return getRowsBelowFader().removeFromTop(sendRowHeight);
 }
 
 juce::Rectangle<int> MixerChannelStrip::getSendBarBounds(int slot) const
@@ -572,15 +569,29 @@ void MixerChannelStrip::timerCallback()
 
 int MixerChannelStrip::getFaderRowHeight() const
 {
-    auto fixed = stripPadding * 2 + nameRowHeight + rowGap + panRowHeight + rowGap
-               + rowGap + buttonRowHeight + dbRowHeight;
+    // Every row below the fader, in the order they are stacked. The send row
+    // used to be measured from the bottom while the buttons were measured from
+    // the top, and neither knew about the other: assigning a send put the send
+    // bar straight on top of the M and S buttons.
+    auto fixed = stripPadding * 2
+               + nameRowHeight + rowGap
+               + panRowHeight + rowGap
+               + rowGap
+               + buttonRowHeight + rowGap
+               + dbRowHeight;
 
-    // The send row is carved off the bottom, so the fader has to give up the
-    // space or its meters and the send bars end up drawn on top of each other.
     if (! getAssignedSends().empty())
-        fixed += sendRowHeight;
+        fixed += sendRowHeight + rowGap;
 
     return juce::jmax(faderRowHeight, getHeight() - fixed);
+}
+
+juce::Rectangle<int> MixerChannelStrip::getRowsBelowFader() const
+{
+    auto area = getLocalBounds().reduced(stripPadding);
+    area.removeFromTop(nameRowHeight + rowGap + panRowHeight + rowGap
+                           + getFaderRowHeight() + rowGap);
+    return area;
 }
 
 juce::Rectangle<int> MixerChannelStrip::getFaderColumn() const
@@ -616,8 +627,11 @@ juce::Rectangle<int> MixerChannelStrip::getPanKnobArea() const
 
 juce::Rectangle<int> MixerChannelStrip::getButtonRow() const
 {
-    auto area = getLocalBounds().reduced(stripPadding);
-    area.removeFromTop(nameRowHeight + rowGap + panRowHeight + rowGap + getFaderRowHeight() + rowGap);
+    auto area = getRowsBelowFader();
+
+    if (! getAssignedSends().empty())
+        area.removeFromTop(sendRowHeight + rowGap);
+
     return area.removeFromTop(buttonRowHeight);
 }
 
