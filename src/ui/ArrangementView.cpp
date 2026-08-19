@@ -338,6 +338,56 @@ void ArrangementView::paint(juce::Graphics& g)
                                        centreY + juce::jmax(0.5f, amplitude));
                 }
 
+                // The fades, drawn as the wedge they take out of the waveform.
+                // A fade you cannot see is one you forget you set.
+                const auto drawFade = [&g, &body] (double fraction, bool fromLeft)
+                {
+                    if (fraction <= 0.0)
+                        return;
+
+                    const auto width = static_cast<float>(fraction) * body.getWidth();
+
+                    if (width < 1.0f)
+                        return;
+
+                    juce::Path wedge;
+
+                    // The wedge covers what the fade takes away: loudest at the
+                    // outer edge of the clip, nothing by the time the ramp ends.
+                    if (fromLeft)
+                    {
+                        wedge.startNewSubPath(static_cast<float>(body.getX()),
+                                              static_cast<float>(body.getY()));
+                        wedge.lineTo(body.getX() + width, static_cast<float>(body.getY()));
+                        wedge.lineTo(static_cast<float>(body.getX()),
+                                     static_cast<float>(body.getBottom()));
+                    }
+                    else
+                    {
+                        wedge.startNewSubPath(static_cast<float>(body.getRight()),
+                                              static_cast<float>(body.getY()));
+                        wedge.lineTo(body.getRight() - width, static_cast<float>(body.getY()));
+                        wedge.lineTo(static_cast<float>(body.getRight()),
+                                     static_cast<float>(body.getBottom()));
+                    }
+
+                    wedge.closeSubPath();
+                    g.setColour(Theme::windowBackground().withAlpha(0.62f));
+                    g.fillPath(wedge);
+
+                    // The ramp itself, stroked. The shading alone reads as a
+                    // smudge on a small clip; the line is what says "fade".
+                    g.setColour(Theme::text().withAlpha(0.85f));
+                    g.drawLine(fromLeft ? body.getX() : body.getRight(),
+                               static_cast<float>(body.getBottom()),
+                               fromLeft ? body.getX() + width : body.getRight() - width,
+                               static_cast<float>(body.getY()),
+                               1.2f);
+                };
+
+                drawFade(clip.fadeInFraction, true);
+                drawFade(clip.fadeOutFraction, false);
+
                 if (clip.warped)
                 {
                     g.setColour(Theme::windowBackground().withAlpha(0.7f));
@@ -1701,6 +1751,11 @@ std::vector<ArrangementView::Clip> ArrangementView::getClipsForTrack(int trackIn
             clip.trimEndFraction = source->getTrimEndFraction();
             clip.warped = source->isWarpEnabled();
             clip.muted = source->isMuted();
+
+            const auto playLength = juce::jmax(1.0e-9, source->getPlayLengthSeconds());
+            clip.fadeInFraction = juce::jlimit(0.0, 1.0, source->getFadeInSeconds() / playLength);
+            clip.fadeOutFraction = juce::jlimit(0.0, 1.0, source->getFadeOutSeconds() / playLength);
+
             clips.push_back(clip);
         }
     }
@@ -2782,10 +2837,38 @@ void ArrangementView::showClipContextMenu(int trackIndex, int clipIndex)
     if (clip == nullptr)
         return;
 
+    // A take almost never starts on a zero crossing, so the edges click without
+    // these. Offered as lengths rather than a toggle: how long a fade needs to
+    // be depends on what is under it.
+    const auto fadeLengths = { 0.005, 0.01, 0.05, 0.25, 1.0 };
+
+    const auto describe = [] (double seconds)
+    {
+        return seconds < 1.0 ? juce::String(juce::roundToInt(seconds * 1000.0)) + " ms"
+                             : juce::String(seconds, 1) + " s";
+    };
+
+    const auto buildFadeMenu = [&fadeLengths, &describe] (int baseId, double current)
+    {
+        juce::PopupMenu fadeMenu;
+        fadeMenu.addItem(baseId, TRANS("Off"), true, current <= 0.0);
+
+        auto id = baseId + 1;
+
+        for (const auto seconds : fadeLengths)
+            fadeMenu.addItem(id++, describe(seconds), true,
+                             std::abs(current - seconds) < 1.0e-6);
+
+        return fadeMenu;
+    };
+
     juce::PopupMenu menu;
     menu.addSectionHeader(clip->getName());
     menu.addItem(1, "Warp ikut tempo", true, clip->isWarpEnabled());
     menu.addItem(2, TRANS("Restore full length"));
+    menu.addSeparator();
+    menu.addSubMenu(TRANS("Fade in"), buildFadeMenu(100, clip->getFadeInSeconds()));
+    menu.addSubMenu(TRANS("Fade out"), buildFadeMenu(200, clip->getFadeOutSeconds()));
     menu.addSeparator();
     menu.addItem(3, TRANS("Delete clip"));
 
@@ -2803,6 +2886,26 @@ void ArrangementView::showClipContextMenu(int trackIndex, int clipIndex)
 
             if (result >= 1 && result <= 3)
                 pushUndo(result == 3 ? TRANS("Delete clip") : "Ubah clip");
+
+            if (result >= 100)
+            {
+                pushUndo("Ubah fade");
+
+                static constexpr double lengths[] = { 0.005, 0.01, 0.05, 0.25, 1.0 };
+                const auto isFadeOut = result >= 200;
+                const auto choice = result - (isFadeOut ? 200 : 100);
+                const auto seconds = choice == 0 || choice > static_cast<int>(std::size(lengths))
+                    ? 0.0
+                    : lengths[choice - 1];
+
+                if (isFadeOut)
+                    selected->setFadeOutSeconds(seconds);
+                else
+                    selected->setFadeInSeconds(seconds);
+
+                notifyClipEdited();
+                return;
+            }
 
             switch (result)
             {

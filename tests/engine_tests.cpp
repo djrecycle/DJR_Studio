@@ -352,6 +352,68 @@ int main()
                   "clip length in beats follows the tempo");
             check(! clip->getPeaks().empty(), "the clip builds a waveform envelope");
 
+            // Fades -----------------------------------------------------------
+            {
+                // A tone starting at full amplitude is exactly the click a fade
+                // exists to remove, so the first block is where it shows.
+                const auto blockSeconds = static_cast<double>(blockSize) / sampleRate;
+
+                juce::AudioBuffer<float> plain(2, blockSize);
+                plain.clear();
+                clip->setStartBeat(0.0);
+                clip->addToBuffer(plain, 0.0, 120.0, sampleRate);
+                const auto openingWithoutFade = plain.getMagnitude(0, 0, blockSize);
+
+                auto faded = clip->duplicate();
+                check(faded != nullptr, "a clip can be duplicated to fade separately");
+
+                if (faded != nullptr)
+                {
+                    // Long enough that the whole first block sits inside it.
+                    faded->setFadeInSeconds(blockSeconds * 4.0);
+                    check(std::abs(faded->getFadeInSeconds() - blockSeconds * 4.0) < 1.0e-9,
+                          "a fade in is remembered");
+
+                    juce::AudioBuffer<float> ramped(2, blockSize);
+                    ramped.clear();
+                    faded->addToBuffer(ramped, 0.0, 120.0, sampleRate);
+
+                    check(ramped.getMagnitude(0, 0, blockSize) < openingWithoutFade * 0.5f,
+                          "a fade in makes the clip's opening quieter");
+                    check(std::abs(ramped.getSample(0, 0)) < 1.0e-4f,
+                          "and starts it from silence");
+
+                    // Asking for more than the clip holds is clamped, not obeyed.
+                    faded->setFadeOutSeconds(9999.0);
+                    check(faded->getFadeOutSeconds() <= faded->getPlayLengthSeconds() + 1.0e-9,
+                          "a fade never outruns the clip it is on");
+
+                    // The other edge. The last block of a two second clip at
+                    // 120 BPM sits just under four beats in.
+                    const auto endBeat = (2.0 - blockSeconds) * 2.0;
+
+                    juce::AudioBuffer<float> tail(2, blockSize);
+                    tail.clear();
+                    clip->addToBuffer(tail, endBeat, 120.0, sampleRate);
+                    const auto endingWithoutFade = tail.getMagnitude(0, 0, blockSize);
+
+                    auto fadedOut = clip->duplicate();
+
+                    if (fadedOut != nullptr)
+                    {
+                        fadedOut->setFadeOutSeconds(blockSeconds * 4.0);
+
+                        juce::AudioBuffer<float> quietTail(2, blockSize);
+                        quietTail.clear();
+                        fadedOut->addToBuffer(quietTail, endBeat, 120.0, sampleRate);
+
+                        check(endingWithoutFade > 0.0f
+                                  && quietTail.getMagnitude(0, 0, blockSize) < endingWithoutFade * 0.5f,
+                              "a fade out makes the clip's ending quieter");
+                    }
+                }
+            }
+
             djr::Mixer audioMixer;
             audioMixer.prepare(sampleRate, blockSize);
 

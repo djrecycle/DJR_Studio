@@ -157,6 +157,7 @@ void AudioClip::trimStart(double newStartBeat, double tempoBpm) noexcept
     sourceOffsetSeconds.store(newOffset, std::memory_order_release);
     playLengthSeconds.store(newLength, std::memory_order_release);
     setStartBeat(currentStart + appliedBeats);
+    clampFadesToLength();
 }
 
 void AudioClip::trimEnd(double newEndBeat, double tempoBpm) noexcept
@@ -172,6 +173,7 @@ void AudioClip::trimEnd(double newEndBeat, double tempoBpm) noexcept
 
     playLengthSeconds.store(juce::jlimit(minimumLengthSeconds, available, requestedSeconds),
                             std::memory_order_release);
+    clampFadesToLength();
 }
 
 void AudioClip::setWarpEnabled(bool shouldWarp) noexcept
@@ -226,6 +228,38 @@ double AudioClip::getPlaybackRate(double tempoBpm) const noexcept
     return original > 0.0 ? tempoBpm / original : 1.0;
 }
 
+void AudioClip::clampFadesToLength() noexcept
+{
+    // Called after anything that shortens the clip: the fades were clamped
+    // against the length it had then, not the one it has now.
+    setFadeInSeconds(getFadeInSeconds());
+    setFadeOutSeconds(getFadeOutSeconds());
+}
+
+double AudioClip::getFadeInSeconds() const noexcept
+{
+    return fadeInSeconds.load(std::memory_order_acquire);
+}
+
+void AudioClip::setFadeInSeconds(double seconds) noexcept
+{
+    // Never longer than what plays: a fade that outruns the clip would still be
+    // climbing when the audio stops, which is the click it exists to remove.
+    fadeInSeconds.store(juce::jlimit(0.0, getPlayLengthSeconds(), seconds),
+                        std::memory_order_release);
+}
+
+double AudioClip::getFadeOutSeconds() const noexcept
+{
+    return fadeOutSeconds.load(std::memory_order_acquire);
+}
+
+void AudioClip::setFadeOutSeconds(double seconds) noexcept
+{
+    fadeOutSeconds.store(juce::jlimit(0.0, getPlayLengthSeconds(), seconds),
+                         std::memory_order_release);
+}
+
 void AudioClip::addToBuffer(juce::AudioBuffer<float>& destination,
                             double blockStartBeat,
                             double tempoBpm,
@@ -271,10 +305,36 @@ void AudioClip::addToBuffer(juce::AudioBuffer<float>& destination,
     const auto numChannels = destination.getNumChannels();
     const auto clipGain = getGain();
 
+    // Capped against what actually plays as well as clamped when set: trimming
+    // a clip shorter afterwards must not leave a fade hanging off the end.
+    const auto playSamples = juce::jmax(1.0, lastSample - firstSample);
+    const auto fadeInSamples = juce::jmin(getFadeInSeconds() * sampleRate, playSamples);
+    const auto fadeOutSamples = juce::jmin(getFadeOutSeconds() * sampleRate, playSamples);
+
     for (int sample = writeOffset; sample < numSamples; ++sample)
     {
         if (readPosition >= lastSample)
             break;
+
+        auto gainHere = clipGain;
+
+        // Linear, and multiplied where they overlap on a very short clip: that
+        // dips the middle but never steps, which is the whole point.
+        if (fadeInSamples > 0.0)
+        {
+            const auto into = readPosition - firstSample;
+
+            if (into < fadeInSamples)
+                gainHere *= static_cast<float>(juce::jmax(0.0, into) / fadeInSamples);
+        }
+
+        if (fadeOutSamples > 0.0)
+        {
+            const auto remaining = lastSample - readPosition;
+
+            if (remaining < fadeOutSamples)
+                gainHere *= static_cast<float>(juce::jmax(0.0, remaining) / fadeOutSamples);
+        }
 
         const auto index = static_cast<int>(readPosition);
         const auto fraction = static_cast<float>(readPosition - index);
@@ -290,7 +350,7 @@ void AudioClip::addToBuffer(juce::AudioBuffer<float>& destination,
 
             // Linear interpolation: enough for varispeed playback of a clip.
             const auto value = data[index] + (data[nextIndex] - data[index]) * fraction;
-            destination.addSample(channel, sample, value * clipGain);
+            destination.addSample(channel, sample, value * gainHere);
         }
 
         readPosition += rate;
@@ -308,6 +368,8 @@ juce::var AudioClip::toVar() const
     object->setProperty("gain", static_cast<double>(getGain()));
     object->setProperty("warp", isWarpEnabled());
     object->setProperty("muted", isMuted());
+    object->setProperty("fadeIn", getFadeInSeconds());
+    object->setProperty("fadeOut", getFadeOutSeconds());
     return object;
 }
 
@@ -334,6 +396,11 @@ void AudioClip::applyStateFromVar(const juce::var& value)
 
     sourceOffsetSeconds.store(offset, std::memory_order_release);
     playLengthSeconds.store(length, std::memory_order_release);
+
+    // After the trim, so the setters clamp against the length this clip really
+    // has rather than the one it had a moment ago.
+    setFadeInSeconds(static_cast<double>(object->getProperty("fadeIn")));
+    setFadeOutSeconds(static_cast<double>(object->getProperty("fadeOut")));
 }
 
 juce::File AudioClip::getFileFromVar(const juce::var& value)
@@ -378,6 +445,8 @@ std::unique_ptr<AudioClip> AudioClip::duplicate() const
     copy->warpEnabled.store(isWarpEnabled(), std::memory_order_release);
     copy->muted.store(isMuted(), std::memory_order_release);
     copy->gain.store(getGain(), std::memory_order_release);
+    copy->fadeInSeconds.store(getFadeInSeconds(), std::memory_order_release);
+    copy->fadeOutSeconds.store(getFadeOutSeconds(), std::memory_order_release);
 
     return copy;
 }
@@ -409,6 +478,12 @@ std::unique_ptr<AudioClip> AudioClip::splitAt(double beat, double tempoBpm)
     // The right piece starts at the cut and reveals the source from there.
     right->trimStart(beat, tempoBpm);
     trimEnd(beat, tempoBpm);
+
+    // The cut makes two new edges in the middle of what was one clip. Each
+    // piece keeps the fade on the edge it still owns and loses the one that is
+    // now an internal join, where a fade would carve a hole in the audio.
+    setFadeOutSeconds(0.0);
+    right->setFadeInSeconds(0.0);
 
     return right;
 }

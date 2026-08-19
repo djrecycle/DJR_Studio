@@ -62,6 +62,21 @@ public:
 
     float getGain() const noexcept;
     void setGain(float newGain) noexcept;
+
+    /** Gain ramps at the clip's edges, in source seconds - the same unit as
+        the trim, so one clip measures its length one way only.
+
+        A recorded take almost always starts and ends mid-waveform, and cutting
+        straight to it clicks. These are applied while playing rather than
+        written into the samples, so they cost nothing to change and the
+        recording on disk is never touched.
+    */
+    double getFadeInSeconds() const noexcept;
+    void setFadeInSeconds(double seconds) noexcept;
+    double getFadeOutSeconds() const noexcept;
+    void setFadeOutSeconds(double seconds) noexcept;
+    /** A fade long enough to swallow a click, for the menu's default. */
+    static constexpr double defaultFadeSeconds = 0.01;
     void setMuted(bool shouldMute) noexcept;
     bool isMuted() const noexcept;
 
@@ -98,6 +113,8 @@ public:
 private:
     AudioClip() = default;
     void buildPeaks();
+    /** Re-applies the fade limits after the clip's length has changed. */
+    void clampFadesToLength() noexcept;
     double getPlaybackRate(double tempoBpm) const noexcept;
 
     juce::String name;
@@ -115,6 +132,8 @@ private:
     std::atomic<bool> warpEnabled { true };
     std::atomic<bool> muted { false };
     std::atomic<float> gain { 1.0f };
+    std::atomic<double> fadeInSeconds { 0.0 };
+    std::atomic<double> fadeOutSeconds { 0.0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioClip)
 };

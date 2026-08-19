@@ -183,6 +183,11 @@ private:
         double trimEndFraction = 1.0;
         bool warped = false;
         bool muted = false;
+        /** Fade lengths as a fraction of what the clip plays, so the drawing
+            does not need the tempo to work out where they end.
+        */
+        double fadeInFraction = 0.0;
+        double fadeOutFraction = 0.0;
         /** Miniature of the pattern's notes, for MIDI clips. */
         std::vector<ClipNote> notes;
         int lowestPitch = 60;
