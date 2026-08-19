@@ -696,9 +696,42 @@ void Track::applyParameterAutomation(juce::AudioPluginInstance& plugin, int plug
     }
 }
 
+void Track::setInputChannel(int firstChannel) noexcept
+{
+    inputChannel.store(juce::jmax(noInput, firstChannel), std::memory_order_release);
+}
+
+int Track::getInputChannel() const noexcept
+{
+    return inputChannel.load(std::memory_order_acquire);
+}
+
+void Track::setInputStereo(bool shouldBeStereo) noexcept
+{
+    inputStereo.store(shouldBeStereo, std::memory_order_release);
+}
+
+bool Track::isInputStereo() const noexcept
+{
+    return inputStereo.load(std::memory_order_acquire);
+}
+
+int Track::getInputChannelCount() const noexcept
+{
+    if (getInputChannel() < 0)
+        return 0;
+
+    return isInputStereo() ? 2 : 1;
+}
+
 void Track::mixInInput(juce::AudioBuffer<float>& buffer, const TrackPlaybackContext& context) const noexcept
 {
     if (! isInputMonitoring() || context.inputBuffer == nullptr)
+        return;
+
+    const auto first = getInputChannel();
+
+    if (first < 0)
         return;
 
     const auto& input = *context.inputBuffer;
@@ -707,10 +740,16 @@ void Track::mixInInput(juce::AudioBuffer<float>& buffer, const TrackPlaybackCont
     if (numSamples <= 0 || input.getNumChannels() <= 0)
         return;
 
+    const auto stereo = isInputStereo();
+
     for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
     {
-        const auto sourceChannel = juce::jmin(channel, input.getNumChannels() - 1);
-        buffer.addFrom(channel, 0, input, sourceChannel, 0, numSamples);
+        // Mono feeds every output channel from its one input; stereo takes the
+        // pair starting at the chosen channel. Clamped, so asking for In 2 on a
+        // one-input device gives In 1 rather than reading past the buffer.
+        const auto offset = stereo ? juce::jmin(channel, 1) : 0;
+        const auto source = juce::jlimit(0, input.getNumChannels() - 1, first + offset);
+        buffer.addFrom(channel, 0, input, source, 0, numSamples);
     }
 }
 

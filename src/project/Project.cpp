@@ -57,6 +57,8 @@ juce::var Project::toVar() const
         trackObject->setProperty("audioClips", track.audioClips);
         trackObject->setProperty("automation", track.automation);
         trackObject->setProperty("outputDestination", track.outputDestination);
+        trackObject->setProperty("inputChannel", track.inputChannel);
+        trackObject->setProperty("inputStereo", track.inputStereo);
         trackObject->setProperty("sends", track.sends);
         trackObject->setProperty("frozenFile", track.frozenFile);
         trackObject->setProperty("laneHeight", track.laneHeight);
@@ -166,6 +168,8 @@ void Project::fromVar(const juce::var& value)
 
             // Absent in older files, which is what "-1" already means: master.
             track.outputDestination = static_cast<int>(getOr(*trackObject, "outputDestination", -1));
+            track.inputChannel = static_cast<int>(getOr(*trackObject, "inputChannel", 0));
+            track.inputStereo = static_cast<bool>(getOr(*trackObject, "inputStereo", true));
 
             if (auto* sendArray = trackObject->getProperty("sends").getArray())
                 for (const auto& send : *sendArray)

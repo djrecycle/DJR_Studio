@@ -93,7 +93,7 @@ void AudioEngine::setLiveMidiSource(LiveMidiSource* source)
         source->prepareLiveMidi(getCurrentSampleRate());
 }
 
-bool AudioEngine::startAudioRecording(const juce::File& file)
+bool AudioEngine::startAudioRecording(const juce::File& file, int firstChannel, int numChannels)
 {
     if (getInputChannelCount() <= 0)
     {
@@ -101,9 +101,13 @@ bool AudioEngine::startAudioRecording(const juce::File& file)
         return false;
     }
 
-    const auto channels = juce::jlimit(1, 2, getInputChannelCount());
+    // Nothing asked for means the whole device, which is what recording did
+    // before a track could name its own input.
+    const auto requested = numChannels > 0 ? numChannels : getInputChannelCount();
+    const auto channels = juce::jlimit(1, 2, requested);
+    const auto start = juce::jlimit(0, juce::jmax(0, getInputChannelCount() - 1), firstChannel);
 
-    if (! recorder.startRecording(file, getCurrentSampleRate(), channels))
+    if (! recorder.startRecording(file, getCurrentSampleRate(), channels, start))
     {
         Logger::write("Recording could not be started: " + file.getFullPathName());
         return false;

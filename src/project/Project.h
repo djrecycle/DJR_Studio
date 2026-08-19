@@ -29,6 +29,12 @@ struct ProjectTrackState
     juce::Array<juce::var> automation;
     /** Where the main output goes: -1 for master, otherwise a bus track index. */
     int outputDestination = -1;
+    /** Which device input feeds this track: -1 for none. Channel 0 as a stereo
+        pair is what every track did before this was selectable, so a project
+        saved without it opens sounding the same.
+    */
+    int inputChannel = 0;
+    bool inputStereo = true;
     /** Send slots, each with its destination, level and pre/post fader flag. */
     juce::Array<juce::var> sends;
     /** The render a frozen track plays instead of its own content. Empty means

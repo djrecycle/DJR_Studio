@@ -1047,6 +1047,8 @@ int main()
         drums.name = "Drums";
         drums.type = "midi";
         drums.laneHeight = 72;
+        drums.inputChannel = 1;              // the second socket, on its own
+        drums.inputStereo = false;
         saved.tracks.add(drums);
 
         djr::ProjectTrackState bass;
@@ -1071,6 +1073,13 @@ int main()
               "a resized lane keeps its height");
         check(loaded.tracks.size() == 2 && loaded.tracks.getReference(1).laneHeight == 0,
               "an untouched lane stays on the default");
+        check(loaded.tracks.size() == 2 && loaded.tracks.getReference(0).inputChannel == 1,
+              "a track remembers which input it records from");
+        check(loaded.tracks.size() == 2 && ! loaded.tracks.getReference(0).inputStereo,
+              "and remembers that the input is mono");
+        check(loaded.tracks.size() == 2 && loaded.tracks.getReference(1).inputChannel == 0
+                  && loaded.tracks.getReference(1).inputStereo,
+              "a track that was never pointed anywhere keeps the old default");
 
         // A file written before these fields existed must still open.
         auto* legacy = new juce::DynamicObject();

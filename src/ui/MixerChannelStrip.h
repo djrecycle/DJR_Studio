@@ -49,6 +49,10 @@ public:
         whole graph and refuse a route that would feed back.
     */
     void setMixer(Mixer* mixerToRouteThrough, int trackIndex) noexcept;
+    /** How many inputs the audio device has, so the input menu only ever offers
+        sockets that actually exist.
+    */
+    void setDeviceInputCount(int count) noexcept;
 
 private:
     void timerCallback() override;
@@ -94,6 +98,7 @@ private:
     float panDragStart = 0.0f;
     /** Set when the strip belongs to a mixer track, so routing can be changed. */
     Mixer* mixer = nullptr;
+    int deviceInputCount = 0;
     int trackIndex = -1;
     /** Send slot being dragged, or -1. */
     int draggingSend = -1;

@@ -37,8 +37,13 @@ public:
     /** Live MIDI merged into every block; pass nullptr to detach. */
     void setLiveMidiSource(LiveMidiSource* source);
 
-    /** Starts writing the device input to `file`. Message thread only. */
-    bool startAudioRecording(const juce::File& file);
+    /** Starts writing the device input to `file`. Message thread only.
+
+        `firstChannel` and `numChannels` say which of the device's inputs to
+        capture, so an armed track records its own socket rather than whatever
+        is wired into the first one.
+    */
+    bool startAudioRecording(const juce::File& file, int firstChannel = 0, int numChannels = 0);
     void stopAudioRecording();
     bool isAudioRecording() const noexcept;
     juce::File getCurrentRecordingFile() const;

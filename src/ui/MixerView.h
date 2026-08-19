@@ -19,6 +19,8 @@ public:
     void paint(juce::Graphics& g) override;
     void resized() override;
     void refreshStrips();
+    /** Passed down to every strip so the input menu matches the real device. */
+    void setDeviceInputCount(int count);
 
     void setSelectedTrack(int trackIndex);
     void setTrackSelectedCallback(std::function<void(int)> callback);
@@ -39,6 +41,8 @@ private:
     std::function<void(int)> trackSelectedCallback;
     std::function<void()> automationChangedCallback;
     int selectedTrack = 0;
+
+    int deviceInputCount = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MixerView)
 };

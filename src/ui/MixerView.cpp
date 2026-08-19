@@ -82,6 +82,17 @@ void MixerView::resized()
                    juce::jmax(1, viewport.getHeight() - 7));
 }
 
+void MixerView::setDeviceInputCount(int count)
+{
+    if (deviceInputCount == count)
+        return;
+
+    deviceInputCount = count;
+
+    for (auto* strip : holder.strips)
+        strip->setDeviceInputCount(count);
+}
+
 void MixerView::refreshStrips()
 {
     holder.strips.clear();
@@ -106,6 +117,7 @@ void MixerView::refreshStrips()
             // Routing is set through the mixer, which is the only thing that can
             // see the whole graph and refuse a route that would feed back.
             strip->setMixer(&mixer, i);
+            strip->setDeviceInputCount(deviceInputCount);
             strip->onRoutingChanged = [this]
             {
                 if (automationChangedCallback)

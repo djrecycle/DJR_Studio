@@ -163,6 +163,21 @@ public:
     /** Input monitoring: pass the device input through this track. */
     void setInputMonitoring(bool shouldMonitor) noexcept;
     bool isInputMonitoring() const noexcept;
+
+    /** Which of the device's input channels feeds this track, for monitoring
+        and for recording. Mono takes the one channel; stereo takes it and the
+        next. noInput silences both.
+
+        Per track rather than per device: recording a guitar on one track and a
+        microphone on another is the whole point of having more than one input.
+    */
+    static constexpr int noInput = -1;
+    void setInputChannel(int firstChannel) noexcept;
+    int getInputChannel() const noexcept;
+    void setInputStereo(bool shouldBeStereo) noexcept;
+    bool isInputStereo() const noexcept;
+    /** How many channels this track's input takes: 0, 1 or 2. */
+    int getInputChannelCount() const noexcept;
     int getPluginCount() const noexcept;
     juce::AudioPluginInstance* getPlugin(int index) noexcept;
     const juce::AudioPluginInstance* getPlugin(int index) const noexcept;
@@ -223,6 +238,11 @@ private:
     std::atomic<double> preparedSampleRate { 44100.0 };
     std::atomic<int> preparedBlockSize { 512 };
     std::atomic<bool> inputMonitoring { false };
+    /** Channel 0 as a stereo pair is what every track did before this was
+        selectable, so an untouched project sounds exactly as it did.
+    */
+    std::atomic<int> inputChannel { 0 };
+    std::atomic<bool> inputStereo { true };
     std::atomic<float> volume { 0.8f };
     std::atomic<float> pan { 0.0f };
     std::atomic<bool> muted { false };

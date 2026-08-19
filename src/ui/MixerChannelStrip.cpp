@@ -201,6 +201,11 @@ void MixerChannelStrip::setMixer(Mixer* mixerToRouteThrough, int indexInMixer) n
     trackIndex = indexInMixer;
 }
 
+void MixerChannelStrip::setDeviceInputCount(int count) noexcept
+{
+    deviceInputCount = juce::jmax(0, count);
+}
+
 std::vector<int> MixerChannelStrip::getAssignedSends() const
 {
     std::vector<int> assigned;
@@ -274,8 +279,31 @@ void MixerChannelStrip::showRoutingMenu()
     juce::PopupMenu outputMenu;
     addDestinations(outputMenu, 1000, track->getOutputDestination(), true);
 
+    juce::PopupMenu inputMenu;
+    const auto currentInput = track->getInputChannel();
+    const auto currentStereo = track->isInputStereo();
+
+    inputMenu.addItem(3000, TRANS("None"), true, currentInput < 0);
+
+    for (int channel = 0; channel < deviceInputCount; ++channel)
+        inputMenu.addItem(3001 + channel,
+                          "In " + juce::String(channel + 1),
+                          true,
+                          currentInput == channel && ! currentStereo);
+
+    // Stereo takes a pair, so the last channel on its own cannot start one.
+    for (int channel = 0; channel + 1 < deviceInputCount; ++channel)
+        inputMenu.addItem(3100 + channel,
+                          "In " + juce::String(channel + 1) + " + " + juce::String(channel + 2),
+                          true,
+                          currentInput == channel && currentStereo);
+
+    if (deviceInputCount <= 0)
+        inputMenu.addItem(3999, TRANS("No audio inputs on this device"), false, false);
+
     juce::PopupMenu menu;
     menu.addSectionHeader(track->getName());
+    menu.addSubMenu(TRANS("Input"), inputMenu);
     menu.addSubMenu("Output", outputMenu);
     menu.addSeparator();
 
@@ -306,7 +334,24 @@ void MixerChannelStrip::showRoutingMenu()
             if (result == 0 || track == nullptr || mixer == nullptr)
                 return;
 
-            if (result >= 1000 && result < 2000)
+            if (result >= 3000)
+            {
+                if (result == 3000)
+                {
+                    track->setInputChannel(Track::noInput);
+                }
+                else if (result >= 3100 && result < 3999)
+                {
+                    track->setInputChannel(result - 3100);
+                    track->setInputStereo(true);
+                }
+                else if (result < 3100)
+                {
+                    track->setInputChannel(result - 3001);
+                    track->setInputStereo(false);
+                }
+            }
+            else if (result >= 1000 && result < 2000)
             {
                 mixer->setTrackOutput(trackIndex, result - 1000 - 1);
             }

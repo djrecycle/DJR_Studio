@@ -774,6 +774,11 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
 
 void MainComponent::timerCallback()
 {
+    // Here rather than at startup: the device can be swapped in Preferences,
+    // and the input menu has to follow it. setDeviceInputCount ignores a value
+    // it already has, so this costs nothing on the ticks where nothing changed.
+    mixerView.setDeviceInputCount(audioEngine.getInputChannelCount());
+
     // The count-in runs on the audio thread; this is where we notice it ended.
     if (waitingForCountIn && ! audioEngine.getMetronome().isCountingIn())
     {
@@ -885,7 +890,18 @@ void MainComponent::beginRecording()
         const auto stamp = juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S");
         const auto file = folder.getChildFile("take-" + stamp + ".wav");
 
-        if (audioEngine.startAudioRecording(file))
+        // The take lands on this track afterwards, so it is also the track
+        // whose input should be captured.
+        auto firstChannel = 0;
+        auto numChannels = 0;
+
+        if (auto* target = getTrack(findAudioTrackForRecording()))
+        {
+            firstChannel = juce::jmax(0, target->getInputChannel());
+            numChannels = target->getInputChannelCount();
+        }
+
+        if (audioEngine.startAudioRecording(file, firstChannel, numChannels))
             setStatusMessage(TRANS("Recording to ") + file.getFileName() + TRANS(" - MIDI was recorded too."));
         else
             setStatusMessage(TRANS("Audio input could not be recorded; MIDI still was."));
@@ -1733,6 +1749,8 @@ void MainComponent::synchroniseProjectState()
                    : track->getKind() == TrackKind::bus ? "bus"
                                                         : "audio";
         state.outputDestination = track->getOutputDestination();
+        state.inputChannel = track->getInputChannel();
+        state.inputStereo = track->isInputStereo();
         state.frozenFile = track->isFrozen() ? track->getFrozenFile().getFullPathName() : juce::String();
 
         for (int slot = 0; slot < Track::maxSends; ++slot)
@@ -2017,6 +2035,12 @@ void MainComponent::restoreRoutingFromProject()
         // hand edited, or written by an older build, could describe a loop, and
         // the mixer is what refuses one.
         mixer.setTrackOutput(i, projectTrack.outputDestination);
+
+        if (auto* restored = mixer.getTrack(i))
+        {
+            restored->setInputChannel(projectTrack.inputChannel);
+            restored->setInputStereo(projectTrack.inputStereo);
+        }
 
         for (int slot = 0; slot < projectTrack.sends.size() && slot < Track::maxSends; ++slot)
         {
