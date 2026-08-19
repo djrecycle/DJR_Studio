@@ -48,7 +48,11 @@ void Knob::paint(juce::Graphics& g)
 
     // Square, so the dial cannot go oval in a layout that is not.
     const auto side = juce::jmin(area.getWidth(), area.getHeight());
-    const auto dial = area.withSizeKeepingCentre(side, side).toFloat().reduced(2.0f);
+
+    // The value arc is stroked outside the dial, so the dial has to leave room
+    // for it inside the component. Reduced by 2, the arc landed a pixel past
+    // the edge and every knob looked shaved flat at the top.
+    const auto dial = area.withSizeKeepingCentre(side, side).toFloat().reduced(6.0f);
     const auto centre = dial.getCentre();
     const auto radius = dial.getWidth() * 0.5f;
 

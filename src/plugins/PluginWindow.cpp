@@ -371,7 +371,10 @@ void PluginShell::paint(juce::Graphics& g)
     // Same caption band as a knob uses, so the whole row reads as one line.
     g.setColour(Theme::mutedText());
     g.setFont(Theme::caps(8.5f));
-    g.drawText("ON", onColumn.removeFromBottom(Knob::captionHeight),
+    // On a copy: removeFromBottom mutates what it is called on, and doing that
+    // to the member shaved twelve more pixels off the column every repaint.
+    auto onCaption = onColumn;
+    g.drawText("ON", onCaption.removeFromBottom(Knob::captionHeight),
                juce::Justification::centred, false);
 
     g.setColour(Theme::panelDeep());
