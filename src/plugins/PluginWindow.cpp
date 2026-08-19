@@ -8,7 +8,10 @@ namespace djr
 
 namespace
 {
-    constexpr int stripHeight = 46;
+    /** Tall enough for a knob and its caption with room to breathe: a knob is
+        Knob::preferredSize high, and anything less clips the caption off.
+    */
+    constexpr int stripHeight = Knob::preferredSize + 14;
     constexpr int pagePadding = 12;
     constexpr int knobWidth = 40;
     constexpr int knobHeight = Knob::preferredSize;
@@ -231,6 +234,22 @@ void PluginShell::showPage(Page page)
 
 void PluginShell::refreshPageVisibility()
 {
+    // Taken out of the hierarchy, not just hidden. A plugin GUI is an embedded
+    // native X11 window, and XEmbedComponent watches only the component's
+    // bounds and its peer - never its visibility. Hiding an ancestor left the
+    // GUI mapped and drawing over whichever settings page was showing, so every
+    // tab showed the plugin. Losing its peer is what unmaps it.
+    if (generatorEditor != nullptr)
+    {
+        const auto wanted = currentPage == Page::generator;
+        const auto attached = generatorEditor->getParentComponent() != nullptr;
+
+        if (wanted && ! attached)
+            generatorHolder.addAndMakeVisible(generatorEditor.get());
+        else if (! wanted && attached)
+            generatorHolder.removeChildComponent(generatorEditor.get());
+    }
+
     generatorPage.setVisible(currentPage == Page::generator);
     envelopePage.setVisible(currentPage == Page::envelope);
     miscPage.setVisible(currentPage == Page::misc);
@@ -349,24 +368,22 @@ void PluginShell::paint(juce::Graphics& g)
     g.fillRect(strip.withHeight(1).withY(strip.getBottom() - 1));
 
     // The channel this window belongs to, where FL puts its TRACK readout.
+    // Same caption band as a knob uses, so the whole row reads as one line.
     g.setColour(Theme::mutedText());
     g.setFont(Theme::caps(8.5f));
-    g.drawText("ON", juce::Rectangle<int>(onSwitch.getX(), strip.getBottom() - 14,
-                                          onSwitch.getWidth(), 12),
+    g.drawText("ON", onColumn.removeFromBottom(Knob::captionHeight),
                juce::Justification::centred, false);
 
-    const auto trackArea = juce::Rectangle<int>(strip.getRight() - pagePadding - 74,
-                                                strip.getY() + 8, 74, strip.getHeight() - 16);
     g.setColour(Theme::panelDeep());
-    g.fillRoundedRectangle(trackArea.toFloat(), 4.0f);
+    g.fillRoundedRectangle(trackBox.toFloat(), 4.0f);
     g.setColour(Theme::mutedText());
     g.setFont(Theme::caps(8.0f));
-    g.drawText("TRACK", trackArea.withHeight(11).translated(0, 3),
+    g.drawText("TRACK", trackBox.withHeight(12).translated(0, 4),
                juce::Justification::centred, false);
     g.setColour(channelTrack != nullptr ? Theme::accent() : Theme::faintText());
     g.setFont(Theme::ui(10.5f, true));
     g.drawText(channelTrack != nullptr ? channelTrack->getName() : juce::String("-"),
-               trackArea.withTrimmedTop(12), juce::Justification::centred, true);
+               trackBox.withTrimmedTop(14), juce::Justification::centred, true);
 
     if (currentPage == Page::generator)
         return;
@@ -475,18 +492,29 @@ void PluginShell::resized()
     }
 
     // Right of the strip, in FL's order: ON, PAN, VOL, PITCH, then TRACK.
-    auto right = strip.reduced(pagePadding, 4);
-    right.removeFromRight(74 + 8);
+    // Every one of them gets the same column height so their captions sit on
+    // one line; sizing a knob taller than the strip clipped it before.
+    auto right = strip.reduced(pagePadding, 0);
+    trackBox = right.removeFromRight(74).withSizeKeepingCentre(74, stripHeight - 16);
+    right.removeFromRight(10);
+
+    const auto column = [&right] (int width)
+    {
+        return right.removeFromRight(width).withSizeKeepingCentre(width, knobHeight);
+    };
 
     for (auto* knob : { &pitchKnob, &volKnob, &panKnob })
     {
-        knob->setBounds(right.removeFromRight(knobWidth).withHeight(knobHeight)
-                             .withY(right.getY()));
+        knob->setBounds(column(knobWidth));
         right.removeFromRight(2);
     }
 
-    onSwitch.setBounds(right.removeFromRight(38).withSizeKeepingCentre(34, 16)
-                            .translated(0, -5));
+    right.removeFromRight(6);
+    onColumn = column(knobWidth);
+
+    // The switch sits where a knob's dial would, so its caption band is free.
+    onSwitch.setBounds(onColumn.withTrimmedBottom(Knob::captionHeight)
+                               .withSizeKeepingCentre(34, 17));
 
     generatorPage.setBounds(area);
     envelopePage.setBounds(area.reduced(pagePadding));
@@ -494,7 +522,7 @@ void PluginShell::resized()
 
     generatorViewport.setBounds(generatorPage.getLocalBounds());
 
-    if (generatorEditor != nullptr)
+    if (generatorEditor != nullptr && generatorEditor->getParentComponent() != nullptr)
     {
         // The holder is whichever is bigger, so a small GUI sits centred in the
         // window and a large one gets somewhere to scroll to.

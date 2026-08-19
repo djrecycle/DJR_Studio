@@ -106,6 +106,9 @@ private:
     juce::OwnedArray<TabChip> envelopeTabs;
 
     SwitchButton onSwitch { "channel on" };
+    /** The ON switch's own column, so its caption lines up with the knobs'. */
+    juce::Rectangle<int> onColumn;
+    juce::Rectangle<int> trackBox;
     Knob panKnob { "PAN", Knob::Style::bipolar };
     Knob volKnob { "VOL" };
     Knob pitchKnob { "PITCH", Knob::Style::bipolar };
