@@ -85,6 +85,7 @@ set(DJR_ENGINE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioClip.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/BusTrack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/MidiTrack.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AlignmentDelay.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Mixer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/MasterBus.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Metronome.cpp

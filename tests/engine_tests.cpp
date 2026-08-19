@@ -1,6 +1,7 @@
 // Offline checks for the audio graph. No audio device is involved: the mixer is
 // driven by hand so the assertions are deterministic.
 
+#include "audio/AlignmentDelay.h"
 #include "audio/AudioClip.h"
 #include "audio/AutomationLane.h"
 #include "audio/BusTrack.h"
@@ -1117,6 +1118,113 @@ int main()
         midi.postLiveMessage(juce::MidiMessage::noteOn(1, 62, 0.8f));
         midi.postLiveMessage(juce::MidiMessage::noteOff(1, 62));
         check(midi.takeRecordedNotes().isEmpty(), "nothing is captured once disarmed");
+    }
+
+    // --- Latency compensation: the delay that lines tracks up ---------------
+    {
+        const auto pdcRate = 48000.0;
+        const auto pdcBlock = 64;
+
+        djr::AlignmentDelay delay;
+        delay.prepare(1, pdcRate);
+
+        const auto impulseAt = [&delay, pdcBlock] (int blocks)
+        {
+            // One impulse in the very first sample, then silence. Where it comes
+            // out is exactly how many samples the line is holding.
+            for (int block = 0; block < blocks; ++block)
+            {
+                juce::AudioBuffer<float> buffer(1, pdcBlock);
+                buffer.clear();
+
+                if (block == 0)
+                    buffer.setSample(0, 0, 1.0f);
+
+                delay.process(buffer);
+
+                for (int sample = 0; sample < pdcBlock; ++sample)
+                    if (buffer.getSample(0, sample) > 0.5f)
+                        return block * pdcBlock + sample;
+            }
+
+            return -1;
+        };
+
+        delay.setDelaySamples(0);
+        delay.reset();
+        check(impulseAt(1) == 0, "no compensation leaves the audio where it was");
+
+        delay.setDelaySamples(17);
+        delay.reset();
+        check(impulseAt(1) == 17, "a delay shorter than a block lands on the right sample");
+
+        // The case that catches an off-by-one in the wrap: the impulse has to
+        // survive being written in one block and read back in a later one.
+        delay.setDelaySamples(pdcBlock + 5);
+        delay.reset();
+        check(impulseAt(4) == pdcBlock + 5, "a delay longer than a block still lands right");
+
+        delay.setDelaySamples(1000000);
+        check(delay.getDelaySamples() <= static_cast<int>(pdcRate * djr::AlignmentDelay::maxDelaySeconds),
+              "an absurd delay is clamped to what the line can hold");
+    }
+
+    // --- Latency compensation: what the mixer works out ---------------------
+    {
+        djr::Mixer pdcMixer;
+        pdcMixer.prepare(48000.0, 256);
+        pdcMixer.refreshLatencyCompensation();
+
+        // Nothing in the session reports latency, so nobody waits for anybody.
+        check(pdcMixer.getReportedLatencySamples() == 0,
+              "a session with no plugins reports no latency to compensate");
+        check(pdcMixer.getLatencyCompensationSamples(0) == 0,
+              "and holds no track back");
+
+        // The arithmetic, without needing a plugin that reports latency.
+        // Two sources straight to master, one of them slow.
+        {
+            auto longest = 0;
+            const auto holds = djr::Mixer::computeLatencyHolds({ 0, 100 },
+                                                               { false, false },
+                                                               { -1, -1 },
+                                                               longest);
+            check(longest == 100, "the slowest track sets what everything waits for");
+            check(holds.size() == 2 && holds[0] == 100,
+                  "the track with no latency is held back to match it");
+            check(holds.size() == 2 && holds[1] == 0,
+                  "and the slow one is not held back at all");
+        }
+
+        // Track 0 -> bus 2 -> master, track 1 straight to master. The bus adds
+        // fifty of its own, so track 1 has to wait for the whole path.
+        {
+            auto longest = 0;
+            const auto holds = djr::Mixer::computeLatencyHolds({ 0, 0, 50 },
+                                                               { false, false, true },
+                                                               { 2, -1, -1 },
+                                                               longest);
+            check(longest == 50, "a bus's own latency counts towards the path through it");
+            check(holds.size() == 3 && holds[0] == 0,
+                  "the track feeding the bus waits for nothing");
+            check(holds.size() == 3 && holds[1] == 50,
+                  "the track going straight out waits for the bus");
+            check(holds.size() == 3 && holds[2] == 0,
+                  "and the bus is never held back itself");
+        }
+
+        // Two sources into the same bus, one slow. They have to meet at the
+        // bus input, not merely at the master.
+        {
+            auto longest = 0;
+            const auto holds = djr::Mixer::computeLatencyHolds({ 20, 0, 50 },
+                                                               { false, false, true },
+                                                               { 2, 2, -1 },
+                                                               longest);
+            check(longest == 70, "the longest path runs through the slower source");
+            check(holds.size() == 3 && holds[0] == 0 && holds[1] == 20,
+                  "two sources into one bus are lined up with each other");
+        }
     }
 
     // --- Project round trip: what survives closing the app ------------------

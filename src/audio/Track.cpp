@@ -458,6 +458,26 @@ int Track::getPluginCount() const noexcept
     return pluginChain.size();
 }
 
+int Track::getPluginLatencySamples() const noexcept
+{
+    auto total = 0;
+
+    {
+        const juce::SpinLock::ScopedLockType scoped(const_cast<juce::SpinLock&>(instrumentLock));
+
+        if (instrument != nullptr)
+            total += juce::jmax(0, instrument->getLatencySamples());
+    }
+
+    const juce::SpinLock::ScopedLockType scoped(const_cast<juce::SpinLock&>(pluginLock));
+
+    for (int i = 0; i < pluginChain.size(); ++i)
+        if (const auto* plugin = pluginChain.getPlugin(i))
+            total += juce::jmax(0, plugin->getLatencySamples());
+
+    return total;
+}
+
 juce::AudioPluginInstance* Track::getPlugin(int index) noexcept
 {
     const juce::SpinLock::ScopedLockType scoped(pluginLock);

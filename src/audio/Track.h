@@ -179,6 +179,12 @@ public:
     /** How many channels this track's input takes: 0, 1 or 2. */
     int getInputChannelCount() const noexcept;
     int getPluginCount() const noexcept;
+    /** Samples of delay this track's own plugins introduce: the instrument plus
+        every insert. A linear-phase EQ or a lookahead compressor answers with
+        hundreds or thousands, and without compensating for it the track drifts
+        late against everything else.
+    */
+    int getPluginLatencySamples() const noexcept;
     juce::AudioPluginInstance* getPlugin(int index) noexcept;
     const juce::AudioPluginInstance* getPlugin(int index) const noexcept;
     juce::StringArray getPluginNames() const;

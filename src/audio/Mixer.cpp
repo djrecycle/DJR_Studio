@@ -45,10 +45,134 @@ void Mixer::prepare(double sampleRate, int blockSize)
 
     audible.resize(static_cast<size_t>(maxTracks));
 
+    // One delay line per slot, sized here for the same reason as the buffers:
+    // a track that appears mid-session must already have somewhere to be held.
+    outputDelays.resize(static_cast<size_t>(maxTracks));
+    preFaderDelays.resize(static_cast<size_t>(maxTracks));
+
+    for (auto* lines : { &outputDelays, &preFaderDelays })
+    {
+        for (auto& delay : *lines)
+        {
+            if (delay == nullptr)
+                delay = std::make_unique<AlignmentDelay>();
+
+            delay->prepare(2, sampleRate);
+        }
+    }
+
     for (auto& track : tracks)
         track->prepare(sampleRate, blockSize);
 
     rebuildProcessOrder();
+}
+
+std::vector<int> Mixer::computeLatencyHolds(const std::vector<int>& ownLatency,
+                                           const std::vector<bool>& isBus,
+                                           const std::vector<int>& destinations,
+                                           int& longestPathOut)
+{
+    const auto count = static_cast<int>(ownLatency.size());
+    std::vector<int> holds(static_cast<size_t>(juce::jmax(0, count)), 0);
+    longestPathOut = 0;
+
+    if (count <= 0 || static_cast<int>(isBus.size()) != count
+        || static_cast<int>(destinations.size()) != count)
+        return holds;
+
+    // What a signal leaving `index` still has to pass through before it reaches
+    // the master, following the main output.
+    const auto downstreamOf = [&ownLatency, &destinations, count] (int index)
+    {
+        auto total = 0;
+        auto at = destinations[static_cast<size_t>(index)];
+
+        // Bounded by the track count: routing is validated acyclic, and a cycle
+        // that slipped through must not spin forever here.
+        for (int step = 0; step < count && juce::isPositiveAndBelow(at, count); ++step)
+        {
+            total += ownLatency[static_cast<size_t>(at)];
+            at = destinations[static_cast<size_t>(at)];
+        }
+
+        return total;
+    };
+
+    // The slowest path from a real source decides how long everything waits.
+    for (int i = 0; i < count; ++i)
+        if (! isBus[static_cast<size_t>(i)])
+            longestPathOut = juce::jmax(longestPathOut,
+                                        ownLatency[static_cast<size_t>(i)] + downstreamOf(i));
+
+    for (int i = 0; i < count; ++i)
+    {
+        // Buses are held back by whatever fed them - every source arrives at a
+        // bus already aligned - so compensating one again delays it twice.
+        if (isBus[static_cast<size_t>(i)])
+            continue;
+
+        holds[static_cast<size_t>(i)] =
+            juce::jmax(0, longestPathOut - (ownLatency[static_cast<size_t>(i)] + downstreamOf(i)));
+    }
+
+    return holds;
+}
+
+void Mixer::refreshLatencyCompensation()
+{
+    const juce::SpinLock::ScopedLockType scoped(trackLock);
+
+    const auto trackCount = static_cast<int>(tracks.size());
+
+    if (trackCount <= 0)
+    {
+        reportedLatency.store(0, std::memory_order_release);
+        return;
+    }
+
+    std::vector<int> own(static_cast<size_t>(trackCount), 0);
+    std::vector<bool> buses(static_cast<size_t>(trackCount), false);
+    std::vector<int> destinations(static_cast<size_t>(trackCount), Track::masterDestination);
+
+    for (int i = 0; i < trackCount; ++i)
+    {
+        const auto& track = tracks[static_cast<size_t>(i)];
+        own[static_cast<size_t>(i)] = track->getPluginLatencySamples();
+        buses[static_cast<size_t>(i)] = track->getKind() == TrackKind::bus;
+        destinations[static_cast<size_t>(i)] = track->getOutputDestination();
+    }
+
+    auto longest = 0;
+    const auto holds = computeLatencyHolds(own, buses, destinations, longest);
+
+    for (int i = 0; i < trackCount && i < static_cast<int>(holds.size()); ++i)
+    {
+        const auto hold = holds[static_cast<size_t>(i)];
+
+        if (auto& delay = outputDelays[static_cast<size_t>(i)])
+            delay->setDelaySamples(hold);
+
+        if (auto& delay = preFaderDelays[static_cast<size_t>(i)])
+            delay->setDelaySamples(hold);
+    }
+
+    reportedLatency.store(longest, std::memory_order_release);
+}
+
+int Mixer::getLatencyCompensationSamples(int index) const
+{
+    const juce::SpinLock::ScopedLockType scoped(trackLock);
+
+    if (! juce::isPositiveAndBelow(index, static_cast<int>(outputDelays.size())))
+        return 0;
+
+    const auto& delay = outputDelays[static_cast<size_t>(index)];
+    return delay != nullptr ? delay->getDelaySamples() : 0;
+}
+
+int Mixer::getReportedLatencySamples() const noexcept
+{
+    return reportedLatency.load(std::memory_order_acquire);
 }
 
 void Mixer::process(juce::AudioBuffer<float>& output, const TrackPlaybackContext& context)
@@ -140,6 +264,16 @@ void Mixer::process(juce::AudioBuffer<float>& output, const TrackPlaybackContext
         juce::MidiBuffer midi;
         track->processAudio(scratchBuffer, midi, trackContext,
                             wantsPreFader ? &preFaderBuffer : nullptr);
+
+        // Held back here, before the signal is summed anywhere: sends and the
+        // main output both come off this buffer, and a bus further down is
+        // already lined up by the time it reads what fed it.
+        if (auto& delay = outputDelays[static_cast<size_t>(index)])
+            delay->process(scratchBuffer);
+
+        if (wantsPreFader)
+            if (auto& delay = preFaderDelays[static_cast<size_t>(index)])
+                delay->process(preFaderBuffer);
 
         const auto addInto = [numChannels, numSamples] (juce::AudioBuffer<float>& destination,
                                                         const juce::AudioBuffer<float>& source,

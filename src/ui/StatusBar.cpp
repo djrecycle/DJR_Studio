@@ -48,9 +48,15 @@ void StatusBar::paint(juce::Graphics& g)
     const auto sampleRate = engine.getCurrentSampleRate();
     const auto bufferSize = engine.getCurrentBufferSize();
     const auto latencyMs = sampleRate > 0.0 ? bufferSize / sampleRate * 1000.0 : 0.0;
-    const auto formatText = juce::String(sampleRate, 0) + " Hz - "
-                          + juce::String(bufferSize) + " smp - "
-                          + juce::String(latencyMs, 1) + " ms";
+    auto formatText = juce::String(sampleRate, 0) + " Hz - "
+                    + juce::String(bufferSize) + " smp - "
+                    + juce::String(latencyMs, 1) + " ms";
+
+    // Only when there is some. Plugin latency is invisible otherwise, and the
+    // usual first symptom is a mix that feels loose without anyone knowing why.
+    if (const auto compensated = engine.getMixer().getReportedLatencySamples(); compensated > 0)
+        formatText += " (+" + juce::String(sampleRate > 0.0 ? compensated / sampleRate * 1000.0 : 0.0, 1)
+                    + " ms PDC)";
 
     g.setColour(Theme::mutedText());
     g.drawText(formatText, area.removeFromLeft(measure(formatText)), juce::Justification::centredLeft, false);

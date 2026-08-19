@@ -779,6 +779,11 @@ void MainComponent::timerCallback()
     // it already has, so this costs nothing on the ticks where nothing changed.
     mixerView.setDeviceInputCount(audioEngine.getInputChannelCount());
 
+    // Here rather than only after loading a plugin: a plugin may change its own
+    // latency while it runs - an oversampling switch is the usual reason - and
+    // nothing tells the host when it does.
+    audioEngine.getMixer().refreshLatencyCompensation();
+
     // The count-in runs on the audio thread; this is where we notice it ended.
     if (waitingForCountIn && ! audioEngine.getMetronome().isCountingIn())
     {

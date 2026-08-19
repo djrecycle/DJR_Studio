@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MasterBus.h"
+#include "AlignmentDelay.h"
 #include "Track.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -20,6 +21,38 @@ public:
     Mixer();
 
     void prepare(double sampleRate, int blockSize);
+
+    /** Works out how much each track must be held back so everything lands on
+        the master together, and hands the amounts to the delay lines.
+
+        Message thread only: it reads plugin latencies, which means taking the
+        locks that guard each track's plugins. Call it after anything that could
+        change a chain, and periodically - a plugin may change its own latency
+        while it runs.
+    */
+    void refreshLatencyCompensation();
+
+    /** How long each track must be held back, worked out from the graph alone.
+
+        Pulled out of refreshLatencyCompensation so the arithmetic can be tested
+        without a plugin that reports latency: give it the latencies, which track
+        is a bus, and where each one sends its main output, and it answers with
+        the hold for each. `longestPathOut` receives the latency the whole mix
+        ends up carrying.
+
+        `destinations` holds the main output of each track: an index into the
+        same arrays, or anything outside them for the master.
+    */
+    static std::vector<int> computeLatencyHolds(const std::vector<int>& ownLatency,
+                                                const std::vector<bool>& isBus,
+                                                const std::vector<int>& destinations,
+                                                int& longestPathOut);
+    /** Delay applied to `index` right now, for the UI to report. */
+    int getLatencyCompensationSamples(int index) const;
+    /** The latest path through the graph, which is the latency the whole mix
+        now carries.
+    */
+    int getReportedLatencySamples() const noexcept;
     void process(juce::AudioBuffer<float>& output, const TrackPlaybackContext& context);
 
     /** Adds a track at any time; it is prepared before the audio thread can see it. */
@@ -96,6 +129,13 @@ private:
     std::vector<juce::AudioBuffer<float>> busBuffers;
     /** Source-before-destination order, rebuilt whenever the graph changes. */
     std::vector<int> processOrder;
+    /** One per track: the main output, and the pre-fader tap that feeds sends.
+        Both need the same hold-back or a send would arrive before the signal it
+        was split from.
+    */
+    std::vector<std::unique_ptr<AlignmentDelay>> outputDelays;
+    std::vector<std::unique_ptr<AlignmentDelay>> preFaderDelays;
+    std::atomic<int> reportedLatency { 0 };
     /** Audio-thread scratch for the solo pass; a member so it never allocates. */
     std::vector<bool> audible;
     /** Guards the track vector, the process order and the routing. The audio
