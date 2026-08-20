@@ -80,6 +80,8 @@ PluginShell::PluginShell(juce::AudioProcessor& processor, Track* track)
     buildTopStrip();
     buildEnvelopePage();
     buildMiscPage();
+    loadTargetIntoControls();
+    refreshControlStates();
     refreshPageVisibility();
 }
 
@@ -91,7 +93,17 @@ PluginShell::~PluginShell()
     for (auto* chip : envelopeTabs)
         chip->removeListener(this);
 
-    onSwitch.removeListener(this);
+    for (auto* toggle : { &onSwitch, &envelopeSwitch, &lfoSwitch, &filterSwitch })
+        toggle->removeListener(this);
+
+    for (auto& knob : envelopeKnobs)
+        knob->removeListener(this);
+
+    for (auto& knob : miscKnobs)
+        knob->removeListener(this);
+
+    arpDirectionBox.removeListener(this);
+    arpRangeBox.removeListener(this);
 
     for (auto* knob : { &panKnob, &volKnob, &pitchKnob })
         knob->removeListener(this);
@@ -179,8 +191,51 @@ Knob* PluginShell::addPending(std::vector<std::unique_ptr<Knob>>& into,
     return raw;
 }
 
+Knob* PluginShell::addLive(std::vector<std::unique_ptr<Knob>>& into,
+                           juce::Component& parent,
+                           const juce::String& caption,
+                           Knob::Style style)
+{
+    auto knob = std::make_unique<Knob>(caption, style);
+    knob->setRange(style == Knob::Style::bipolar ? -1.0 : 0.0, 1.0, 0.01);
+    knob->setDoubleClickReturnValue(true, style == Knob::Style::bipolar ? 0.0 : 0.0);
+    knob->addListener(this);
+
+    auto* raw = knob.get();
+    parent.addAndMakeVisible(raw);
+    into.push_back(std::move(knob));
+    return raw;
+}
+
+ChannelSettings* PluginShell::channel() const noexcept
+{
+    // These settings are driven by notes, so they mean nothing on a track that
+    // has none. The page is still drawn there - it is the same shell over every
+    // generator - but nothing on it pretends to work.
+    if (channelTrack == nullptr)
+        return nullptr;
+
+    const auto kind = channelTrack->getKind();
+
+    if (kind != TrackKind::midi && kind != TrackKind::instrument)
+        return nullptr;
+
+    return &channelTrack->getChannelSettings();
+}
+
+ChannelSettings::Target PluginShell::selectedTarget() const noexcept
+{
+    for (int i = 0; i < envelopeTabs.size(); ++i)
+        if (envelopeTabs[i]->getToggleState())
+            return static_cast<ChannelSettings::Target>(i);
+
+    return ChannelSettings::Target::volume;
+}
+
 void PluginShell::buildEnvelopePage()
 {
+    // The tab order is the target order the engine uses, so the lit chip is
+    // the whole answer to "which envelope am I editing".
     for (auto* name : { "Panning", "Volume", "Mod X", "Mod Y", "Pitch" })
     {
         auto* chip = new TabChip(TRANS(name));
@@ -191,16 +246,28 @@ void PluginShell::buildEnvelopePage()
         envelopeTabs.add(chip);
     }
 
-    envelopeTabs[1]->setToggleState(true, juce::dontSendNotification);
+    envelopeTabs[static_cast<int>(ChannelSettings::Target::volume)]
+        ->setToggleState(true, juce::dontSendNotification);
 
     for (auto* caption : { "DELAY", "ATT", "HOLD", "DEC", "SUS", "REL" })
-        addPending(envelopeKnobs, envelopePage, caption);
+        addLive(envelopeKnobs, envelopePage, caption);
 
-    for (auto* caption : { "DELAY", "ATT", "AMT", "SPEED" })
-        addPending(envelopeKnobs, envelopePage, caption);
+    addLive(envelopeKnobs, envelopePage, "DELAY");
+    addLive(envelopeKnobs, envelopePage, "ATT");
+    addLive(envelopeKnobs, envelopePage, "AMT", Knob::Style::bipolar);
+    addLive(envelopeKnobs, envelopePage, "SPEED");
 
-    addPending(envelopeKnobs, envelopePage, "MOD X", Knob::Style::bipolar);
-    addPending(envelopeKnobs, envelopePage, "MOD Y", Knob::Style::bipolar);
+    addLive(envelopeKnobs, envelopePage, "CUT");
+    addLive(envelopeKnobs, envelopePage, "RES");
+
+    // Each box switches on separately: an envelope drawn but not armed is how
+    // FL leaves an untouched channel, and it is why loading one changes nothing
+    // until you say so.
+    for (auto* toggle : { &envelopeSwitch, &lfoSwitch, &filterSwitch })
+    {
+        toggle->addListener(this);
+        envelopePage.addAndMakeVisible(toggle);
+    }
 }
 
 void PluginShell::buildMiscPage()
@@ -212,12 +279,228 @@ void PluginShell::buildMiscPage()
     for (auto* caption : { "GATE", "SHIFT", "SWING" })
         addPending(miscKnobs, miscPage, caption);
 
-    for (auto* caption : { "TIME", "GATE" })
-        addPending(miscKnobs, miscPage, caption);
+    // The arpeggiator's two, which the channel does listen to.
+    addLive(miscKnobs, miscPage, "TIME");
+    addLive(miscKnobs, miscPage, "GATE");
 
     for (auto* caption : { "FEED", "PAN", "PITCH", "TIME" })
         addPending(miscKnobs, miscPage, caption,
                    juce::String(caption) == "FEED" ? Knob::Style::unipolar : Knob::Style::bipolar);
+
+    // Direction picks the pattern and doubles as the arpeggiator's on switch:
+    // "off" is a direction in FL too, and one control is one less thing to
+    // wonder about than a switch that has to agree with a menu.
+    for (auto* name : { "Off", "Up", "Down", "Up / down", "Random" })
+        arpDirectionBox.addItem(TRANS(name), arpDirectionBox.getNumItems() + 1);
+
+    for (int octaves = 1; octaves <= 4; ++octaves)
+        arpRangeBox.addItem(juce::String(octaves) + TRANS(" oct"), octaves);
+
+    for (auto* box : { &arpDirectionBox, &arpRangeBox })
+    {
+        box->addListener(this);
+        miscPage.addAndMakeVisible(box);
+    }
+}
+
+void PluginShell::loadTargetIntoControls()
+{
+    auto* settings = channel();
+
+    if (settings == nullptr)
+        return;
+
+    // Nothing written back while this runs: setValue answers with a change
+    // callback, and that callback would push the half-loaded knobs at the
+    // target it is in the middle of reading.
+    const juce::ScopedValueSetter<bool> loading(loadingControls, true);
+
+    const auto target = selectedTarget();
+    const auto envelope = settings->getEnvelope(target);
+    const auto lfo = settings->getLfo(target);
+
+    const std::pair<int, float> envelopeValues[] = {
+        { envDelay, envelope.delay }, { envAttack, envelope.attack },
+        { envHold, envelope.hold },   { envDecay, envelope.decay },
+        { envSustain, envelope.sustain }, { envRelease, envelope.release },
+        { lfoDelay, lfo.delay }, { lfoAttack, lfo.attack },
+        { lfoAmount, lfo.amount }, { lfoSpeed, lfo.speed },
+        { filterCut, settings->getFilterCutoff() },
+        { filterRes, settings->getFilterResonance() },
+    };
+
+    for (const auto& [index, value] : envelopeValues)
+        if (static_cast<size_t>(index) < envelopeKnobs.size())
+            envelopeKnobs[static_cast<size_t>(index)]->setValue(value, juce::dontSendNotification);
+
+    envelopeSwitch.setToggleState(envelope.enabled, juce::dontSendNotification);
+    lfoSwitch.setToggleState(lfo.enabled, juce::dontSendNotification);
+    filterSwitch.setToggleState(settings->isFilterEnabled(), juce::dontSendNotification);
+
+    if (static_cast<size_t>(arpGate) < miscKnobs.size())
+    {
+        miscKnobs[static_cast<size_t>(arpTime)]->setValue(settings->getArpTime(), juce::dontSendNotification);
+        miscKnobs[static_cast<size_t>(arpGate)]->setValue(settings->getArpGate(), juce::dontSendNotification);
+    }
+
+    arpDirectionBox.setSelectedId(static_cast<int>(settings->getArpDirection()) + 1,
+                                 juce::dontSendNotification);
+    arpRangeBox.setSelectedId(settings->getArpRange(), juce::dontSendNotification);
+}
+
+void PluginShell::writeTargetFromControls()
+{
+    auto* settings = channel();
+
+    if (settings == nullptr || loadingControls || envelopeKnobs.size() < numEnvelopeKnobs)
+        return;
+
+    const auto value = [this] (int index)
+    {
+        return static_cast<float>(envelopeKnobs[static_cast<size_t>(index)]->getValue());
+    };
+
+    const auto target = selectedTarget();
+
+    ChannelSettings::Envelope envelope;
+    envelope.enabled = envelopeSwitch.getToggleState();
+    envelope.delay = value(envDelay);
+    envelope.attack = value(envAttack);
+    envelope.hold = value(envHold);
+    envelope.decay = value(envDecay);
+    envelope.sustain = value(envSustain);
+    envelope.release = value(envRelease);
+    settings->setEnvelope(target, envelope);
+
+    ChannelSettings::Lfo lfo;
+    lfo.enabled = lfoSwitch.getToggleState();
+    lfo.delay = value(lfoDelay);
+    lfo.attack = value(lfoAttack);
+    lfo.amount = value(lfoAmount);
+    lfo.speed = value(lfoSpeed);
+    settings->setLfo(target, lfo);
+
+    // The filter and the arpeggiator belong to the channel rather than to one
+    // envelope, so they are written whichever sub-tab is showing.
+    settings->setFilterEnabled(filterSwitch.getToggleState());
+    settings->setFilterCutoff(value(filterCut));
+    settings->setFilterResonance(value(filterRes));
+
+    if (static_cast<size_t>(arpGate) < miscKnobs.size())
+    {
+        settings->setArpTime(static_cast<float>(miscKnobs[static_cast<size_t>(arpTime)]->getValue()));
+        settings->setArpGate(static_cast<float>(miscKnobs[static_cast<size_t>(arpGate)]->getValue()));
+    }
+}
+
+void PluginShell::refreshControlStates()
+{
+    const auto hasChannel = channel() != nullptr;
+    // Nothing shifts the pitch of a channel that has already been rendered, so
+    // that tab's knobs stay drawn and stay honest about it.
+    const auto pitchTarget = selectedTarget() == ChannelSettings::Target::pitch;
+    const auto live = hasChannel && ! pitchTarget;
+
+    for (auto* toggle : { &envelopeSwitch, &lfoSwitch })
+        toggle->setEnabled(live);
+
+    filterSwitch.setEnabled(hasChannel);
+
+    const auto grey = [this] (int first, int last, bool awaiting)
+    {
+        for (auto i = first; i < last && static_cast<size_t>(i) < envelopeKnobs.size(); ++i)
+            envelopeKnobs[static_cast<size_t>(i)]->setAwaitingEngine(awaiting);
+    };
+
+    grey(envDelay, lfoDelay, ! (live && envelopeSwitch.getToggleState()));
+    grey(lfoDelay, filterCut, ! (live && lfoSwitch.getToggleState()));
+    grey(filterCut, numEnvelopeKnobs, ! (hasChannel && filterSwitch.getToggleState()));
+
+    const auto arpOn = hasChannel && arpDirectionBox.getSelectedId() > 1;
+
+    for (auto i = static_cast<size_t>(arpTime); i <= static_cast<size_t>(arpGate) && i < miscKnobs.size(); ++i)
+        miscKnobs[i]->setAwaitingEngine(! arpOn);
+
+    arpDirectionBox.setEnabled(hasChannel);
+    arpRangeBox.setEnabled(arpOn);
+}
+
+juce::Path PluginShell::buildEnvelopePath(juce::Rectangle<float> area) const
+{
+    juce::Path shape;
+
+    if (envelopeKnobs.size() < numEnvelopeKnobs)
+        return shape;
+
+    const auto value = [this] (int index)
+    {
+        return static_cast<float>(envelopeKnobs[static_cast<size_t>(index)]->getValue());
+    };
+
+    // Drawn in stage proportions rather than in seconds: a two-second attack
+    // beside a one-millisecond decay would leave the decay invisible, and the
+    // point of the picture is the shape.
+    const auto stages = { value(envDelay), value(envAttack), value(envHold),
+                          value(envDecay), 0.6f, value(envRelease) };
+
+    auto total = 0.0f;
+    for (const auto stage : stages)
+        total += stage + 0.08f;
+
+    const auto plot = area.reduced(6.0f);
+    const auto sustain = juce::jlimit(0.0f, 1.0f, value(envSustain));
+
+    auto x = plot.getX();
+    const auto step = [&] (float length) { return (length + 0.08f) / total * plot.getWidth(); };
+    const auto levelY = [&] (float level) { return plot.getBottom() - level * plot.getHeight(); };
+
+    shape.startNewSubPath(x, plot.getBottom());
+    x += step(value(envDelay));
+    shape.lineTo(x, plot.getBottom());
+    x += step(value(envAttack));
+    shape.lineTo(x, plot.getY());
+    x += step(value(envHold));
+    shape.lineTo(x, plot.getY());
+    x += step(value(envDecay));
+    shape.lineTo(x, levelY(sustain));
+    x += step(0.6f);
+    shape.lineTo(x, levelY(sustain));
+    x += step(value(envRelease));
+    shape.lineTo(juce::jmin(x, plot.getRight()), plot.getBottom());
+
+    return shape;
+}
+
+juce::Path PluginShell::buildLfoPath(juce::Rectangle<float> area) const
+{
+    juce::Path wave;
+
+    if (envelopeKnobs.size() < numEnvelopeKnobs)
+        return wave;
+
+    const auto speed = static_cast<float>(envelopeKnobs[lfoSpeed]->getValue());
+    const auto amount = static_cast<float>(envelopeKnobs[lfoAmount]->getValue());
+    // One cycle at the slowest setting, six at the fastest: enough for the knob
+    // to read as speed without the drawing turning into a solid block.
+    const auto cycles = 0.5f + speed * 5.5f;
+    const auto plot = area.reduced(4.0f);
+    const auto steps = juce::jmax(2, static_cast<int>(plot.getWidth()));
+
+    for (int i = 0; i < steps; ++i)
+    {
+        const auto proportion = static_cast<float>(i) / static_cast<float>(steps - 1);
+        const auto x = plot.getX() + proportion * plot.getWidth();
+        const auto y = plot.getCentreY()
+                     - std::sin(proportion * cycles * juce::MathConstants<float>::twoPi)
+                           * plot.getHeight() * 0.42f * amount;
+
+        if (i == 0)
+            wave.startNewSubPath(x, y);
+        else
+            wave.lineTo(x, y);
+    }
+
+    return wave;
 }
 
 void PluginShell::showPage(Page page)
@@ -340,8 +623,26 @@ void PluginShell::buttonClicked(juce::Button* button)
         return;
     }
 
-    // The envelope sub-tabs pick which curve is on screen. One curve is drawn
-    // so far, so they only redraw the heading until there is more to show.
+    if (button == &envelopeSwitch || button == &lfoSwitch || button == &filterSwitch)
+    {
+        writeTargetFromControls();
+        refreshControlStates();
+        repaint();
+        return;
+    }
+
+    // The sub-tabs pick which curve is being edited. Each target keeps its own
+    // values, so switching tab reloads rather than carrying the last one over.
+    for (auto* chip : envelopeTabs)
+    {
+        if (button == chip)
+        {
+            loadTargetIntoControls();
+            refreshControlStates();
+            break;
+        }
+    }
+
     repaint();
 }
 
@@ -351,9 +652,42 @@ void PluginShell::sliderValueChanged(juce::Slider* slider)
         return;
 
     if (slider == &panKnob)
+    {
         channelTrack->setPan(static_cast<float>(panKnob.getValue()));
-    else if (slider == &volKnob)
+        return;
+    }
+
+    if (slider == &volKnob)
+    {
         channelTrack->setVolume(static_cast<float>(volKnob.getValue()));
+        return;
+    }
+
+    // Everything else on these pages is one knob of the channel's own settings,
+    // and they are written as a set: reading twelve atomics costs less than
+    // working out which one moved.
+    writeTargetFromControls();
+
+    // The envelope and the LFO are drawn from these values, so the picture
+    // follows the knob instead of contradicting it.
+    if (currentPage == Page::envelope)
+        repaint();
+}
+
+void PluginShell::comboBoxChanged(juce::ComboBox* box)
+{
+    auto* settings = channel();
+
+    if (settings == nullptr || loadingControls)
+        return;
+
+    if (box == &arpDirectionBox)
+        settings->setArpDirection(
+            static_cast<ChannelSettings::ArpDirection>(juce::jmax(0, arpDirectionBox.getSelectedId() - 1)));
+    else if (box == &arpRangeBox)
+        settings->setArpRange(arpRangeBox.getSelectedId());
+
+    refreshControlStates();
 }
 
 void PluginShell::paint(juce::Graphics& g)
@@ -398,44 +732,23 @@ void PluginShell::paint(juce::Graphics& g)
     {
         drawSections(g, envelopeSections);
 
-        // The curve, drawn from the knobs' own defaults so the shape is not a
-        // decoration that contradicts them once they are wired up.
+        // The curve is drawn from the knobs themselves, so the picture is what
+        // the channel will actually do rather than a decoration beside it.
         const auto curve = envelopeDisplay.translated(page.getX(), page.getY()).toFloat();
         g.setColour(Theme::panelDeep());
         g.fillRoundedRectangle(curve, 3.0f);
 
-        juce::Path shape;
-        shape.startNewSubPath(curve.getX() + 6.0f, curve.getBottom() - 6.0f);
-        shape.lineTo(curve.getX() + curve.getWidth() * 0.24f, curve.getY() + 8.0f);
-        shape.lineTo(curve.getX() + curve.getWidth() * 0.44f, curve.getY() + 8.0f);
-        shape.lineTo(curve.getX() + curve.getWidth() * 0.66f, curve.getCentreY() + 6.0f);
-        shape.lineTo(curve.getRight() - 6.0f, curve.getBottom() - 6.0f);
-        g.setColour(Theme::mutedText().withAlpha(0.55f));
-        g.strokePath(shape, juce::PathStrokeType(1.4f));
+        const auto armed = envelopeSwitch.getToggleState() && envelopeSwitch.isEnabled();
+        g.setColour(armed ? Theme::accent().withAlpha(0.85f) : Theme::mutedText().withAlpha(0.45f));
+        g.strokePath(buildEnvelopePath(curve), juce::PathStrokeType(1.4f));
 
         const auto lfo = lfoDisplay.translated(page.getX(), page.getY()).toFloat();
         g.setColour(Theme::panelDeep());
         g.fillRoundedRectangle(lfo, 3.0f);
 
-        juce::Path wave;
-        const auto steps = juce::jmax(2, static_cast<int>(lfo.getWidth()));
-
-        for (int i = 0; i < steps; ++i)
-        {
-            const auto proportion = static_cast<float>(i) / static_cast<float>(steps - 1);
-            const auto x = lfo.getX() + proportion * lfo.getWidth();
-            const auto y = lfo.getCentreY()
-                         - std::sin(proportion * juce::MathConstants<float>::twoPi)
-                               * lfo.getHeight() * 0.32f;
-
-            if (i == 0)
-                wave.startNewSubPath(x, y);
-            else
-                wave.lineTo(x, y);
-        }
-
-        g.setColour(Theme::mutedText().withAlpha(0.55f));
-        g.strokePath(wave, juce::PathStrokeType(1.4f));
+        const auto lfoArmed = lfoSwitch.getToggleState() && lfoSwitch.isEnabled();
+        g.setColour(lfoArmed ? Theme::accent().withAlpha(0.85f) : Theme::mutedText().withAlpha(0.45f));
+        g.strokePath(buildLfoPath(lfo), juce::PathStrokeType(1.4f));
     }
     else
     {
@@ -444,7 +757,9 @@ void PluginShell::paint(juce::Graphics& g)
 
     g.setColour(Theme::faintText());
     g.setFont(Theme::ui(10.0f));
-    g.drawText(TRANS("These are the channel's own controls - the engine behind them is still being built."),
+    g.drawText(currentPage == Page::envelope
+                   ? TRANS("The channel's own envelope, LFO and filter. A pitch envelope is drawn but not yet played.")
+                   : TRANS("The arpeggiator is live; the rest of this page is drawn while its engine is built."),
                page.withHeight(14).translated(0, page.getHeight() - 14),
                juce::Justification::centredLeft, true);
 }
@@ -572,6 +887,19 @@ void PluginShell::resized()
         envelopeSections.push_back({ TRANS("LFO"), lfoBox });
         envelopeSections.push_back({ TRANS("Filter"), filterBox });
 
+        // Each box's switch sits in its own heading, at the far end of it: that
+        // is the only free space on the page, and it puts the switch where the
+        // thing it arms is named.
+        const auto headerSwitch = [] (juce::Rectangle<int> box)
+        {
+            return box.reduced(6, 0).withHeight(sectionHeader).translated(0, 5)
+                      .removeFromRight(30).withSizeKeepingCentre(28, 14);
+        };
+
+        envelopeSwitch.setBounds(headerSwitch(envelopeBox));
+        lfoSwitch.setBounds(headerSwitch(lfoBox));
+        filterSwitch.setBounds(headerSwitch(filterBox));
+
         auto envelopeBody = sectionBody(envelopeBox);
         envelopeDisplay = envelopeBody.removeFromTop(envelopeBody.getHeight() - knobHeight - 6);
         envelopeBody.removeFromTop(6);
@@ -618,7 +946,9 @@ void PluginShell::resized()
 
         auto groupBox = secondRow.removeFromLeft(96);
         secondRow.removeFromLeft(8);
-        auto arpBox = secondRow.removeFromLeft(2 * knobPitch + 16);
+        // Wider than the two knobs need: the direction and the range are the
+        // arpeggiator's real controls, and they are lists rather than dials.
+        auto arpBox = secondRow.removeFromLeft(2 * knobPitch + 130);
         secondRow.removeFromLeft(8);
         auto echoBox = secondRow.removeFromLeft(4 * knobPitch + 16);
 
@@ -626,7 +956,11 @@ void PluginShell::resized()
         miscSections.push_back({ TRANS("Arpeggiator"), arpBox });
         miscSections.push_back({ TRANS("Echo delay / fat mode"), echoBox });
 
-        placeKnobs(sectionBody(arpBox), miscKnobs, 7, 9);
+        auto arpBody = placeKnobs(sectionBody(arpBox), miscKnobs, 7, 9);
+        arpBody.removeFromLeft(6);
+        arpDirectionBox.setBounds(arpBody.removeFromTop(20));
+        arpBody.removeFromTop(4);
+        arpRangeBox.setBounds(arpBody.removeFromTop(20));
         placeKnobs(sectionBody(echoBox), miscKnobs, 9, miscKnobs.size());
     }
 }

@@ -42,6 +42,11 @@ struct ProjectTrackState
         unfreezing after reopening still gets everything back.
     */
     juce::String frozenFile;
+    /** The channel's own envelope, LFO, filter and arpeggiator settings.
+        Void on a track that was saved before they existed, which reads back as
+        the defaults - everything off, so an old project sounds unchanged.
+    */
+    juce::var channelSettings;
     /** Playlist lane height in pixels. Zero means the default height. */
     int laneHeight = 0;
 };

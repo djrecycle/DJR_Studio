@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/ChannelSettings.h"
 #include "ui/Knob.h"
 #include "ui/UiControls.h"
 
@@ -30,6 +31,7 @@ class Track;
 class PluginShell final : public juce::Component,
                           private juce::Button::Listener,
                           private juce::Slider::Listener,
+                          private juce::ComboBox::Listener,
                           private juce::ComponentListener
 {
 public:
@@ -73,6 +75,7 @@ private:
     */
     void componentMovedOrResized(juce::Component& component, bool moved, bool resized) override;
     void sliderValueChanged(juce::Slider* slider) override;
+    void comboBoxChanged(juce::ComboBox* box) override;
     void showPage(Page page);
     void refreshPageVisibility();
 
@@ -85,6 +88,29 @@ private:
                      juce::Component& parent,
                      const juce::String& caption,
                      Knob::Style style = Knob::Style::unipolar);
+    /** A knob the channel actually listens to. */
+    Knob* addLive(std::vector<std::unique_ptr<Knob>>& into,
+                  juce::Component& parent,
+                  const juce::String& caption,
+                  Knob::Style style = Knob::Style::unipolar);
+
+    /** The channel this window's settings belong to, or nullptr when the window
+        was opened for something that has no track behind it.
+    */
+    ChannelSettings* channel() const noexcept;
+    /** Which envelope the page is showing, from the sub-tab that is lit. */
+    ChannelSettings::Target selectedTarget() const noexcept;
+    /** Puts the selected target's stored values back on the knobs. Called when
+        the sub-tab changes, so each curve keeps its own settings.
+    */
+    void loadTargetIntoControls();
+    /** Sends the envelope and LFO knobs back to the channel. */
+    void writeTargetFromControls();
+    /** Greys out what this target has no engine for, and what is switched off. */
+    void refreshControlStates();
+    /** Draws the DAHDSR the knobs currently describe. */
+    juce::Path buildEnvelopePath(juce::Rectangle<float> area) const;
+    juce::Path buildLfoPath(juce::Rectangle<float> area) const;
 
     juce::AudioProcessor& audioProcessor;
     Track* channelTrack = nullptr;
@@ -112,6 +138,36 @@ private:
     Knob panKnob { "PAN", Knob::Style::bipolar };
     Knob volKnob { "VOL" };
     Knob pitchKnob { "PITCH", Knob::Style::bipolar };
+
+    /** Envelope page knobs, in order: the six DAHDSR, the four LFO, then the
+        filter's two. The indices are used by the engine wiring, so a knob
+        cannot be inserted here without moving them.
+    */
+    enum EnvelopeKnob
+    {
+        envDelay = 0, envAttack, envHold, envDecay, envSustain, envRelease,
+        lfoDelay, lfoAttack, lfoAmount, lfoSpeed,
+        filterCut, filterRes, numEnvelopeKnobs
+    };
+
+    /** Misc page knobs, in the order they are built. */
+    enum MiscKnob
+    {
+        levelPan = 0, levelVol, levelModX, levelModY,
+        timeGate, timeShift, timeSwing,
+        arpTime, arpGate,
+        echoFeed, echoPan, echoPitch, echoTime, numMiscKnobs
+    };
+
+    SwitchButton envelopeSwitch { "envelope on" };
+    SwitchButton lfoSwitch { "lfo on" };
+    SwitchButton filterSwitch { "filter on" };
+    juce::ComboBox arpDirectionBox;
+    juce::ComboBox arpRangeBox;
+    /** Set while the controls are being loaded, so writing them back does not
+        answer its own change and overwrite what was just read.
+    */
+    bool loadingControls = false;
 
     std::vector<std::unique_ptr<Knob>> envelopeKnobs;
     std::vector<std::unique_ptr<Knob>> miscKnobs;

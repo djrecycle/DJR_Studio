@@ -1784,6 +1784,7 @@ void MainComponent::synchroniseProjectState()
         state.outputDestination = track->getOutputDestination();
         state.inputChannel = track->getInputChannel();
         state.inputStereo = track->isInputStereo();
+        state.channelSettings = track->getChannelSettings().toVar();
         state.frozenFile = track->isFrozen() ? track->getFrozenFile().getFullPathName() : juce::String();
 
         for (int slot = 0; slot < Track::maxSends; ++slot)
@@ -2073,6 +2074,7 @@ void MainComponent::restoreRoutingFromProject()
         {
             restored->setInputChannel(projectTrack.inputChannel);
             restored->setInputStereo(projectTrack.inputStereo);
+            restored->getChannelSettings().fromVar(projectTrack.channelSettings);
         }
 
         for (int slot = 0; slot < projectTrack.sends.size() && slot < Track::maxSends; ++slot)

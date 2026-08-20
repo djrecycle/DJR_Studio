@@ -5,6 +5,7 @@
 #include "audio/TimeStretch.h"
 #include "audio/AudioClip.h"
 #include "audio/AutomationLane.h"
+#include "audio/ChannelSettings.h"
 #include "audio/BusTrack.h"
 #include "audio/Transport.h"
 #include "audio/AudioTrack.h"
@@ -2414,6 +2415,217 @@ int main()
             }
 
             renderFile.deleteFile();
+        }
+    }
+
+    // The channel's own stage: the envelope, the LFO, the filter and the
+    // arpeggiator, driven directly so the assertions do not depend on whatever
+    // the preview synth happens to sound like.
+    {
+        using Channel = djr::ChannelSettings;
+
+        // A block of MIDI holding one note down, and a block of steady signal
+        // to hear what the channel does to it.
+        const auto silenceGate = [] (Channel& channel, int numSamples)
+        {
+            juce::MidiBuffer empty;
+            channel.processMidi(empty, numSamples, tempoBpm);
+        };
+
+        const auto renderGain = [] (Channel& channel, int numSamples)
+        {
+            juce::AudioBuffer<float> buffer(2, numSamples);
+
+            for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+                juce::FloatVectorOperations::fill(buffer.getWritePointer(ch), 1.0f, numSamples);
+
+            channel.processAudio(buffer);
+            return buffer.getMagnitude(0, 0, numSamples);
+        };
+
+        {
+            Channel channel;
+            channel.prepare(sampleRate);
+
+            Channel::Envelope envelope;
+            envelope.enabled = true;
+            envelope.delay = 0.0f;
+            // Squared knobs: 0.5 is a quarter of the four-second longest, so a
+            // second of attack - long enough to be unambiguous in one block.
+            envelope.attack = 0.5f;
+            envelope.hold = 0.0f;
+            envelope.decay = 0.0f;
+            envelope.sustain = 1.0f;
+            envelope.release = 0.5f;
+            channel.setEnvelope(Channel::Target::volume, envelope);
+
+            check(isSilent(renderGain(channel, blockSize)),
+                  "a volume envelope with no note holds the channel silent");
+
+            juce::MidiBuffer noteOn;
+            noteOn.addEvent(juce::MidiMessage::noteOn(1, 60, 0.9f), 0);
+            channel.processMidi(noteOn, blockSize, tempoBpm);
+
+            const auto opening = renderGain(channel, blockSize);
+            check(! isSilent(opening) && opening < 0.2f,
+                  "the note opens the envelope, and a slow attack starts quietly");
+
+            auto climbing = opening;
+            auto everFell = false;
+
+            for (int block = 0; block < 20; ++block)
+            {
+                silenceGate(channel, blockSize);
+                const auto next = renderGain(channel, blockSize);
+                everFell = everFell || next < climbing - 1.0e-5f;
+                climbing = next;
+            }
+
+            check(! everFell, "the attack keeps climbing while the note is held");
+
+            // Twenty-one blocks is about a quarter of a second, and the attack
+            // is a second long, so it should be about a quarter of the way up.
+            check(climbing > 0.15f && climbing < 0.4f,
+                  "and a second-long attack is a quarter of the way up after a quarter second");
+
+            juce::MidiBuffer noteOff;
+            noteOff.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
+            channel.processMidi(noteOff, blockSize, tempoBpm);
+
+            // The first block of the release still peaks where the envelope was
+            // when the note went, so the fall shows a block or two later.
+            renderGain(channel, blockSize);
+
+            for (int block = 0; block < 3; ++block)
+            {
+                silenceGate(channel, blockSize);
+                renderGain(channel, blockSize);
+            }
+
+            silenceGate(channel, blockSize);
+            const auto releasing = renderGain(channel, blockSize);
+            check(releasing < climbing, "letting go starts the release");
+
+            for (int block = 0; block < 200; ++block)
+            {
+                silenceGate(channel, blockSize);
+                renderGain(channel, blockSize);
+            }
+
+            check(isSilent(renderGain(channel, blockSize)),
+                  "and the release runs all the way down to silence");
+        }
+
+        {
+            // A filter that is nearly shut takes the top off a signal that is
+            // nothing but top: alternating samples are the highest frequency
+            // the sample rate can carry.
+            Channel channel;
+            channel.prepare(sampleRate);
+            channel.setFilterEnabled(true);
+            channel.setFilterCutoff(0.1f);
+            channel.setFilterResonance(0.0f);
+
+            juce::AudioBuffer<float> buffer(2, blockSize);
+
+            for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+                for (int sample = 0; sample < blockSize; ++sample)
+                    buffer.setSample(ch, sample, sample % 2 == 0 ? 1.0f : -1.0f);
+
+            channel.processAudio(buffer);
+            check(buffer.getMagnitude(0, blockSize / 2, blockSize / 2) < 0.1f,
+                  "a low cutoff takes the top off the channel");
+        }
+
+        {
+            Channel channel;
+            channel.prepare(sampleRate);
+            channel.setArpDirection(Channel::ArpDirection::up);
+            channel.setArpRange(2);
+            channel.setArpTime(0.0f);
+            channel.setArpGate(0.5f);
+
+            juce::MidiBuffer midi;
+            midi.addEvent(juce::MidiMessage::noteOn(1, 60, 0.9f), 0);
+            midi.addEvent(juce::MidiMessage::noteOn(1, 64, 0.9f), 0);
+            channel.processMidi(midi, blockSize, tempoBpm);
+
+            juce::Array<int> played;
+
+            for (const auto metadata : midi)
+                if (metadata.getMessage().isNoteOn())
+                    played.add(metadata.getMessage().getNoteNumber());
+
+            // A sixteenth at 120bpm is ~5500 samples, so one 512-sample block
+            // holds the first step and nothing else.
+            check(played.size() == 1 && played[0] == 60,
+                  "the arpeggiator plays the bottom of the chord first");
+
+            for (int block = 0; block < 40; ++block)
+            {
+                juce::MidiBuffer next;
+                channel.processMidi(next, blockSize, tempoBpm);
+
+                for (const auto metadata : next)
+                    if (metadata.getMessage().isNoteOn())
+                        played.add(metadata.getMessage().getNoteNumber());
+            }
+
+            check(played.size() >= 4, "and keeps stepping while the chord is held");
+            check(played.contains(64), "it reaches the notes above the root");
+            check(played.contains(72), "and the range takes it into the next octave");
+
+            juce::MidiBuffer release;
+            release.addEvent(juce::MidiMessage::noteOff(1, 60), 0);
+            release.addEvent(juce::MidiMessage::noteOff(1, 64), 0);
+            channel.processMidi(release, blockSize, tempoBpm);
+
+            auto stillPlaying = false;
+
+            for (int block = 0; block < 40; ++block)
+            {
+                juce::MidiBuffer next;
+                channel.processMidi(next, blockSize, tempoBpm);
+
+                for (const auto metadata : next)
+                    if (metadata.getMessage().isNoteOn())
+                        stillPlaying = true;
+            }
+
+            check(! stillPlaying, "and it stops when the chord is let go");
+        }
+
+        {
+            Channel channel;
+            Channel::Envelope envelope;
+            envelope.enabled = true;
+            envelope.attack = 0.42f;
+            envelope.sustain = 0.3f;
+            channel.setEnvelope(Channel::Target::modX, envelope);
+            channel.setFilterEnabled(true);
+            channel.setFilterCutoff(0.33f);
+            channel.setArpDirection(Channel::ArpDirection::upDown);
+            channel.setArpRange(3);
+
+            Channel reopened;
+            reopened.fromVar(channel.toVar());
+
+            const auto restored = reopened.getEnvelope(Channel::Target::modX);
+            check(restored.enabled
+                      && juce::approximatelyEqual(restored.attack, 0.42f)
+                      && juce::approximatelyEqual(restored.sustain, 0.3f),
+                  "the channel's envelope survives a save and a reload");
+            check(reopened.isFilterEnabled()
+                      && juce::approximatelyEqual(reopened.getFilterCutoff(), 0.33f),
+                  "so does the filter");
+            check(reopened.getArpDirection() == Channel::ArpDirection::upDown
+                      && reopened.getArpRange() == 3,
+                  "and so does the arpeggiator");
+
+            Channel untouched;
+            untouched.fromVar({});
+            check(! untouched.isActive(),
+                  "a project from before any of this reads back as a channel that does nothing");
         }
     }
 

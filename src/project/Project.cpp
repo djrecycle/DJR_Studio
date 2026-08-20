@@ -60,6 +60,7 @@ juce::var Project::toVar() const
         trackObject->setProperty("inputChannel", track.inputChannel);
         trackObject->setProperty("inputStereo", track.inputStereo);
         trackObject->setProperty("sends", track.sends);
+        trackObject->setProperty("channelSettings", track.channelSettings);
         trackObject->setProperty("frozenFile", track.frozenFile);
         trackObject->setProperty("laneHeight", track.laneHeight);
         trackArray.add(trackObject);
@@ -170,6 +171,7 @@ void Project::fromVar(const juce::var& value)
             track.outputDestination = static_cast<int>(getOr(*trackObject, "outputDestination", -1));
             track.inputChannel = static_cast<int>(getOr(*trackObject, "inputChannel", 0));
             track.inputStereo = static_cast<bool>(getOr(*trackObject, "inputStereo", true));
+            track.channelSettings = trackObject->getProperty("channelSettings");
 
             if (auto* sendArray = trackObject->getProperty("sends").getArray())
                 for (const auto& send : *sendArray)

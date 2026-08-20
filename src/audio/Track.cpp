@@ -502,8 +502,19 @@ juce::StringArray Track::getPluginFormatNames() const
     return pluginChain.getPluginFormatNames();
 }
 
+ChannelSettings& Track::getChannelSettings() noexcept
+{
+    return channelSettings;
+}
+
+const ChannelSettings& Track::getChannelSettings() const noexcept
+{
+    return channelSettings;
+}
+
 void Track::prepare(double sampleRate, int blockSize)
 {
+    channelSettings.prepare(sampleRate);
     preparedSampleRate.store(sampleRate, std::memory_order_release);
     preparedBlockSize.store(blockSize, std::memory_order_release);
     instrumentScratch.setSize(PluginChain::maxPluginChannels, juce::jmax(1, blockSize), false, false, true);
@@ -583,6 +594,16 @@ void Track::processAudio(juce::AudioBuffer<float>& buffer,
                 PluginChain::processWithChannelAdaptation(*instrument, buffer, midi, instrumentScratch);
             }
         }
+
+        // The channel's own stage, between the generator and the inserts: that
+        // is where FL puts it, and it is why the envelope shapes the instrument
+        // rather than whatever an insert made of it.
+        //
+        // Only where there are notes to work with. These settings are gated by
+        // MIDI, so on an audio track an armed volume envelope would do nothing
+        // but hold the track silent.
+        if (trackKind == TrackKind::midi || trackKind == TrackKind::instrument)
+            channelSettings.processAudio(buffer);
 
         // Never block the audio thread for a plugin edit: skip the chain for this
         // block instead, so the worst case is one unprocessed buffer.

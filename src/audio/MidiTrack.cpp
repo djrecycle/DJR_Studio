@@ -211,8 +211,15 @@ void MidiTrack::renderAudio(juce::AudioBuffer<float>& buffer,
         // sequence left hanging instead of letting it drone.
         sendAllNotesOff(midi);
         resetTransportState();
+        getChannelSettings().reset();
         wasPlaying = false;
     }
+
+    // The arpeggiator rewrites the notes before anything turns them into sound,
+    // and the same pass is what tells the channel envelopes where the gate
+    // opens - so it has to run ahead of both the preview synth and the
+    // instrument, which Track runs after this returns.
+    getChannelSettings().processMidi(midi, buffer.getNumSamples(), context.tempoBpm);
 
     // Live playing is merged by Track before the instrument runs, so the preview
     // synth has to see it too - render after the sequence has been written.

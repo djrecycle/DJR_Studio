@@ -80,6 +80,7 @@ FetchContent_MakeAvailable(JUCE)
 set(DJR_ENGINE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Transport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AutomationLane.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/ChannelSettings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Track.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioTrack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioClip.cpp

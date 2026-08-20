@@ -2,6 +2,7 @@
 
 #include "AudioClip.h"
 #include "AutomationLane.h"
+#include "ChannelSettings.h"
 #include "plugins/PluginChain.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -150,6 +151,13 @@ public:
     bool isVolumeAutomated() const noexcept;
     bool isPanAutomated() const noexcept;
 
+    /** The channel's own envelope, LFO, filter and arpeggiator - the stage FL
+        puts between the generator and the inserts. Every track carries one; it
+        only does anything on a track that has notes to gate it.
+    */
+    ChannelSettings& getChannelSettings() noexcept;
+    const ChannelSettings& getChannelSettings() const noexcept;
+
     /** Prepares the plugin on the calling thread, then swaps it in under a short lock. */
     void addPlugin(std::unique_ptr<juce::AudioPluginInstance> plugin);
     void clearPlugins();
@@ -235,6 +243,7 @@ private:
 
     juce::String name;
     TrackKind trackKind;
+    ChannelSettings channelSettings;
     juce::SpinLock pluginLock;
     PluginChain pluginChain;
     juce::SpinLock instrumentLock;
