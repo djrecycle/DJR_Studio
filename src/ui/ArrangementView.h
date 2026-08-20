@@ -110,6 +110,16 @@ public:
     */
     void setFileDropCallback(std::function<void(const juce::File&, int trackIndex, double beat)> callback);
 
+    /** The track and beat under a screen position, for something dropped from
+        another window of this app.
+
+        A drag from a plugin window cannot use the desktop's file-drag protocol:
+        the two windows belong to one process, and the drop never comes back.
+        So the drop is answered here, from the position the mouse was released
+        at. False when that position is not over a track.
+    */
+    bool findDropTarget(juce::Point<int> screenPosition, int& trackIndexOut, double& beatOut) const;
+
     bool isInterestedInFileDrag(const juce::StringArray& files) override;
     void fileDragEnter(const juce::StringArray& files, int x, int y) override;
     void fileDragMove(const juce::StringArray& files, int x, int y) override;

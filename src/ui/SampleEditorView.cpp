@@ -152,13 +152,13 @@ void SampleEditorView::setSendCallback(std::function<void()> onSend)
     resized();
 }
 
-void SampleEditorView::setDragExportCallback(std::function<juce::File()> onDragExport)
+void SampleEditorView::setDropAtCallback(std::function<void(juce::Point<int>)> onDropAt)
 {
-    dragExportCallback = std::move(onDragExport);
+    dropAtCallback = std::move(onDropAt);
 
     // The view listens on the button rather than the button knowing about
     // drags: a Button that also drags stops behaving like a button.
-    if (dragExportCallback != nullptr)
+    if (dropAtCallback != nullptr)
         sendButton.addMouseListener(this, false);
     else
         sendButton.removeMouseListener(this);
@@ -636,13 +636,11 @@ void SampleEditorView::mouseWheelMove(const juce::MouseEvent& event,
 
 void SampleEditorView::mouseDown(const juce::MouseEvent& event)
 {
-    // A press is the start of a new gesture, so whatever the last drag did or
-    // failed to do is over. The completion callback clears this too, but a drag
-    // the desktop abandons never calls it, and one abandoned drag must not be
-    // able to disable the button for the rest of the session.
+    // A press on the send button starts a gesture that is not the waveform's.
     if (event.eventComponent == &sendButton)
     {
-        dragInProgress = false;
+        draggingToDrop = false;
+        stopTimer();
         return;
     }
 
@@ -656,7 +654,7 @@ void SampleEditorView::mouseDrag(const juce::MouseEvent& event)
 {
     if (event.eventComponent == &sendButton)
     {
-        startSendDrag(event);
+        handleSendButtonDrag(event);
         return;
     }
 
@@ -672,20 +670,44 @@ void SampleEditorView::mouseDrag(const juce::MouseEvent& event)
     repaint();
 }
 
-void SampleEditorView::startSendDrag(const juce::MouseEvent& event)
+void SampleEditorView::mouseUp(const juce::MouseEvent& event)
 {
-    // Far enough that a click with a shaky hand is still a click.
-    if (dragInProgress || dragExportCallback == nullptr || event.getDistanceFromDragStart() < 8)
+    if (event.eventComponent == &sendButton)
+        finishSendDrag(event.getScreenPosition());
+}
+
+void SampleEditorView::timerCallback()
+{
+    if (juce::ModifierKeys::getCurrentModifiersRealtime().isLeftButtonDown())
         return;
 
-    const auto file = dragExportCallback();
+    finishSendDrag(juce::Desktop::getMousePosition());
+}
 
-    if (file == juce::File())
+void SampleEditorView::handleSendButtonDrag(const juce::MouseEvent& event)
+{
+    // Far enough that a click made with a shaky hand is still a click.
+    if (draggingToDrop || dropAtCallback == nullptr || event.getDistanceFromDragStart() < 8)
         return;
 
-    dragInProgress = true;
-    juce::DragAndDropContainer::performExternalDragDropOfFiles({ file.getFullPathName() }, false, this,
-        [this] { dragInProgress = false; });
+    draggingToDrop = true;
+    setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+    setNotice(TRANS("Let go over a playlist track"));
+    startTimerHz(30);
+}
+
+void SampleEditorView::finishSendDrag(juce::Point<int> screenPosition)
+{
+    if (! draggingToDrop)
+        return;
+
+    draggingToDrop = false;
+    stopTimer();
+    setMouseCursor(juce::MouseCursor::NormalCursor);
+    setNotice({});
+
+    if (dropAtCallback != nullptr)
+        dropAtCallback(screenPosition);
 }
 
 void SampleEditorView::buttonClicked(juce::Button* button)

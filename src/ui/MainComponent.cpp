@@ -1540,6 +1540,31 @@ void MainComponent::prepareBuiltInEditor(juce::AudioPluginInstance& plugin, int 
         // to "where did it go" should be somewhere the user was already looking.
         addAudioClipToTrack(trackIndex, file, audioEngine.getTransport().getPositionBeats());
     });
+
+    // Dragging aims it instead of accepting the default. The audio is written
+    // only once the position turns out to be a track, so a drag let go over
+    // nothing costs nothing.
+    editor->setDropAtCallback([this] (juce::Point<int> screenPosition, const std::function<juce::File()>& writeAudio)
+    {
+        auto dropTrack = -1;
+        auto dropBeat = 0.0;
+
+        if (! arrangementView.findDropTarget(screenPosition, dropTrack, dropBeat))
+        {
+            setStatusMessage(TRANS("Let go over a playlist track to place it there."));
+            return;
+        }
+
+        const auto file = writeAudio();
+
+        if (file == juce::File())
+        {
+            setStatusMessage(TRANS("There is nothing to place yet."));
+            return;
+        }
+
+        addAudioClipToTrack(dropTrack, file, dropBeat);
+    });
 }
 
 void MainComponent::showPluginWindow(juce::AudioPluginInstance& plugin, Track* track)

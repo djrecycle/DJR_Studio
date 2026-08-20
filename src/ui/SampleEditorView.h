@@ -25,7 +25,8 @@ namespace djr
     trim already decides. That keeps the trim as the one way to say "this bit".
 */
 class SampleEditorView final : public juce::Component,
-                               private juce::Button::Listener
+                               private juce::Button::Listener,
+                               private juce::Timer
 {
 public:
     SampleEditorView();
@@ -91,13 +92,14 @@ public:
     void setLoadCallback(std::function<void()> onLoad);
     /** Turns on the button that hands the edited audio back to the timeline. */
     void setSendCallback(std::function<void()> onSend);
-    /** What a drag off that button carries: a file already written, or an empty
-        File when there is nothing to write.
+    /** Where a drag off that button was let go, in screen coordinates.
 
-        Clicking sends it where the host decides; dragging lets the reader pick
-        the track and the bar themselves. Same audio, two ways of aiming it.
+        Clicking sends the audio where the host decides; dragging lets the
+        reader aim it at a track and a bar themselves. The desktop's own file
+        drag is not used for this: source and target are two windows of one
+        process, and the drop never finds its way back.
     */
-    void setDragExportCallback(std::function<juce::File()> onDragExport);
+    void setDropAtCallback(std::function<void(juce::Point<int>)> onDropAt);
     /** What the header calls the audio, when that is not the clip's own name. */
     void setTitle(const juce::String& title);
 
@@ -111,11 +113,22 @@ public:
     void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
+    void mouseUp(const juce::MouseEvent& event) override;
 
 private:
     void buttonClicked(juce::Button* button) override;
-    /** Writes the audio out and lets the desktop carry it to the playlist. */
-    void startSendDrag(const juce::MouseEvent& event);
+    /** Follows a drag off the send button and hands over where it ended. */
+    void handleSendButtonDrag(const juce::MouseEvent& event);
+    /** Ends the drag at `screenPosition` - once, whichever noticed first. */
+    void finishSendDrag(juce::Point<int> screenPosition);
+    /** Watches for the button being let go.
+
+        A release outside this window does not always come back as a mouseUp:
+        the pointer is over another window by then, and which one gets the
+        event is the desktop's business. Asking the mouse itself is the one
+        answer that does not depend on that.
+    */
+    void timerCallback() override;
     void applyEdit(AudioClip::SampleEdit edit);
     /** Asks where to write, then writes the played region there. */
     void exportSample();
@@ -196,9 +209,11 @@ private:
     std::function<void()> clearCaptureCallback;
     std::function<void()> loadCallback;
     std::function<void()> sendCallback;
-    std::function<juce::File()> dragExportCallback;
-    /** One drag must not start a second one while the first is still live. */
-    bool dragInProgress = false;
+    std::function<void(juce::Point<int>)> dropAtCallback;
+    /** Whether the pointer has moved far enough off the button for this to be
+        a drag rather than a click that wobbled.
+    */
+    bool draggingToDrop = false;
     bool captureControlsVisible = false;
     bool captureActive = false;
     double captureSeconds = 0.0;

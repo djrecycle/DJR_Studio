@@ -3040,6 +3040,23 @@ void ArrangementView::setFileDropCallback(std::function<void(const juce::File&, 
     fileDropCallback = std::move(callback);
 }
 
+bool ArrangementView::findDropTarget(juce::Point<int> screenPosition, int& trackIndexOut, double& beatOut) const
+{
+    const auto local = getLocalPoint(nullptr, screenPosition);
+
+    if (! getLocalBounds().contains(local))
+        return false;
+
+    const auto row = rowAt(local);
+
+    if (! juce::isPositiveAndBelow(row, getRowCount()))
+        return false;
+
+    trackIndexOut = rows[static_cast<size_t>(row)].trackIndex;
+    beatOut = juce::jmax(0.0, snapBeat(xToBeat(local.x)));
+    return true;
+}
+
 bool ArrangementView::isInterestedInFileDrag(const juce::StringArray& files)
 {
     if (fileDropCallback == nullptr)
@@ -3061,6 +3078,7 @@ void ArrangementView::fileDragEnter(const juce::StringArray& files, int x, int y
 
 void ArrangementView::fileDragMove(const juce::StringArray&, int x, int y)
 {
+
     // The row under the pointer is outlined while the drag is overhead: a drop
     // that lands on the wrong track is easy to make and tedious to undo.
     const auto row = rowAt({ x, y });
@@ -3083,6 +3101,7 @@ void ArrangementView::fileDragExit(const juce::StringArray&)
 
 void ArrangementView::filesDropped(const juce::StringArray& files, int x, int y)
 {
+
     const auto row = rowAt({ x, y });
     fileDropRow = -1;
     repaint();

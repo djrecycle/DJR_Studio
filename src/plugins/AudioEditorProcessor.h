@@ -86,11 +86,18 @@ public:
     bool canSendToPlaylist() const noexcept;
     /** Writes what is being edited to the working folder and hands it over. */
     void sendToPlaylist();
-    /** Writes it out for a drag and returns the file, or an empty File when
-        there is nothing to write. The drop decides where it lands, so nothing
-        is told to the host here.
+    /** Where a drag off the editor's send button was let go.
+
+        The host is handed the position and a way to write the audio, and calls
+        the writer only if the position turns out to be a track. A drop that
+        lands nowhere should not leave a file behind.
     */
-    juce::File writeForDrag();
+    void setDropAtCallback(std::function<void(juce::Point<int>, const std::function<juce::File()>&)> callback);
+    void dropOnPlaylistAt(juce::Point<int> screenPosition);
+    /** Writes the audio to a new file in the working folder, or an empty File
+        when there is nothing to write.
+    */
+    juce::File writeToNewFile();
     /** Copies an edit made to the clip back over the audio it was built from,
         so the two never drift apart.
     */
@@ -174,7 +181,17 @@ private:
         repeated saves overwrite one file instead of leaving a trail of them.
     */
     juce::String savedAudioFileName;
+    /** Whether the audio has changed since it was last written out.
+
+        The host asks for plugin state whenever it re-reads the session, which
+        is far more often than the user saves - loading a plugin does it, so
+        does dropping a clip. Two minutes of audio is 42 MB, and writing it
+        again to say the same thing is the kind of cost that only shows up as
+        the app feeling slow for no reason.
+    */
+    bool audioNeedsWriting = false;
     std::function<void(const juce::File&, const juce::String&)> sendToPlaylistCallback;
+    std::function<void(juce::Point<int>, const std::function<juce::File()>&)> dropAtCallback;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioEditorProcessor)
 };

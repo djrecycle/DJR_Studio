@@ -50,7 +50,10 @@ namespace
             if (processor.canSendToPlaylist())
                 view.setSendCallback([this] { processor.sendToPlaylist(); });
 
-            view.setDragExportCallback([this] { return processor.writeForDrag(); });
+            view.setDropAtCallback([this] (juce::Point<int> screenPosition)
+            {
+                processor.dropOnPlaylistAt(screenPosition);
+            });
             addAndMakeVisible(view);
             setSize(760, 420);
 
@@ -205,6 +208,7 @@ void AudioEditorProcessor::clearCapture()
     capturedClip.reset();
     editedName = {};
     savedAudioFileName = {};
+    audioNeedsWriting = false;
     ++captureVersion;
     stopTimer();
 }
@@ -246,6 +250,7 @@ void AudioEditorProcessor::rebuildClip()
                                                capture.getNumCapturedSamples(),
                                                capture.getSampleRate());
     lastRebuildMs = juce::Time::getMillisecondCounter();
+    audioNeedsWriting = true;
     ++captureVersion;
 }
 
@@ -435,6 +440,7 @@ void AudioEditorProcessor::commitClipEdits()
         return;
 
     capture.adopt(edited, length, clip->getClipSampleRate());
+    audioNeedsWriting = true;
 }
 
 void AudioEditorProcessor::setSendToPlaylistCallback(std::function<void(const juce::File&, const juce::String&)> callback)
@@ -489,7 +495,7 @@ void AudioEditorProcessor::sendToPlaylist()
     sendToPlaylistCallback(error.isEmpty() ? file : juce::File(), error);
 }
 
-juce::File AudioEditorProcessor::writeForDrag()
+juce::File AudioEditorProcessor::writeToNewFile()
 {
     if (capturedClip == nullptr)
         return {};
@@ -499,6 +505,19 @@ juce::File AudioEditorProcessor::writeForDrag()
     const auto file = getWorkingFolder().getChildFile(base + ".wav").getNonexistentSibling();
 
     return writeEditedAudioTo(file).isEmpty() ? file : juce::File();
+}
+
+void AudioEditorProcessor::setDropAtCallback(std::function<void(juce::Point<int>, const std::function<juce::File()>&)> callback)
+{
+    dropAtCallback = std::move(callback);
+}
+
+void AudioEditorProcessor::dropOnPlaylistAt(juce::Point<int> screenPosition)
+{
+    if (dropAtCallback == nullptr)
+        return;
+
+    dropAtCallback(screenPosition, [this] { return writeToNewFile(); });
 }
 
 void AudioEditorProcessor::getStateInformation(juce::MemoryBlock& destination)
@@ -515,8 +534,15 @@ void AudioEditorProcessor::getStateInformation(juce::MemoryBlock& destination)
 
         const auto file = getWorkingFolder().getChildFile(savedAudioFileName);
 
-        if (writeEditedAudioTo(file).isEmpty())
+        // Rewritten only when it would say something different, or when the
+        // file it used to say it with has gone.
+        const auto written = audioNeedsWriting || ! file.existsAsFile()
+                                 ? writeEditedAudioTo(file).isEmpty()
+                                 : true;
+
+        if (written)
         {
+            audioNeedsWriting = false;
             state.setAttribute("audioFile", savedAudioFileName);
             state.setAttribute("audioPath", file.getFullPathName());
             state.setAttribute("name", editedName);
@@ -550,7 +576,10 @@ void AudioEditorProcessor::setStateInformation(const void* data, int sizeInBytes
 
     if (loadFile(file).isEmpty())
     {
+        // It came out of that file, so writing it back on the next save would
+        // only be copying it onto itself.
         savedAudioFileName = name;
+        audioNeedsWriting = false;
         editedName = state->getStringAttribute("name").isNotEmpty()
                          ? state->getStringAttribute("name")
                          : file.getFileNameWithoutExtension();
