@@ -33,6 +33,14 @@ void RecordingBuffer::push(const float* const* inputData, int channels, int numS
     copyBlock(start1, size1);
     copyBlock(start2, size2);
     fifo.finishedWrite(size1 + size2);
+
+    if (const auto lost = numSamples - (size1 + size2); lost > 0)
+        droppedSamples.fetch_add(lost, std::memory_order_relaxed);
+}
+
+int RecordingBuffer::getAndClearDroppedSamples() noexcept
+{
+    return droppedSamples.exchange(0, std::memory_order_relaxed);
 }
 
 int RecordingBuffer::pop(juce::AudioBuffer<float>& destination, int maxSamples)
@@ -58,6 +66,7 @@ void RecordingBuffer::reset()
 {
     fifo.reset();
     buffer.clear();
+    droppedSamples.store(0, std::memory_order_relaxed);
 }
 
 } // namespace djr

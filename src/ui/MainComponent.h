@@ -7,6 +7,8 @@
 #include "EditorPanel.h"
 #include "InsertChainPanel.h"
 #include "SampleEditorView.h"
+
+#include "plugins/AudioEditorProcessor.h"
 #include "MenuBarView.h"
 #include "MixerView.h"
 #include "PanelHost.h"
@@ -101,6 +103,15 @@ private:
     void collectRecordedNotes();
     /** Decodes `file` and drops it on `trackIndex` at `startBeat`. */
     bool addAudioClipToTrack(int trackIndex, const juce::File& file, double startBeat);
+    /** Gives the built-in editor the two things only the host knows: which
+        folder the project keeps its audio in, and where a "send" should land.
+        Called for every plugin; does nothing for the ones that are not it.
+    */
+    void prepareBuiltInEditor(juce::AudioPluginInstance& plugin, int trackIndex);
+    /** The built-in editor already on a track, or nullptr. */
+    AudioEditorProcessor* findBuiltInEditor(int trackIndex);
+    /** Hands a clip's audio to the editor and brings its window up. */
+    void openClipInBuiltInEditor(AudioEditorProcessor& editor, int trackIndex, int clipIndex);
     /** First audio track at or after the selection, so takes land somewhere sensible. */
     int findAudioTrackForRecording();
     void newProject();

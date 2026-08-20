@@ -28,6 +28,18 @@ public:
                                                      juce::AudioFormatManager& formats,
                                                      juce::String& errorOut);
 
+    /** Builds a clip over audio that is already in memory, for the sample
+        editor's capture: there is no file behind it, and there never will be
+        until someone exports it.
+
+        The samples are copied, because the caller's buffer keeps being written
+        to. Returns nullptr when there is nothing to copy.
+    */
+    static std::unique_ptr<AudioClip> createFromBuffer(const juce::String& name,
+                                                       const juce::AudioBuffer<float>& source,
+                                                       int numSamples,
+                                                       double sampleRate);
+
     const juce::String& getName() const noexcept;
     const juce::File& getFile() const noexcept;
 

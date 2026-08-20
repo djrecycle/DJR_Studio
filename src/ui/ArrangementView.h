@@ -19,6 +19,7 @@ namespace djr
     clip lanes and the playhead.
 */
 class ArrangementView final : public juce::Component,
+                              public juce::FileDragAndDropTarget,
                               private juce::Timer,
                               private juce::Button::Listener,
                               private juce::Slider::Listener
@@ -101,6 +102,20 @@ public:
     /** Lane height for one track, so it can be saved with the project. Zero or
         anything out of range restores the default height.
     */
+    /** Where a file dropped on the grid should land: the track under the
+        pointer and the beat under it, snapped like everything else here.
+
+        The playlist accepting files is what makes a drag out of the audio
+        editor work, and it costs nothing to let a file manager do the same.
+    */
+    void setFileDropCallback(std::function<void(const juce::File&, int trackIndex, double beat)> callback);
+
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void fileDragEnter(const juce::StringArray& files, int x, int y) override;
+    void fileDragMove(const juce::StringArray& files, int x, int y) override;
+    void fileDragExit(const juce::StringArray& files) override;
+    void filesDropped(const juce::StringArray& files, int x, int y) override;
+
     int getRowHeight(int trackIndex) const;
     void setRowHeight(int trackIndex, int height);
 
@@ -261,6 +276,8 @@ private:
     */
     AutomationLane* getLane(int trackIndex, int laneIndex) const;
 
+    /** Outlines the row a dragged file would land on. */
+    void paintFileDropRow(juce::Graphics& g) const;
     /** Row whose bottom edge is under `position` in the headers, or -1. */
     int hitTestRowResize(juce::Point<int> position) const;
     juce::Rectangle<int> getMuteBounds(int trackIndex) const;
@@ -279,6 +296,8 @@ private:
     void showClipContextMenu(int trackIndex, int clipIndex);
     void showPlacementContextMenu(int trackIndex, int placementIndex);
     double snapBeat(double beat) const noexcept;
+    /** Whether a name is one of the audio files this playlist can place. */
+    static bool isAudioFileName(const juce::String& path);
     /** Beats between grid lines: the snap length, widened when it would draw
         lines closer together than the eye can use.
     */
@@ -386,6 +405,11 @@ private:
     std::function<void(int)> trackRenameCallback;
     std::function<void(int)> trackFreezeCallback;
     std::function<void(int)> trackBounceCallback;
+    std::function<void(const juce::File&, int trackIndex, double beat)> fileDropCallback;
+    /** The row a dragged file is over, for the outline that says where it would
+        land. -1 when nothing is being dragged.
+    */
+    int fileDropRow = -1;
     ClipDrag clipDrag;
     Tool activeTool = Tool::select;
     /** A paint drag in progress: the pointer keeps laying clips as it sweeps. */

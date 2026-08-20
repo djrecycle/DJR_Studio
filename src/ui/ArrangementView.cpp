@@ -468,6 +468,10 @@ void ArrangementView::paint(juce::Graphics& g)
                            static_cast<float>(playheadX + 0.5f), static_cast<float>(lanes.getY() + 7));
         g.fillPath(marker);
     }
+
+    // Last, so the row a dragged file would land on is drawn over the clips
+    // rather than under them.
+    paintFileDropRow(g);
 }
 
 void ArrangementView::resized()
@@ -2600,6 +2604,19 @@ void ArrangementView::updateSlicePreview(juce::Point<int> position)
     repaint();
 }
 
+void ArrangementView::paintFileDropRow(juce::Graphics& g) const
+{
+    if (! juce::isPositiveAndBelow(fileDropRow, getRowCount()))
+        return;
+
+    const auto bounds = getRowBoundsAt(fileDropRow);
+
+    g.setColour(Theme::accent().withAlpha(0.12f));
+    g.fillRect(bounds);
+    g.setColour(Theme::accent());
+    g.drawRect(bounds, 2);
+}
+
 void ArrangementView::paintSweep(juce::Point<int> position)
 {
     // A gap exactly one clip wide only accepts a clip when the pointer lands
@@ -3011,6 +3028,74 @@ void ArrangementView::setFollowPlayhead(bool shouldFollow)
 bool ArrangementView::isFollowingPlayhead() const noexcept
 {
     return followPlayhead;
+}
+
+bool ArrangementView::isAudioFileName(const juce::String& path)
+{
+    return juce::File(path).hasFileExtension("wav;aif;aiff;flac;mp3;ogg");
+}
+
+void ArrangementView::setFileDropCallback(std::function<void(const juce::File&, int trackIndex, double beat)> callback)
+{
+    fileDropCallback = std::move(callback);
+}
+
+bool ArrangementView::isInterestedInFileDrag(const juce::StringArray& files)
+{
+    if (fileDropCallback == nullptr)
+        return false;
+
+    // One audio file among them is enough to accept the drag; the others are
+    // skipped on the drop rather than refusing the whole thing.
+    for (const auto& path : files)
+        if (isAudioFileName(path))
+            return true;
+
+    return false;
+}
+
+void ArrangementView::fileDragEnter(const juce::StringArray& files, int x, int y)
+{
+    fileDragMove(files, x, y);
+}
+
+void ArrangementView::fileDragMove(const juce::StringArray&, int x, int y)
+{
+    // The row under the pointer is outlined while the drag is overhead: a drop
+    // that lands on the wrong track is easy to make and tedious to undo.
+    const auto row = rowAt({ x, y });
+
+    if (row == fileDropRow)
+        return;
+
+    fileDropRow = row;
+    repaint();
+}
+
+void ArrangementView::fileDragExit(const juce::StringArray&)
+{
+    if (fileDropRow < 0)
+        return;
+
+    fileDropRow = -1;
+    repaint();
+}
+
+void ArrangementView::filesDropped(const juce::StringArray& files, int x, int y)
+{
+    const auto row = rowAt({ x, y });
+    fileDropRow = -1;
+    repaint();
+
+    if (fileDropCallback == nullptr || ! juce::isPositiveAndBelow(row, getRowCount()))
+        return;
+
+    const auto trackIndex = rows[static_cast<size_t>(row)].trackIndex;
+    const auto beat = juce::jmax(0.0, snapBeat(xToBeat(x)));
+
+    for (const auto& path : files)
+        if (isAudioFileName(path))
+            fileDropCallback(juce::File(path), trackIndex, beat);
 }
 
 } // namespace djr

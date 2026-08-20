@@ -91,6 +91,32 @@ std::unique_ptr<AudioClip> AudioClip::createFromFile(const juce::File& file,
     return clip;
 }
 
+std::unique_ptr<AudioClip> AudioClip::createFromBuffer(const juce::String& name,
+                                                       const juce::AudioBuffer<float>& source,
+                                                       int numSamples,
+                                                       double sampleRate)
+{
+    const auto numChannels = juce::jlimit(1, 2, source.getNumChannels());
+    const auto length = juce::jmin(numSamples, source.getNumSamples());
+
+    if (length <= 0 || sampleRate <= 0.0)
+        return nullptr;
+
+    juce::AudioBuffer<float> copied(numChannels, length);
+
+    for (int channel = 0; channel < numChannels; ++channel)
+        copied.copyFrom(channel, 0, source, channel, 0, length);
+
+    std::unique_ptr<AudioClip> clip(new AudioClip());
+    clip->name = name;
+    clip->clipSampleRate = sampleRate;
+    clip->samples = std::make_shared<const juce::AudioBuffer<float>>(std::move(copied));
+    clip->sourceLengthSeconds = length / sampleRate;
+    clip->playLengthSeconds.store(clip->sourceLengthSeconds, std::memory_order_release);
+    clip->buildPeaks();
+    return clip;
+}
+
 const juce::String& AudioClip::getName() const noexcept
 {
     return name;

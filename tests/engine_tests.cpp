@@ -21,6 +21,7 @@
 #include "app/EditHistory.h"
 #include "audio/Metronome.h"
 #include "recording/Recorder.h"
+#include "recording/SampleCapture.h"
 
 #include <algorithm>
 #include <iostream>
@@ -2814,6 +2815,88 @@ int main()
             check(! untouched.isActive(),
                   "a project from before any of this reads back as a channel that does nothing");
         }
+    }
+
+    // The sample editor's capture: the audio thread's half only ever copies
+    // into the ring, and the growing half is checked here because that is where
+    // the mistakes would be silent - a hole in a recording that nothing reports.
+    {
+        djr::SampleCapture capture;
+        capture.prepareRing(48000.0, 2);
+
+        juce::AudioBuffer<float> block(2, 512);
+
+        const auto pushBlocks = [&capture, &block] (int count, float value)
+        {
+            for (int i = 0; i < count; ++i)
+            {
+                for (int channel = 0; channel < block.getNumChannels(); ++channel)
+                    juce::FloatVectorOperations::fill(block.getWritePointer(channel), value, block.getNumSamples());
+
+                capture.captureBlock(block);
+            }
+        };
+
+        pushBlocks(4, 0.5f);
+        check(capture.drain() == 0 && capture.getNumCapturedSamples() == 0,
+              "audio that arrives before Record is not captured");
+
+        capture.start();
+        pushBlocks(4, 0.5f);
+        const auto arrived = capture.drain();
+        check(arrived == 4 * 512 && capture.getNumCapturedSamples() == 4 * 512,
+              "everything pushed while armed comes back out of the ring");
+        check(juce::approximatelyEqual(capture.getAudio().getSample(0, 0), 0.5f)
+                  && juce::approximatelyEqual(capture.getAudio().getSample(1, 4 * 512 - 1), 0.5f),
+              "and it comes back as the samples that went in");
+
+        // Two drains rather than one long push: the store has to grow without
+        // losing what it already held.
+        pushBlocks(4, -0.25f);
+        capture.drain();
+        check(capture.getNumCapturedSamples() == 8 * 512,
+              "a second drain appends rather than replaces");
+        check(juce::approximatelyEqual(capture.getAudio().getSample(0, 0), 0.5f)
+                  && juce::approximatelyEqual(capture.getAudio().getSample(0, 4 * 512), -0.25f),
+              "and the two takes sit end to end in the order they arrived");
+
+        capture.stop();
+        pushBlocks(2, 1.0f);
+        capture.drain();
+        check(capture.getNumCapturedSamples() == 8 * 512,
+              "Stop means stop: nothing after it is captured");
+
+        auto clip = djr::AudioClip::createFromBuffer("captured",
+                                                     capture.getAudio(),
+                                                     capture.getNumCapturedSamples(),
+                                                     capture.getSampleRate());
+        check(clip != nullptr && clip->getNumSourceSamples() == 8 * 512,
+              "the capture becomes a clip the sample editor can draw");
+        check(clip != nullptr && clip->getFile() == juce::File(),
+              "a captured clip has no file behind it, and does not pretend to");
+
+        capture.clear();
+        check(capture.getNumCapturedSamples() == 0 && ! capture.isCapturing(),
+              "Clear leaves nothing behind");
+    }
+
+    // The ring is fixed and the drain is not guaranteed to keep up. What must
+    // not happen is losing audio quietly.
+    {
+        djr::SampleCapture capture;
+        capture.prepareRing(48000.0, 2);
+        capture.start();
+
+        juce::AudioBuffer<float> block(2, 4096);
+        block.clear();
+
+        // Three seconds pushed into a two second ring with nobody draining.
+        for (int i = 0; i < 36; ++i)
+            capture.captureBlock(block);
+
+        capture.drain();
+        check(capture.getDroppedSamples() > 0,
+              "a ring nobody drained says how much audio it lost");
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

@@ -54,7 +54,7 @@ MainComponent::MainComponent()
     panelHost.addPanel(mixerPanelId, "Mixer", Icon::waveform, mixerView);
     panelHost.addPanel(pluginsPanelId, "Plugins", Icon::plug, pluginBrowserView);
     panelHost.addPanel(insertPanelId, "Insert Chain", Icon::panel, insertChainPanel);
-    // Closed until a clip asks for it, like Edison: a window with nothing in it
+    // Closed until a clip asks for it: a window with nothing in it
     // is a window in the way.
     panelHost.addPanel(samplePanelId, "Sample Editor", Icon::waveform, sampleEditorView);
     panelHost.setPanelOpen(samplePanelId, false);
@@ -74,6 +74,14 @@ MainComponent::MainComponent()
     browserPanel.setCollapseToggleCallback([this] { toggleBrowserCollapsed(); });
     browserPanel.setMinimizeToggleCallback([this] { toggleBrowserMinimized(); });
     browserPanel.setDockCycleCallback([this] { cycleBrowserDock(); });
+    // A file dragged onto the playlist - from the audio editor, or from a file
+    // manager - lands on the track it was dropped on rather than the selected
+    // one: the pointer already said which track was meant.
+    arrangementView.setFileDropCallback([this] (const juce::File& file, int trackIndex, double beat)
+    {
+        addAudioClipToTrack(trackIndex, file, beat);
+    });
+
     browserPanel.setFileActivatedCallback([this] (const juce::File& file)
     {
         if (file.hasFileExtension(".djrs"))
@@ -1445,6 +1453,8 @@ void MainComponent::loadSelectedPluginIntoTrack(int pluginIndex, int trackIndex)
 
             if (auto* targetTrack = getTrack(trackIndex))
             {
+                prepareBuiltInEditor(*instance, trackIndex);
+
                 // Instruments own the track's synth slot; everything else is an insert.
                 if (description.isInstrument)
                     targetTrack->setInstrument(std::move(instance));
@@ -1504,6 +1514,32 @@ void MainComponent::openTrackPlugin(int trackIndex, PluginSlot slot, int insertI
 
     if (auto* plugin = track->getPlugin(index))
         showPluginWindow(*plugin, track);
+}
+
+void MainComponent::prepareBuiltInEditor(juce::AudioPluginInstance& plugin, int trackIndex)
+{
+    auto* editor = dynamic_cast<AudioEditorProcessor*>(&plugin);
+
+    if (editor == nullptr)
+        return;
+
+    // Where its captures are written, and where a send lands: the project's own
+    // Samples folder, so a project carries its audio rather than pointing at
+    // somewhere on this machine.
+    editor->setWorkingFolder(projectManager.getProject().samplesFolder);
+
+    editor->setSendToPlaylistCallback([this, trackIndex] (const juce::File& file, const juce::String& error)
+    {
+        if (file == juce::File())
+        {
+            setStatusMessage(error.isNotEmpty() ? error : TRANS("Nothing was sent."));
+            return;
+        }
+
+        // Onto the track the plugin itself sits on, at the playhead: the answer
+        // to "where did it go" should be somewhere the user was already looking.
+        addAudioClipToTrack(trackIndex, file, audioEngine.getTransport().getPositionBeats());
+    });
 }
 
 void MainComponent::showPluginWindow(juce::AudioPluginInstance& plugin, Track* track)
@@ -1856,8 +1892,13 @@ void MainComponent::synchroniseProjectState()
 
         // Plugins are saved with their own parameter state so a project reopens
         // sounding the way it was left, not just with the right names.
-        const auto capturePlugin = [] (juce::AudioPluginInstance& plugin, bool isInstrument)
+        const auto capturePlugin = [this] (juce::AudioPluginInstance& plugin, bool isInstrument)
         {
+            // Save-as moves the project; the plugin is told again rather than
+            // writing its audio next to where the project used to be.
+            if (auto* editor = dynamic_cast<AudioEditorProcessor*>(&plugin))
+                editor->setWorkingFolder(projectManager.getProject().samplesFolder);
+
             juce::MemoryBlock stateBlock;
             plugin.getStateInformation(stateBlock);
 
@@ -1931,6 +1972,12 @@ void MainComponent::showSampleEditor(int trackIndex, int clipIndex)
 
     selectTrack(trackIndex);
 
+    // The panel keeps following the clip even though the double click now opens
+    // the plugin. The two edit different things on purpose: the panel rewrites
+    // the clip on the timeline and can be undone, the plugin works on a copy
+    // that comes back only when it is sent back. View - Sample Editor is still
+    // the way to the first one.
+    //
     // Looked up by index rather than held: undo swaps a track's whole clip list
     // out, and a pointer taken now would point at a clip that no longer exists.
     sampleEditorView.setClipSource([this, trackIndex, clipIndex] () -> AudioClip*
@@ -1943,17 +1990,90 @@ void MainComponent::showSampleEditor(int trackIndex, int clipIndex)
     // The project's own Samples folder is where an exported edit belongs, so
     // that is where the chooser opens.
     sampleEditorView.setExportContext(&audioFormats, projectManager.getProject().samplesFolder);
+    refreshMenuState();
 
-    panelHost.setPanelOpen(samplePanelId, true);
-
-    if (auto* panel = panelHost.findPanel(samplePanelId))
+    if (auto* editor = findBuiltInEditor(trackIndex))
     {
-        panel->setRolledUp(false);
-        panel->toFront(true);
+        openClipInBuiltInEditor(*editor, trackIndex, clipIndex);
+        return;
     }
 
-    refreshMenuState();
-    setStatusMessage(TRANS("Sample editor: ") + clip->getName());
+    // No editor on this track yet, so one is added. It is a real insert and it
+    // is saved with the project, which is the price of the double click doing
+    // what was asked of it.
+    setStatusMessage(TRANS("Opening ") + clip->getName() + TRANS(" in the audio editor..."));
+
+    pluginManager.createPluginAsync(AudioEditorProcessor::getDescription(),
+                                    audioEngine.getCurrentSampleRate(),
+                                    audioEngine.getCurrentBufferSize(),
+        [this, trackIndex, clipIndex] (std::unique_ptr<juce::AudioPluginInstance> instance, juce::String error)
+        {
+            if (instance == nullptr)
+            {
+                setStatusMessage(error.isNotEmpty() ? error : TRANS("The audio editor could not be created."));
+                return;
+            }
+
+            auto* target = getTrack(trackIndex);
+
+            if (target == nullptr)
+                return;
+
+            prepareBuiltInEditor(*instance, trackIndex);
+            target->addPlugin(std::move(instance));
+
+            mixerView.repaint();
+            insertChainPanel.refresh();
+            markDirty();
+            synchroniseProjectState();
+
+            if (auto* editor = findBuiltInEditor(trackIndex))
+                openClipInBuiltInEditor(*editor, trackIndex, clipIndex);
+        });
+}
+
+AudioEditorProcessor* MainComponent::findBuiltInEditor(int trackIndex)
+{
+    auto* track = getTrack(trackIndex);
+
+    if (track == nullptr)
+        return nullptr;
+
+    // The first one on the track: a second editor would be a second answer to
+    // "where did my clip go".
+    for (int slot = 0; slot < track->getPluginCount(); ++slot)
+        if (auto* editor = dynamic_cast<AudioEditorProcessor*>(track->getPlugin(slot)))
+            return editor;
+
+    return nullptr;
+}
+
+void MainComponent::openClipInBuiltInEditor(AudioEditorProcessor& editor, int trackIndex, int clipIndex)
+{
+    auto* audioTrack = dynamic_cast<AudioTrack*>(getTrack(trackIndex));
+    auto* clip = audioTrack != nullptr ? audioTrack->getClip(clipIndex) : nullptr;
+
+    if (clip == nullptr)
+        return;
+
+    // The part the clip plays, not the whole file: the trim on the timeline is
+    // already the user saying which bit they mean.
+    int first = 0;
+    int length = 0;
+    clip->getPlayedRegion(first, length);
+
+    juce::AudioBuffer<float> audio;
+
+    if (length <= 0 || ! clip->copySamples(first, length, audio))
+    {
+        setStatusMessage(TRANS("That clip's audio could not be read."));
+        return;
+    }
+
+    editor.adoptAudio(audio, length, clip->getClipSampleRate(), clip->getName());
+    showPluginWindow(editor, getTrack(trackIndex));
+
+    setStatusMessage(clip->getName() + TRANS(" opened in the audio editor - send it back when you are done."));
 }
 
 void MainComponent::restorePluginsForTrack(int trackIndex, const juce::Array<juce::var>& pluginStates)
@@ -1998,6 +2118,8 @@ void MainComponent::restorePluginsForTrack(int trackIndex, const juce::Array<juc
                                          + (error.isNotEmpty() ? ": " + error : "."));
                     return;
                 }
+
+                prepareBuiltInEditor(*instance, trackIndex);
 
                 // Restore the saved parameters before the plugin joins the graph.
                 juce::MemoryBlock stateBlock;

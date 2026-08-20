@@ -34,6 +34,15 @@ SampleEditorView::SampleEditorView()
         addAndMakeVisible(button);
     }
 
+    // Added as hidden children: whether they belong here is the host's answer,
+    // and the panel never asks.
+    for (auto* button : { &recordButton, &clearButton, &loadButton, &sendButton })
+    {
+        button->setStyle(PillButton::Style::outline);
+        button->addListener(this);
+        addChildComponent(button);
+    }
+
     for (auto* button : { &zoomInButton, &zoomOutButton })
     {
         button->addListener(this);
@@ -49,6 +58,9 @@ SampleEditorView::~SampleEditorView()
     for (auto* button : { &normaliseButton, &reverseButton, &exportButton, &fitButton })
         button->removeListener(this);
 
+    for (auto* button : { &recordButton, &clearButton, &loadButton, &sendButton })
+        button->removeListener(this);
+
     for (auto* button : { &zoomInButton, &zoomOutButton })
         button->removeListener(this);
 }
@@ -59,6 +71,117 @@ void SampleEditorView::setClipSource(std::function<AudioClip*()> source, const j
     clipTitle = title;
     refreshClipPointer();
     zoomToFit();
+    repaint();
+}
+
+void SampleEditorView::zoomToWholeSample()
+{
+    refreshClipPointer();
+    zoomToFit();
+    repaint();
+}
+
+void SampleEditorView::setCaptureCallbacks(std::function<void()> onToggleCapture,
+                                           std::function<void()> onClearCapture)
+{
+    captureCallback = std::move(onToggleCapture);
+    clearCaptureCallback = std::move(onClearCapture);
+    captureControlsVisible = captureCallback != nullptr;
+
+    recordButton.setVisible(captureControlsVisible);
+    clearButton.setVisible(captureControlsVisible);
+    resized();
+}
+
+void SampleEditorView::setCaptureState(bool capturing, double seconds, int droppedSamples, bool reachedLimit)
+{
+    if (capturing == captureActive
+        && juce::approximatelyEqual(seconds, captureSeconds)
+        && droppedSamples == captureDropped
+        && reachedLimit == captureLimitReached)
+        return;
+
+    captureActive = capturing;
+    captureSeconds = seconds;
+    captureDropped = droppedSamples;
+    captureLimitReached = reachedLimit;
+
+    // Recording and stopping are the same button, the way the transport's is:
+    // one control, and its label says which half you are in.
+    recordButton.setButtonText(captureActive ? TRANS("Stop") : TRANS("Record"));
+    recordButton.setStyle(captureActive ? PillButton::Style::filled : PillButton::Style::outline);
+    recordButton.setFillColour(Theme::pink());
+    clearButton.setEnabled(! captureActive);
+    resized();
+    repaint();
+}
+
+juce::String SampleEditorView::getCaptureStatusText() const
+{
+    if (! captureControlsVisible)
+        return {};
+
+    juce::String text;
+
+    if (captureActive)
+        text = TRANS("REC") + "  " + juce::String(captureSeconds, 1) + TRANS(" s");
+    else if (captureLimitReached)
+        text = TRANS("Capture limit reached");
+
+    // A hole in the audio outranks the timer: the reader needs to know the
+    // recording is not what passed through, and needs to know it here rather
+    // than by noticing a click later.
+    if (captureDropped > 0)
+        text = (text.isNotEmpty() ? text + "  -  " : juce::String())
+             + juce::String(captureDropped) + TRANS(" smp dropped");
+
+    return text;
+}
+
+void SampleEditorView::setLoadCallback(std::function<void()> onLoad)
+{
+    loadCallback = std::move(onLoad);
+    loadButton.setVisible(loadCallback != nullptr);
+    resized();
+}
+
+void SampleEditorView::setSendCallback(std::function<void()> onSend)
+{
+    sendCallback = std::move(onSend);
+    sendButton.setVisible(sendCallback != nullptr);
+    resized();
+}
+
+void SampleEditorView::setDragExportCallback(std::function<juce::File()> onDragExport)
+{
+    dragExportCallback = std::move(onDragExport);
+
+    // The view listens on the button rather than the button knowing about
+    // drags: a Button that also drags stops behaving like a button.
+    if (dragExportCallback != nullptr)
+        sendButton.addMouseListener(this, false);
+    else
+        sendButton.removeMouseListener(this);
+}
+
+void SampleEditorView::setTitle(const juce::String& title)
+{
+    if (title == clipTitle)
+        return;
+
+    clipTitle = title;
+    repaint();
+}
+
+void SampleEditorView::setNotice(const juce::String& text)
+{
+    notice = text;
+    repaint();
+}
+
+void SampleEditorView::setEmptyMessage(const juce::String& message)
+{
+    emptyMessage = message;
     repaint();
 }
 
@@ -207,6 +330,29 @@ void SampleEditorView::resized()
 
     auto header = getLocalBounds().withHeight(headerHeight).reduced(edgePadding, 6);
 
+    if (captureControlsVisible)
+    {
+        recordButton.setBounds(header.removeFromLeft(recordButton.getPreferredWidth()));
+        header.removeFromLeft(6);
+        clearButton.setBounds(header.removeFromLeft(clearButton.getPreferredWidth()));
+        header.removeFromLeft(6);
+    }
+
+    if (loadCallback)
+    {
+        loadButton.setBounds(header.removeFromLeft(loadButton.getPreferredWidth()));
+        header.removeFromLeft(6);
+    }
+
+    if (sendCallback)
+    {
+        sendButton.setBounds(header.removeFromLeft(sendButton.getPreferredWidth()));
+        header.removeFromLeft(6);
+    }
+
+    if (captureControlsVisible || loadCallback || sendCallback)
+        header.removeFromLeft(4);
+
     normaliseButton.setBounds(header.removeFromLeft(normaliseButton.getPreferredWidth()));
     header.removeFromLeft(6);
     reverseButton.setBounds(header.removeFromLeft(reverseButton.getPreferredWidth()));
@@ -234,6 +380,26 @@ void SampleEditorView::paint(juce::Graphics& g)
     g.fillRect(header);
     g.setColour(Theme::divider());
     g.fillRect(header.withHeight(1).withY(header.getBottom() - 1));
+
+    // Drawn before the clip check: a capture that has not stopped yet has
+    // nothing to show but is very much doing something, and a header that
+    // says nothing there reads as a plugin that ignored the button.
+    // The capture speaks first when it has something to say; a notice about
+    // something already finished can wait behind a recording in progress.
+    const auto captureStatus = getCaptureStatusText();
+
+    if (const auto headerNote = captureStatus.isNotEmpty() ? captureStatus : notice; headerNote.isNotEmpty())
+    {
+        const auto statusLeft = exportButton.getRight() + 12;
+        const auto statusRight = juce::jmax(statusLeft, zoomOutButton.getX() - 8);
+
+        g.setColour(captureStatus.isEmpty() ? Theme::mutedText()
+                                            : (captureActive ? Theme::pink() : Theme::amber()));
+        g.setFont(Theme::mono(10.0f));
+        g.drawText(headerNote,
+                   juce::Rectangle<int>(statusLeft, header.getY(), statusRight - statusLeft, header.getHeight()),
+                   juce::Justification::centredRight, false);
+    }
 
     if (clip == nullptr)
     {
@@ -304,7 +470,7 @@ void SampleEditorView::drawEmptyState(juce::Graphics& g) const
 {
     g.setColour(Theme::mutedText());
     g.setFont(Theme::ui(11.0f));
-    g.drawText(TRANS("Double click an audio clip in the playlist to edit its samples."),
+    g.drawText(emptyMessage,
                getLocalBounds().withTrimmedTop(headerHeight),
                juce::Justification::centred, true);
 }
@@ -470,6 +636,16 @@ void SampleEditorView::mouseWheelMove(const juce::MouseEvent& event,
 
 void SampleEditorView::mouseDown(const juce::MouseEvent& event)
 {
+    // A press is the start of a new gesture, so whatever the last drag did or
+    // failed to do is over. The completion callback clears this too, but a drag
+    // the desktop abandons never calls it, and one abandoned drag must not be
+    // able to disable the button for the rest of the session.
+    if (event.eventComponent == &sendButton)
+    {
+        dragInProgress = false;
+        return;
+    }
+
     refreshClipPointer();
 
     dragStartX = event.x;
@@ -478,6 +654,12 @@ void SampleEditorView::mouseDown(const juce::MouseEvent& event)
 
 void SampleEditorView::mouseDrag(const juce::MouseEvent& event)
 {
+    if (event.eventComponent == &sendButton)
+    {
+        startSendDrag(event);
+        return;
+    }
+
     refreshClipPointer();
 
     if (clip == nullptr)
@@ -490,9 +672,57 @@ void SampleEditorView::mouseDrag(const juce::MouseEvent& event)
     repaint();
 }
 
+void SampleEditorView::startSendDrag(const juce::MouseEvent& event)
+{
+    // Far enough that a click with a shaky hand is still a click.
+    if (dragInProgress || dragExportCallback == nullptr || event.getDistanceFromDragStart() < 8)
+        return;
+
+    const auto file = dragExportCallback();
+
+    if (file == juce::File())
+        return;
+
+    dragInProgress = true;
+    juce::DragAndDropContainer::performExternalDragDropOfFiles({ file.getFullPathName() }, false, this,
+        [this] { dragInProgress = false; });
+}
+
 void SampleEditorView::buttonClicked(juce::Button* button)
 {
     refreshClipPointer();
+
+    if (button == &recordButton)
+    {
+        if (captureCallback)
+            captureCallback();
+
+        return;
+    }
+
+    if (button == &clearButton)
+    {
+        if (clearCaptureCallback)
+            clearCaptureCallback();
+
+        return;
+    }
+
+    if (button == &loadButton)
+    {
+        if (loadCallback)
+            loadCallback();
+
+        return;
+    }
+
+    if (button == &sendButton)
+    {
+        if (sendCallback)
+            sendCallback();
+
+        return;
+    }
 
     if (button == &normaliseButton)
         applyEdit(AudioClip::SampleEdit::normalise);

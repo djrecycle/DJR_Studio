@@ -73,6 +73,8 @@ private:
         "Fx|Reverb" for VST3 and a plain class name for LV2.
     */
     static juce::String describeCategory(const juce::PluginDescription& description);
+    /** How many of the listed plugins came from a scan rather than from us. */
+    int getNumScannedPlugins() const;
     /** Library index behind a visible row, or -1. */
     int libraryIndexForRow(int row) const;
 

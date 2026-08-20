@@ -33,8 +33,8 @@ void PluginBrowserView::Model::paintListBoxItem(int row, juce::Graphics& g, int 
         // filter. Saying "press Scan" to someone who just filtered is a lie.
         g.setColour(Theme::faintText());
         g.setFont(Theme::ui(12.0f));
-        g.drawText(owner.plugins.isEmpty() ? TRANS("No plugins yet - press Scan")
-                                           : TRANS("No plugins match this filter"),
+        g.drawText(owner.getNumScannedPlugins() == 0 ? TRANS("No plugins scanned yet - press Scan")
+                                                     : TRANS("No plugins match this filter"),
                    bounds.reduced(8, 0), juce::Justification::centredLeft, true);
         return;
     }
@@ -153,6 +153,11 @@ void PluginBrowserView::paint(juce::Graphics& g)
     // rather than the whole library having shrunk.
     const auto filtered = visibleIndices.size() != plugins.size();
 
+    // The built-ins are always here, so a full list is no longer proof that a
+    // scan has happened. Someone opening the app for the first time needs to be
+    // told to scan, and the count alone would never tell them.
+    const auto scanned = getNumScannedPlugins();
+
     g.setColour(Theme::faintText());
     g.setFont(Theme::mono(10.0f));
     g.drawText(filtered ? juce::String(visibleIndices.size()) + " / " + juce::String(plugins.size()) + " plugin"
@@ -160,6 +165,15 @@ void PluginBrowserView::paint(juce::Graphics& g)
                header.reduced(7, 0),
                juce::Justification::centredLeft,
                false);
+
+    if (scanned == 0 && ! pluginManager.isScanning())
+    {
+        g.setColour(Theme::amber());
+        g.drawText(TRANS("press Scan for your VST3 / LV2"),
+                   header.reduced(7, 0).withTrimmedLeft(70).withTrimmedRight(60),
+                   juce::Justification::centredLeft,
+                   true);
+    }
 }
 
 void PluginBrowserView::resized()
@@ -239,6 +253,17 @@ juce::String PluginBrowserView::describeCategory(const juce::PluginDescription& 
         return description.isInstrument ? juce::String("Instrument") : juce::String("Lainnya");
 
     return raw.fromLastOccurrenceOf("|", false, false).trim();
+}
+
+int PluginBrowserView::getNumScannedPlugins() const
+{
+    auto scanned = 0;
+
+    for (const auto& plugin : plugins)
+        if (! PluginManager::isBuiltIn(plugin))
+            ++scanned;
+
+    return scanned;
 }
 
 void PluginBrowserView::applyFilter()
@@ -337,7 +362,9 @@ void PluginBrowserView::refreshList()
 
     setStatusText(pluginManager.isScanning()
                       ? juce::String(TRANS("Scanning plugins..."))
-                      : juce::String(plugins.size()) + TRANS(" plugins found."));
+                  : getNumScannedPlugins() == 0
+                      ? juce::String(TRANS("No plugins scanned yet - press Scan to find your VST3 and LV2."))
+                      : juce::String(getNumScannedPlugins()) + TRANS(" plugins found."));
 }
 
 void PluginBrowserView::setLoadPluginCallback(std::function<void(int, int)> callback)
