@@ -34,6 +34,7 @@ enum class AppCommand
     toggleMixer,
     togglePlugins,
     toggleInsertChain,
+    toggleSampleEditor,
     resetPanelLayout,
     toggleVelocityLane,
     toggleBrowser,
@@ -50,6 +51,7 @@ struct ViewState
     bool mixerVisible = true;
     bool pluginsVisible = true;
     bool insertChainVisible = true;
+    bool sampleEditorVisible = false;
     bool velocityLaneVisible = true;
     bool browserVisible = true;
     bool pianoRollSelected = true;

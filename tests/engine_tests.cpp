@@ -2418,6 +2418,193 @@ int main()
         }
     }
 
+    // Destructive sample edits: the two things the timeline cannot do to a clip.
+    {
+        const auto wav = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                             .getChildFile("djr_sample_edit_test.wav");
+        wav.deleteFile();
+
+        // A ramp rather than a tone: every sample is different, so reversing it
+        // is something an assertion can actually see.
+        const auto totalSamples = static_cast<int>(sampleRate);
+
+        {
+            juce::WavAudioFormat wavFormat;
+            std::unique_ptr<juce::FileOutputStream> stream(wav.createOutputStream());
+            std::unique_ptr<juce::AudioFormatWriter> writer(
+                wavFormat.createWriterFor(stream.get(), sampleRate, 1, 24, {}, 0));
+
+            if (writer != nullptr)
+            {
+                stream.release();
+
+                juce::AudioBuffer<float> ramp(1, totalSamples);
+
+                for (int sample = 0; sample < totalSamples; ++sample)
+                    ramp.setSample(0, sample,
+                                   0.5f * static_cast<float>(sample) / static_cast<float>(totalSamples - 1));
+
+                writer->writeFromAudioSampleBuffer(ramp, 0, totalSamples);
+                writer.reset();
+            }
+        }
+
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+
+        juce::String error;
+        auto clip = djr::AudioClip::createFromFile(wav, sampleRate, formats, error);
+        check(clip != nullptr, "the ramp loads as a clip: " + error);
+
+        if (clip != nullptr)
+        {
+            const auto sampleAt = [] (const djr::AudioClip& source, int index)
+            {
+                float lowest = 0.0f;
+                float highest = 0.0f;
+                source.getSampleRange(0, index, 1, lowest, highest);
+                return lowest;
+            };
+
+            const auto peakOf = [] (const djr::AudioClip& source)
+            {
+                float lowest = 0.0f;
+                float highest = 0.0f;
+                source.getSampleRange(0, 0, source.getNumSourceSamples(), lowest, highest);
+                return std::max(std::abs(lowest), std::abs(highest));
+            };
+
+            check(clip->getNumSourceSamples() == totalSamples,
+                  "the clip can say how many samples it holds");
+            check(std::abs(peakOf(*clip) - 0.5f) < 0.01f, "and the ramp peaks where it was written");
+
+            // A clip made before the edit must not hear about it -------------
+            auto sibling = clip->duplicate();
+
+            check(clip->canApplySampleEdit(djr::AudioClip::SampleEdit::normalise),
+                  "a clip at half scale has room to be normalised");
+            check(clip->applySampleEdit(djr::AudioClip::SampleEdit::normalise),
+                  "and normalising it succeeds");
+            check(std::abs(peakOf(*clip) - 1.0f) < 0.01f, "normalising lifts the peak to full scale");
+            check(clip->getNumSourceSamples() == totalSamples,
+                  "and does not change how long the audio is");
+            check(sibling != nullptr && std::abs(peakOf(*sibling) - 0.5f) < 0.01f,
+                  "a clip that shared the samples is left alone");
+
+            check(! clip->canApplySampleEdit(djr::AudioClip::SampleEdit::normalise),
+                  "normalising again would change nothing, and says so");
+
+            // Reverse ---------------------------------------------------------
+            const auto firstBefore = sampleAt(*clip, 0);
+            const auto lastBefore = sampleAt(*clip, totalSamples - 1);
+
+            check(clip->applySampleEdit(djr::AudioClip::SampleEdit::reverse), "reversing succeeds");
+            check(std::abs(sampleAt(*clip, 0) - lastBefore) < 1.0e-4f
+                      && std::abs(sampleAt(*clip, totalSamples - 1) - firstBefore) < 1.0e-4f,
+                  "reversing puts the end of the audio at its start");
+
+            // Only the part the clip plays ------------------------------------
+            {
+                auto trimmed = djr::AudioClip::createFromFile(wav, sampleRate, formats, error);
+
+                if (trimmed != nullptr)
+                {
+                    // The back half only, so the front half is a control. Trimmed
+                    // rather than offset: sliding the offset alone is clamped so
+                    // the clip still fits, which on a full-length clip is no move
+                    // at all.
+                    trimmed->trimStart(1.0, 120.0);
+                    trimmed->applySampleEdit(djr::AudioClip::SampleEdit::normalise);
+
+                    const auto untouched = sampleAt(*trimmed, totalSamples / 4);
+                    const auto expected = 0.5f * static_cast<float>(totalSamples / 4)
+                                        / static_cast<float>(totalSamples - 1);
+
+                    check(std::abs(untouched - expected) < 0.01f,
+                          "an edit leaves the part of the source the clip does not play alone");
+                    check(std::abs(peakOf(*trimmed) - 1.0f) < 0.01f,
+                          "and does reach full scale inside the part it does");
+                }
+            }
+
+            // Exporting -------------------------------------------------------
+            {
+                auto exported = djr::AudioClip::createFromFile(wav, sampleRate, formats, error);
+
+                if (exported != nullptr)
+                {
+                    // The back half, normalised, so the file has to differ from
+                    // the source in both length and level to be right.
+                    exported->trimStart(1.0, 120.0);
+                    exported->applySampleEdit(djr::AudioClip::SampleEdit::normalise);
+
+                    const auto out = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                         .getChildFile("djr_sample_export.wav");
+                    out.deleteFile();
+
+                    juce::String exportError;
+                    const auto written = exported->exportPlayedRegion(out, formats, exportError);
+
+                    check(written == out, "the sample exports to the file it was asked for: " + exportError);
+
+                    auto readBack = djr::AudioClip::createFromFile(written, sampleRate, formats, error);
+                    check(readBack != nullptr, "and the export loads back as audio");
+
+                    if (readBack != nullptr)
+                    {
+                        check(std::abs(readBack->getSourceLengthSeconds() - 0.5) < 0.01,
+                              "the export holds the part the clip plays, not the whole source");
+                        check(std::abs(peakOf(*readBack) - 1.0f) < 0.02f,
+                              "and the edit is baked into it rather than replayed at load");
+                        check(! readBack->hasSampleEdits(),
+                              "an exported file carries no edit list: it is already the audio");
+                    }
+
+                    // An extension nothing can write --------------------------
+                    const auto odd = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                         .getChildFile("djr_sample_export.qqq");
+                    odd.deleteFile();
+
+                    const auto fallback = exported->exportPlayedRegion(odd, formats, exportError);
+                    check(fallback.hasFileExtension("wav"),
+                          "an extension nothing can write falls back to wav rather than failing");
+
+                    fallback.deleteFile();
+                    out.deleteFile();
+                }
+            }
+
+            // Reopening -------------------------------------------------------
+            {
+                const auto saved = clip->toVar();
+                auto reopened = djr::AudioClip::createFromFile(wav, sampleRate, formats, error);
+
+                if (reopened != nullptr)
+                {
+                    reopened->applyStateFromVar(saved);
+
+                    check(std::abs(peakOf(*reopened) - 1.0f) < 0.01f,
+                          "a reopened project replays the normalise over the original file");
+                    check(std::abs(sampleAt(*reopened, 0) - sampleAt(*clip, 0)) < 1.0e-4f,
+                          "and the reverse with it, in the order they were made");
+                    check(reopened->getSampleEdits().size() == 2,
+                          "both edits are remembered, not just their result");
+                }
+
+                auto plain = djr::AudioClip::createFromFile(wav, sampleRate, formats, error);
+
+                if (plain != nullptr)
+                {
+                    check(! plain->hasSampleEdits(), "a freshly loaded clip has no edits on it");
+                    check(std::abs(peakOf(*plain) - 0.5f) < 0.01f,
+                          "and the file on disk was never written to");
+                }
+            }
+        }
+
+        wav.deleteFile();
+    }
+
     // The channel's own stage: the envelope, the LFO, the filter and the
     // arpeggiator, driven directly so the assertions do not depend on whatever
     // the preview synth happens to sound like.

@@ -21,6 +21,7 @@ namespace
     const juce::String mixerPanelId = "mixer";
     const juce::String pluginsPanelId = "plugins";
     const juce::String insertPanelId = "inserts";
+    const juce::String samplePanelId = "sample";
 }
 
 MainComponent::MainComponent()
@@ -53,6 +54,10 @@ MainComponent::MainComponent()
     panelHost.addPanel(mixerPanelId, "Mixer", Icon::waveform, mixerView);
     panelHost.addPanel(pluginsPanelId, "Plugins", Icon::plug, pluginBrowserView);
     panelHost.addPanel(insertPanelId, "Insert Chain", Icon::panel, insertChainPanel);
+    // Closed until a clip asks for it, like Edison: a window with nothing in it
+    // is a window in the way.
+    panelHost.addPanel(samplePanelId, "Sample Editor", Icon::waveform, sampleEditorView);
+    panelHost.setPanelOpen(samplePanelId, false);
 
     panelHost.setLayoutBuilder([this] (PanelHost& host, juce::Rectangle<int> area)
     {
@@ -138,6 +143,10 @@ MainComponent::MainComponent()
     {
         pianoRollModel.notifyClipChanged();
         markDirty();
+    });
+    arrangementView.setAudioClipOpenRequestCallback([this] (int trackIndex, int clipIndex)
+    {
+        showSampleEditor(trackIndex, clipIndex);
     });
     arrangementView.setTrackListChangedCallback([this]
     {
@@ -437,6 +446,9 @@ void MainComponent::buildDefaultPanelLayout(PanelHost& host, juce::Rectangle<int
     place(editorPanelId, remaining);
     place(pluginsPanelId, pluginsArea);
     place(insertPanelId, rightColumnArea);
+    // Over the editor: it is the same kind of work on the same clip, and the
+    // two are never wanted at once.
+    place(samplePanelId, remaining);
     place(mixerPanelId, mixerRow);
 }
 
@@ -503,6 +515,7 @@ void MainComponent::handleCommand(AppCommand command)
         case AppCommand::toggleMixer:       panelHost.togglePanel(mixerPanelId); break;
         case AppCommand::togglePlugins:     panelHost.togglePanel(pluginsPanelId); break;
         case AppCommand::toggleInsertChain: panelHost.togglePanel(insertPanelId); break;
+        case AppCommand::toggleSampleEditor: panelHost.togglePanel(samplePanelId); break;
 
         case AppCommand::resetPanelLayout:
             panelHost.resetLayout();
@@ -626,6 +639,7 @@ void MainComponent::refreshMenuState()
     state.mixerVisible = panelHost.isPanelOpen(mixerPanelId);
     state.pluginsVisible = panelHost.isPanelOpen(pluginsPanelId);
     state.insertChainVisible = panelHost.isPanelOpen(insertPanelId);
+    state.sampleEditorVisible = panelHost.isPanelOpen(samplePanelId);
     state.velocityLaneVisible = editorPanel.isVelocityLaneVisible();
     state.browserVisible = browserVisible;
     state.pianoRollSelected = editorPanel.isPianoRollVisible();
@@ -1548,6 +1562,38 @@ void MainComponent::wireUndoHooks()
 {
     // Recording a point changes what Undo/Redo would do, so the menu has to be
     // rebuilt: it caches its state rather than asking each time it opens.
+    sampleEditorView.setExportCallback([this] (const juce::File& file, const juce::String& error)
+    {
+        if (error.isNotEmpty())
+        {
+            setStatusMessage(TRANS("Export failed: ") + error);
+            return;
+        }
+
+        setStatusMessage(TRANS("Sample exported: ") + file.getFileName());
+        browserPanel.refreshContent();
+    });
+
+    sampleEditorView.setBeforeEditCallback([this] (const juce::String& name)
+    {
+        editHistory.pushSnapshot(name);
+        refreshMenuState();
+    });
+    sampleEditorView.setEditCallback([this] (const juce::String& name)
+    {
+        if (name.isEmpty())
+        {
+            // The edit had nothing to do. Nothing was snapshotted either, so
+            // there is only the status line to answer with.
+            setStatusMessage(TRANS("Nothing to change: the clip is already like that."));
+            return;
+        }
+
+        arrangementView.repaint();
+        markDirty();
+        setStatusMessage(name);
+    });
+
     arrangementView.setUndoHooks([this] (const juce::String& name)
                                  {
                                      editHistory.pushSnapshot(name);
@@ -1585,6 +1631,9 @@ void MainComponent::wireUndoHooks()
         pianoRollModel.notifyClipChanged();
         arrangementView.repaint();
         editorPanel.repaint();
+        // The clip it was showing has been replaced by the restored one, so it
+        // has to look the clip up again rather than redraw the old pointer.
+        sampleEditorView.refresh();
         refreshMenuState();
         markDirty();
     };
@@ -1600,7 +1649,7 @@ void MainComponent::undoEdit()
 
     const auto name = editHistory.getUndoName();
     editHistory.undo();
-    setStatusMessage("Undo: " + (name.isEmpty() ? juce::String("edit terakhir") : name));
+    setStatusMessage("Undo: " + (name.isEmpty() ? TRANS("the last edit") : name));
 }
 
 void MainComponent::redoEdit()
@@ -1613,7 +1662,7 @@ void MainComponent::redoEdit()
 
     const auto name = editHistory.getRedoName();
     editHistory.redo();
-    setStatusMessage("Redo: " + (name.isEmpty() ? juce::String("edit terakhir") : name));
+    setStatusMessage("Redo: " + (name.isEmpty() ? TRANS("the last edit") : name));
 }
 
 void MainComponent::renameTrack(int trackIndex)
@@ -1869,6 +1918,44 @@ void MainComponent::synchroniseProjectState()
     }
 }
 
+void MainComponent::showSampleEditor(int trackIndex, int clipIndex)
+{
+    auto* audioTrack = dynamic_cast<AudioTrack*>(getTrack(trackIndex));
+    auto* clip = audioTrack != nullptr ? audioTrack->getClip(clipIndex) : nullptr;
+
+    if (clip == nullptr)
+    {
+        setStatusMessage(TRANS("That clip has no audio to edit."));
+        return;
+    }
+
+    selectTrack(trackIndex);
+
+    // Looked up by index rather than held: undo swaps a track's whole clip list
+    // out, and a pointer taken now would point at a clip that no longer exists.
+    sampleEditorView.setClipSource([this, trackIndex, clipIndex] () -> AudioClip*
+                                   {
+                                       auto* track = dynamic_cast<AudioTrack*>(getTrack(trackIndex));
+                                       return track != nullptr ? track->getClip(clipIndex) : nullptr;
+                                   },
+                                   audioTrack->getName() + " - " + clip->getName());
+
+    // The project's own Samples folder is where an exported edit belongs, so
+    // that is where the chooser opens.
+    sampleEditorView.setExportContext(&audioFormats, projectManager.getProject().samplesFolder);
+
+    panelHost.setPanelOpen(samplePanelId, true);
+
+    if (auto* panel = panelHost.findPanel(samplePanelId))
+    {
+        panel->setRolledUp(false);
+        panel->toFront(true);
+    }
+
+    refreshMenuState();
+    setStatusMessage(TRANS("Sample editor: ") + clip->getName());
+}
+
 void MainComponent::restorePluginsForTrack(int trackIndex, const juce::Array<juce::var>& pluginStates)
 {
     auto* track = getTrack(trackIndex);
@@ -1950,7 +2037,8 @@ void MainComponent::restoreAudioClipsForTrack(int trackIndex, const juce::Array<
 
         if (clip == nullptr)
         {
-            setStatusMessage(error.isNotEmpty() ? error : "Clip audio hilang: " + file.getFileName());
+            setStatusMessage(error.isNotEmpty() ? error
+                                                : TRANS("Missing audio clip: ") + file.getFileName());
             continue;
         }
 
@@ -2027,7 +2115,7 @@ void MainComponent::restoreFreezeForTrack(int trackIndex, const juce::String& fr
     if (! file.existsAsFile())
     {
         track->setFrozenAudio(nullptr);
-        setStatusMessage("Freeze " + track->getName() + " hilang: " + file.getFileName()
+        setStatusMessage("Freeze " + track->getName() + TRANS(" is missing: ") + file.getFileName()
                              + TRANS(" - the track is processed live again."));
         return;
     }

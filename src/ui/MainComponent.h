@@ -6,6 +6,7 @@
 #include "DJRLookAndFeel.h"
 #include "EditorPanel.h"
 #include "InsertChainPanel.h"
+#include "SampleEditorView.h"
 #include "MenuBarView.h"
 #include "MixerView.h"
 #include "PanelHost.h"
@@ -159,6 +160,10 @@ private:
     void rebuildTrackListForProject();
     void applyProjectToSession();
     /** Rebuilds a track's plugins from the project, restoring their state. */
+    /** Opens the sample editor on one audio clip, from a double click in the
+        playlist or from the View menu.
+    */
+    void showSampleEditor(int trackIndex, int clipIndex);
     void restorePluginsForTrack(int trackIndex, const juce::Array<juce::var>& pluginStates);
     /** Reloads a track's audio clips from disk with their trim and warp. */
     void restoreAudioClipsForTrack(int trackIndex, const juce::Array<juce::var>& clipStates);
@@ -199,6 +204,7 @@ private:
     EditorPanel editorPanel;
     PluginBrowserView pluginBrowserView;
     InsertChainPanel insertChainPanel;
+    SampleEditorView sampleEditorView;
     MixerView mixerView;
     StatusBar statusBar;
 

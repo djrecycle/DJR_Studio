@@ -134,6 +134,7 @@ set(DJR_STUDIO_SOURCES
     src/ui/PianoRollView.cpp
     src/ui/VelocityLane.cpp
     src/ui/StepSequencerView.cpp
+    src/ui/SampleEditorView.cpp
     src/ui/PluginBrowserView.cpp
     src/ui/InsertChainPanel.cpp
     src/ui/StatusBar.cpp

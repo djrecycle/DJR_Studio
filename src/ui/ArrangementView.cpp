@@ -977,13 +977,18 @@ void ArrangementView::mouseDoubleClick(const juce::MouseEvent& event)
 
     auto* midiTrack = dynamic_cast<MidiTrack*>(mixer.getTrack(trackIndex));
 
-    // Audio clips have no note editor to open.
-    if (midiTrack == nullptr)
-        return;
-
     // A drag may have been armed by the first click; the double click cancels it.
     clipDrag = {};
     setSelectedTrack(trackIndex);
+
+    // An audio clip has no notes to open, but it does have samples.
+    if (midiTrack == nullptr)
+    {
+        if (audioClipOpenRequestCallback)
+            audioClipOpenRequestCallback(trackIndex, clipIndex);
+
+        return;
+    }
 
     if (clipOpenRequestCallback)
         clipOpenRequestCallback(trackIndex, midiTrack->getPlacement(clipIndex).patternIndex);
@@ -2326,6 +2331,11 @@ void ArrangementView::setPatternLengthBeats(double beats) noexcept
 void ArrangementView::setClipOpenRequestCallback(std::function<void(int, int)> callback)
 {
     clipOpenRequestCallback = std::move(callback);
+}
+
+void ArrangementView::setAudioClipOpenRequestCallback(std::function<void(int, int)> callback)
+{
+    audioClipOpenRequestCallback = std::move(callback);
 }
 
 void ArrangementView::setUndoHooks(std::function<void(const juce::String&)> push,

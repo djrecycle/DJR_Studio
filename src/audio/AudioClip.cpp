@@ -306,10 +306,27 @@ void AudioClip::addToBuffer(juce::AudioBuffer<float>& destination,
 {
     const auto numSamples = destination.getNumSamples();
 
-    if (numSamples <= 0 || samples == nullptr || tempoBpm <= 0.0 || sampleRate <= 0.0)
+    if (numSamples <= 0 || tempoBpm <= 0.0 || sampleRate <= 0.0)
         return;
 
     if (isMuted())
+        return;
+
+    // A destructive edit swaps this pointer from the message thread. Held only
+    // long enough to take a reference: a lost race costs one block, the same
+    // trade the plugin chain and the stretch cache already make.
+    std::shared_ptr<const juce::AudioBuffer<float>> playing;
+
+    {
+        const juce::SpinLock::ScopedTryLockType scoped(sampleLock);
+
+        if (! scoped.isLocked())
+            return;
+
+        playing = samples;
+    }
+
+    if (playing == nullptr)
         return;
 
     auto rate = getPlaybackRate(tempoBpm);
@@ -317,7 +334,6 @@ void AudioClip::addToBuffer(juce::AudioBuffer<float>& destination,
     // In stretch mode the tempo has already been applied, once, to a copy of
     // the audio. Playing that copy straight through is what keeps the pitch
     // still: the resampling path below is exactly what moves it.
-    std::shared_ptr<const juce::AudioBuffer<float>> playing = samples;
     auto sourceScale = 1.0;
 
     if (isWarpEnabled() && getWarpMode() == WarpMode::stretch)
@@ -441,6 +457,24 @@ juce::var AudioClip::toVar() const
     object->setProperty("fadeIn", getFadeInSeconds());
     object->setProperty("fadeOut", getFadeOutSeconds());
     object->setProperty("warpMode", getWarpMode() == WarpMode::stretch ? "stretch" : "resample");
+
+    // The edits, not the edited audio: the file on disk is the original, and
+    // replaying a short list over it is cheaper than saving a second copy of
+    // every take that was ever normalised.
+    juce::Array<juce::var> editArray;
+
+    for (const auto& record : getSampleEdits())
+    {
+        auto* editObject = new juce::DynamicObject();
+        editObject->setProperty("edit", record.edit == SampleEdit::reverse ? "reverse" : "normalise");
+        editObject->setProperty("offset", record.offsetSeconds);
+        editObject->setProperty("length", record.lengthSeconds);
+        editArray.add(juce::var(editObject));
+    }
+
+    if (! editArray.isEmpty())
+        object->setProperty("sampleEdits", editArray);
+
     return object;
 }
 
@@ -462,6 +496,31 @@ void AudioClip::applyStateFromVar(const juce::var& value)
                     ? WarpMode::stretch
                     : WarpMode::resample);
     setMuted(static_cast<bool>(object->getProperty("muted")));
+
+    // Before the trim and the fades: replaying an edit does not touch either,
+    // and the fades that were saved are the ones a reverse had already swapped.
+    if (auto* editArray = object->getProperty("sampleEdits").getArray())
+    {
+        for (const auto& entry : *editArray)
+        {
+            auto* editObject = entry.getDynamicObject();
+
+            if (editObject == nullptr)
+                continue;
+
+            SampleEditRecord record;
+            record.edit = editObject->getProperty("edit").toString() == "reverse"
+                ? SampleEdit::reverse
+                : SampleEdit::normalise;
+            record.offsetSeconds = static_cast<double>(editObject->getProperty("offset"));
+            record.lengthSeconds = static_cast<double>(editObject->getProperty("length"));
+
+            editSamples(record.edit, record.offsetSeconds, record.lengthSeconds);
+
+            const juce::SpinLock::ScopedLockType scoped(sampleLock);
+            sampleEdits.push_back(record);
+        }
+    }
 
     // Trim last, and clamped to what the decoded file actually holds.
     const auto offset = juce::jlimit(0.0,
@@ -512,6 +571,7 @@ std::unique_ptr<AudioClip> AudioClip::duplicate() const
     copy->sourceFile = sourceFile;
     copy->samples = samples;   // shared, not copied
     copy->peaks = peaks;
+    copy->sampleEdits = sampleEdits;
     copy->clipSampleRate = clipSampleRate;
     copy->sourceLengthSeconds = sourceLengthSeconds;
 
@@ -577,6 +637,313 @@ double AudioClip::getTrimEndFraction() const noexcept
         return 1.0;
 
     return juce::jlimit(0.0, 1.0, (getSourceOffsetSeconds() + getPlayLengthSeconds()) / sourceLengthSeconds);
+}
+
+int AudioClip::getNumSourceSamples() const noexcept
+{
+    const juce::SpinLock::ScopedLockType scoped(sampleLock);
+    return samples != nullptr ? samples->getNumSamples() : 0;
+}
+
+double AudioClip::getClipSampleRate() const noexcept
+{
+    return clipSampleRate;
+}
+
+int AudioClip::getNumSourceChannels() const noexcept
+{
+    const juce::SpinLock::ScopedLockType scoped(sampleLock);
+    return samples != nullptr ? samples->getNumChannels() : 0;
+}
+
+bool AudioClip::getSampleRange(int channel, int firstSample, int numSamples,
+                               float& minOut, float& maxOut) const
+{
+    const juce::SpinLock::ScopedLockType scoped(sampleLock);
+
+    if (samples == nullptr || numSamples <= 0
+        || channel < 0 || channel >= samples->getNumChannels())
+        return false;
+
+    const auto total = samples->getNumSamples();
+    const auto first = juce::jlimit(0, juce::jmax(0, total - 1), firstSample);
+    const auto length = juce::jmin(numSamples, total - first);
+
+    if (first >= total || length <= 0)
+        return false;
+
+    const auto* read = samples->getReadPointer(channel);
+    auto lowest = read[first];
+    auto highest = read[first];
+
+    for (int sample = first + 1; sample < first + length; ++sample)
+    {
+        lowest = juce::jmin(lowest, read[sample]);
+        highest = juce::jmax(highest, read[sample]);
+    }
+
+    minOut = lowest;
+    maxOut = highest;
+    return true;
+}
+
+std::vector<AudioClip::SampleEditRecord> AudioClip::getSampleEdits() const
+{
+    const juce::SpinLock::ScopedLockType scoped(sampleLock);
+    return sampleEdits;
+}
+
+bool AudioClip::hasSampleEdits() const noexcept
+{
+    const juce::SpinLock::ScopedLockType scoped(sampleLock);
+    return ! sampleEdits.empty();
+}
+
+void AudioClip::getPlayedRegion(int& firstSampleOut, int& numSamplesOut) const
+{
+    const juce::SpinLock::ScopedLockType scoped(sampleLock);
+
+    const auto total = samples != nullptr ? samples->getNumSamples() : 0;
+
+    if (total <= 0 || clipSampleRate <= 0.0)
+    {
+        firstSampleOut = 0;
+        numSamplesOut = 0;
+        return;
+    }
+
+    firstSampleOut = juce::jlimit(0, total,
+                                  static_cast<int>(std::round(getSourceOffsetSeconds() * clipSampleRate)));
+    numSamplesOut = juce::jlimit(0, total - firstSampleOut,
+                                 static_cast<int>(std::round(getPlayLengthSeconds() * clipSampleRate)));
+}
+
+bool AudioClip::copySamples(int firstSample, int numSamples, juce::AudioBuffer<float>& destination) const
+{
+    const juce::SpinLock::ScopedLockType scoped(sampleLock);
+
+    if (samples == nullptr || numSamples <= 0)
+        return false;
+
+    const auto total = samples->getNumSamples();
+    const auto first = juce::jlimit(0, juce::jmax(0, total), firstSample);
+    const auto length = juce::jmin(numSamples, total - first);
+
+    if (length <= 0)
+        return false;
+
+    destination.setSize(samples->getNumChannels(), length, false, false, true);
+
+    for (int channel = 0; channel < samples->getNumChannels(); ++channel)
+        destination.copyFrom(channel, 0, *samples, channel, first, length);
+
+    return true;
+}
+
+juce::File AudioClip::exportPlayedRegion(const juce::File& file,
+                                         juce::AudioFormatManager& formats,
+                                         juce::String& errorOut) const
+{
+    // A file with no extension, or one nothing here can write, becomes a wav:
+    // that is the format every other program in the room can open.
+    auto target = file;
+    auto* format = formats.findFormatForFileExtension(target.getFileExtension());
+
+    if (format == nullptr || ! format->canHandleFile(target))
+    {
+        target = target.withFileExtension("wav");
+        format = formats.findFormatForFileExtension("wav");
+    }
+
+    if (format == nullptr)
+    {
+        errorOut = TRANS("No audio formats are available to write with.");
+        return {};
+    }
+
+    int first = 0;
+    int length = 0;
+    getPlayedRegion(first, length);
+
+    juce::AudioBuffer<float> audio;
+
+    if (! copySamples(first, length, audio) || audio.getNumSamples() <= 0)
+    {
+        errorOut = TRANS("There is no sample to export.");
+        return {};
+    }
+
+    if (! target.getParentDirectory().createDirectory())
+    {
+        errorOut = TRANS("Cannot write to that folder.");
+        return {};
+    }
+
+    target.deleteFile();
+    std::unique_ptr<juce::FileOutputStream> stream(target.createOutputStream());
+
+    if (stream == nullptr)
+    {
+        errorOut = TRANS("Cannot write to that file.");
+        return {};
+    }
+
+    // 24 bit where the format allows it. The audio was normalised and reversed
+    // in floating point, and 16 bit would throw that away on the way out for no
+    // reason anyone asked for.
+    const auto depths = format->getPossibleBitDepths();
+    const auto depth = depths.contains(24) ? 24
+                     : depths.contains(16) ? 16
+                     : depths.isEmpty() ? 16 : depths[depths.size() - 1];
+
+    std::unique_ptr<juce::AudioFormatWriter> writer(
+        format->createWriterFor(stream.get(), clipSampleRate,
+                                static_cast<unsigned int>(audio.getNumChannels()),
+                                depth, {}, 0));
+
+    if (writer == nullptr)
+    {
+        errorOut = TRANS("That format cannot be written.");
+        return {};
+    }
+
+    // The writer owns the stream from here, and only from here: releasing it
+    // before the writer exists would leak it on the failure above.
+    stream.release();
+
+    const auto written = writer->writeFromAudioSampleBuffer(audio, 0, audio.getNumSamples());
+    writer.reset();
+
+    if (! written)
+    {
+        target.deleteFile();
+        errorOut = TRANS("Writing the sample failed.");
+        return {};
+    }
+
+    errorOut.clear();
+    return target;
+}
+
+bool AudioClip::canApplySampleEdit(SampleEdit edit) const
+{
+    std::shared_ptr<const juce::AudioBuffer<float>> current;
+
+    {
+        const juce::SpinLock::ScopedLockType scoped(sampleLock);
+        current = samples;
+    }
+
+    if (current == nullptr || clipSampleRate <= 0.0)
+        return false;
+
+    int first = 0;
+    int length = 0;
+    getPlayedRegion(first, length);
+
+    if (length <= 0)
+        return false;
+
+    if (edit == SampleEdit::reverse)
+        return length > 1;
+
+    auto peak = 0.0f;
+
+    for (int channel = 0; channel < current->getNumChannels(); ++channel)
+        peak = juce::jmax(peak, current->getMagnitude(channel, first, length));
+
+    return peak > 1.0e-6f && std::abs(peak - 1.0f) >= 1.0e-4f;
+}
+
+bool AudioClip::editSamples(SampleEdit edit, double offsetSeconds, double lengthSeconds)
+{
+    if (clipSampleRate <= 0.0)
+        return false;
+
+    // The copy is made outside the lock: it is the expensive part, and the
+    // audio thread is reading the old buffer the whole time it runs.
+    std::shared_ptr<const juce::AudioBuffer<float>> current;
+
+    {
+        const juce::SpinLock::ScopedLockType scoped(sampleLock);
+        current = samples;
+    }
+
+    if (current == nullptr)
+        return false;
+
+    const auto total = current->getNumSamples();
+    const auto first = juce::jlimit(0, juce::jmax(0, total),
+                                    static_cast<int>(std::round(offsetSeconds * clipSampleRate)));
+    const auto length = juce::jlimit(0, total - first,
+                                     static_cast<int>(std::round(lengthSeconds * clipSampleRate)));
+
+    if (length <= 0)
+        return false;
+
+    juce::AudioBuffer<float> edited(*current);
+
+    if (edit == SampleEdit::normalise)
+    {
+        auto peak = 0.0f;
+
+        for (int channel = 0; channel < edited.getNumChannels(); ++channel)
+            peak = juce::jmax(peak, edited.getMagnitude(channel, first, length));
+
+        // Silence has no peak to lift, and audio already at full scale has
+        // nowhere to go. Both would be an undo step that changes nothing.
+        if (peak <= 1.0e-6f || std::abs(peak - 1.0f) < 1.0e-4f)
+            return false;
+
+        // Every channel by the same amount: scaling them apart would move the
+        // stereo image, which is not what normalising is for.
+        edited.applyGain(first, length, 1.0f / peak);
+    }
+    else
+    {
+        for (int channel = 0; channel < edited.getNumChannels(); ++channel)
+            edited.reverse(channel, first, length);
+    }
+
+    auto replacement = std::make_shared<const juce::AudioBuffer<float>>(std::move(edited));
+
+    {
+        const juce::SpinLock::ScopedLockType scoped(sampleLock);
+        samples = std::move(replacement);
+    }
+
+    // The stretched copy was built from the audio that has just been replaced,
+    // so it is now a picture of something that no longer exists.
+    {
+        const juce::SpinLock::ScopedLockType scoped(stretchLock);
+        stretched = nullptr;
+        stretchedForTempo = 0.0;
+    }
+
+    buildPeaks();
+    return true;
+}
+
+bool AudioClip::applySampleEdit(SampleEdit edit)
+{
+    const auto offset = getSourceOffsetSeconds();
+    const auto length = getPlayLengthSeconds();
+
+    if (! editSamples(edit, offset, length))
+        return false;
+
+    // Playing the region backwards puts its end at its start, so the fade that
+    // was easing it in is now what eases it out.
+    if (edit == SampleEdit::reverse)
+    {
+        const auto fadeIn = getFadeInSeconds();
+        setFadeInSeconds(getFadeOutSeconds());
+        setFadeOutSeconds(fadeIn);
+    }
+
+    const juce::SpinLock::ScopedLockType scoped(sampleLock);
+    sampleEdits.push_back({ edit, offset, length });
+    return true;
 }
 
 void AudioClip::buildPeaks()

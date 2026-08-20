@@ -106,6 +106,88 @@ public:
     void setMuted(bool shouldMute) noexcept;
     bool isMuted() const noexcept;
 
+    // Destructive edits ------------------------------------------------------
+    /** An edit that rewrites the audio itself rather than how it is played.
+
+        Gain, fades and warp are settings: they are applied while playing and
+        cost nothing to change. These are not - they replace this clip's copy of
+        the samples. The file on disk is never touched, and the edits are
+        written to the project so reopening rebuilds them from the original.
+    */
+    enum class SampleEdit
+    {
+        normalise,  ///< lifts the loudest sample in the region to full scale
+        reverse     ///< plays the region backwards
+    };
+
+    /** One edit and the part of the source it was applied to, in source
+        seconds, so a project can replay it exactly where it happened.
+    */
+    struct SampleEditRecord
+    {
+        SampleEdit edit = SampleEdit::normalise;
+        double offsetSeconds = 0.0;
+        double lengthSeconds = 0.0;
+    };
+
+    /** Applies `edit` to the part of the source this clip plays.
+
+        Message thread only, and it copies the audio: clips made by slicing or
+        duplicating share their samples, and editing in place would rewrite the
+        siblings too. Returns false when the edit would change nothing, so a
+        no-op does not land on the undo stack.
+    */
+    bool applySampleEdit(SampleEdit edit);
+    /** Whether applySampleEdit would change anything - normalising audio that
+        already reaches full scale does not. Asked before the undo snapshot is
+        taken, so a no-op never lands on the stack as a step that undoes nothing.
+    */
+    bool canApplySampleEdit(SampleEdit edit) const;
+    /** What has been done to this clip's audio, oldest first. */
+    std::vector<SampleEditRecord> getSampleEdits() const;
+    bool hasSampleEdits() const noexcept;
+
+    // Drawing at sample level ------------------------------------------------
+    /** How many samples the decoded audio holds. */
+    int getNumSourceSamples() const noexcept;
+    /** The rate the audio was decoded to, which is the device rate. */
+    double getClipSampleRate() const noexcept;
+    /** How many channels the decoded audio holds: one or two. */
+    int getNumSourceChannels() const noexcept;
+    /** Lowest and highest sample in `channel` over a run of source samples.
+        Zoomed all the way in that run is one sample, and the two answers are
+        the same number - which is the point: it is the sample.
+
+        Message thread only. False when the run falls outside the audio.
+    */
+    bool getSampleRange(int channel, int firstSample, int numSamples, float& minOut, float& maxOut) const;
+
+    /** Copies a run of source samples out, for writing to a file.
+
+        Message thread only, and it allocates: this is for saving, not for
+        playing. False when the run falls outside the audio.
+    */
+    bool copySamples(int firstSample, int numSamples, juce::AudioBuffer<float>& destination) const;
+    /** The part of the source this clip plays, in samples. What an edit touches
+        and what an export writes, so the three never disagree.
+    */
+    void getPlayedRegion(int& firstSampleOut, int& numSamplesOut) const;
+
+    /** Writes the played region to `file`, picking the format from its
+        extension and falling back to wav when nothing can write it.
+
+        The samples as they stand, which is what the sample editor draws. Gain
+        and the fades are deliberately not written in: those are playback
+        settings, and a file that does not match the picture it was exported
+        from is a file nobody can reason about.
+
+        Returns the file actually written - the extension may have changed - or
+        an empty File, with `errorOut` saying why.
+    */
+    juce::File exportPlayedRegion(const juce::File& file,
+                                  juce::AudioFormatManager& formats,
+                                  juce::String& errorOut) const;
+
     /** A second clip over the same samples - no reload, no extra memory. */
     std::unique_ptr<AudioClip> duplicate() const;
     /** Splits at `beat`, returning the right hand piece. Null if the cut misses. */
@@ -139,12 +221,22 @@ public:
 private:
     AudioClip() = default;
     void buildPeaks();
+    /** The audio half of an edit, without the bookkeeping: no record kept and
+        no fades swapped. Reopening a project replays through here, because the
+        record and the swapped fades were both already saved.
+    */
+    bool editSamples(SampleEdit edit, double offsetSeconds, double lengthSeconds);
     /** Re-applies the fade limits after the clip's length has changed. */
     void clampFadesToLength() noexcept;
     double getPlaybackRate(double tempoBpm) const noexcept;
 
     juce::String name;
     juce::File sourceFile;
+    /** Guards the samples pointer. The audio never changes under the audio
+        thread's feet - a destructive edit builds a new buffer and swaps the
+        pointer - but the swap itself has to be seen whole.
+    */
+    mutable juce::SpinLock sampleLock;
     // Shared so slicing and duplicating a clip costs nothing.
     std::shared_ptr<const juce::AudioBuffer<float>> samples;
     std::shared_ptr<const std::vector<float>> peaks;
@@ -161,6 +253,8 @@ private:
     std::atomic<double> fadeInSeconds { 0.0 };
     std::atomic<double> fadeOutSeconds { 0.0 };
     std::atomic<WarpMode> warpMode { WarpMode::resample };
+    /** Guarded by sampleLock, like the audio it describes. */
+    std::vector<SampleEditRecord> sampleEdits;
 
     /** The pitch-preserved copy and the tempo it was built for. Guarded like
         the rest of this codebase guards audio-thread reads: a try-lock, and a

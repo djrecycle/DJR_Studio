@@ -71,6 +71,11 @@ public:
         the host can bring up the piano roll on exactly that pattern.
     */
     void setClipOpenRequestCallback(std::function<void(int, int)> callback);
+    /** Double clicking an audio clip: track index and clip index. A MIDI clip
+        opens its notes, an audio clip opens its samples - same gesture, and the
+        clip decides which editor it means.
+    */
+    void setAudioClipOpenRequestCallback(std::function<void(int, int)> callback);
     /** Undo hooks. `push` records a restore point just before a change; `gesture`
         brackets a drag or a paint sweep so it collapses into one undo step.
     */
@@ -372,6 +377,7 @@ private:
     std::function<void()> trackListChangedCallback;
     std::function<void()> clipEditedCallback;
     std::function<void(int, int)> clipOpenRequestCallback;
+    std::function<void(int, int)> audioClipOpenRequestCallback;
     std::function<void(const juce::String&)> pushUndoCallback;
     std::function<void(bool)> undoGestureCallback;
     std::function<juce::String(int)> patternNameProvider;
