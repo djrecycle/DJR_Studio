@@ -40,6 +40,7 @@ namespace djr
 {
 
 class MainComponent final : public juce::Component,
+                            public juce::DragAndDropContainer,
                             private juce::ChangeListener,
                             private juce::Timer
 {

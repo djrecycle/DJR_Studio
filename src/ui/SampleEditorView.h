@@ -1,6 +1,7 @@
 #pragma once
 
 #include "UiControls.h"
+#include "ZoomScrollBar.h"
 
 #include "audio/AudioClip.h"
 
@@ -149,6 +150,10 @@ private:
 
     /** Fits the whole source across the view, which is where it starts. */
     void zoomToFit();
+    /** Pushes the view's position into the bar. */
+    void refreshScrollBar();
+    /** Applies what the bar was dragged to. */
+    void applyViewRange(double start, double size);
     /** Multiplies the zoom, keeping whatever is under `anchorX` where it is -
         otherwise zooming in on a detail loses the detail.
     */
@@ -183,6 +188,11 @@ private:
     double viewStartSample = 0.0;
     int dragStartX = 0;
     double dragStartSample = 0.0;
+
+    /** Where in the sample the view is, and how much of it is showing. The
+        same control the playlist and the piano roll use.
+    */
+    ZoomScrollBar horizontalBar { ZoomScrollBar::Orientation::horizontal };
 
     PillButton recordButton { "Record", Icon::record };
     PillButton clearButton { "Clear" };

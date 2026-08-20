@@ -1,6 +1,7 @@
 #pragma once
 
 #include "UiControls.h"
+#include "ZoomScrollBar.h"
 
 #include "app/SnapSetting.h"
 #include "audio/AutomationLane.h"
@@ -20,6 +21,7 @@ namespace djr
 */
 class ArrangementView final : public juce::Component,
                               public juce::FileDragAndDropTarget,
+                              public juce::DragAndDropTarget,
                               private juce::Timer,
                               private juce::Button::Listener,
                               private juce::Slider::Listener
@@ -125,6 +127,16 @@ public:
     void fileDragMove(const juce::StringArray& files, int x, int y) override;
     void fileDragExit(const juce::StringArray& files) override;
     void filesDropped(const juce::StringArray& files, int x, int y) override;
+
+    /** A drag from inside this window - the browser's sample list. The
+        desktop's file drag is a different protocol and is kept for files
+        coming from outside the app.
+    */
+    bool isInterestedInDragSource(const SourceDetails& details) override;
+    void itemDragEnter(const SourceDetails& details) override;
+    void itemDragMove(const SourceDetails& details) override;
+    void itemDragExit(const SourceDetails& details) override;
+    void itemDropped(const SourceDetails& details) override;
 
     int getRowHeight(int trackIndex) const;
     void setRowHeight(int trackIndex, int height);
@@ -296,6 +308,16 @@ private:
     int beatToX(double beat) const;
     int getContentHeight() const;
     void clampScroll();
+    /** Beats the bars treat as the whole timeline: what is there, with room to
+        keep going. Without the room a full timeline could never be scrolled
+        past its own last clip.
+    */
+    double getTimelineBeats() const;
+    /** Pushes where the view is back into the two bars. */
+    void refreshScrollBars();
+    /** Applies what a bar was dragged to. */
+    void applyHorizontalRange(double start, double size);
+    void applyVerticalRange(double start, double size);
     void zoomToFit();
     void showAddTrackMenu();
     void showTrackContextMenu(int trackIndex);
@@ -401,6 +423,12 @@ private:
     IconChipButton followButton { "Ikuti playhead", Icon::chevronRight };
     IconChipButton zoomFitButton { "Zoom to fit", Icon::grid };
     juce::Slider zoomSlider;
+    /** Where the view is and how much of it is showing, in one control each
+        way. FL puts these along the edges of the playlist and they are how it
+        is actually navigated - the zoom slider only ever says how much.
+    */
+    ZoomScrollBar horizontalBar { ZoomScrollBar::Orientation::horizontal };
+    ZoomScrollBar verticalBar { ZoomScrollBar::Orientation::vertical };
 
     std::function<void(int)> trackSelectedCallback;
     std::function<void()> trackListChangedCallback;

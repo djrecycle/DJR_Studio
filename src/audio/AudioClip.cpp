@@ -9,7 +9,18 @@ namespace djr
 
 namespace
 {
-    constexpr int peakBuckets = 512;
+    /** How fine the drawing summary is.
+
+        One number for every source is the wrong shape: 512 buckets is plenty
+        of detail for a two second loop and almost none for a four minute take,
+        where each bucket would cover nearly half a second and the playlist
+        draws it as a solid block. So the bucket is sized in samples instead,
+        and the count follows the audio - with a ceiling, because the summary
+        exists to be cheap.
+    */
+    constexpr int minPeakBuckets = 512;
+    constexpr int maxPeakBuckets = 32768;
+    constexpr int minSamplesPerBucket = 64;
     constexpr juce::int64 maxSourceSamples = 44100LL * 60LL * 10LL; // 10 minutes
 }
 
@@ -974,19 +985,22 @@ bool AudioClip::applySampleEdit(SampleEdit edit)
 
 void AudioClip::buildPeaks()
 {
-    std::vector<float> built(peakBuckets, 0.0f);
-
     const auto total = samples != nullptr ? samples->getNumSamples() : 0;
 
     if (total <= 0)
     {
-        peaks = std::make_shared<const std::vector<float>>(std::move(built));
+        peaks = std::make_shared<const std::vector<float>>(std::vector<float>(minPeakBuckets, 0.0f));
         return;
     }
 
-    const auto perBucket = juce::jmax(1, total / peakBuckets);
+    const auto perBucket = juce::jmax(minSamplesPerBucket,
+                                      (total + maxPeakBuckets - 1) / maxPeakBuckets);
+    const auto bucketCount = juce::jlimit(minPeakBuckets, maxPeakBuckets,
+                                          (total + perBucket - 1) / perBucket);
 
-    for (int bucket = 0; bucket < peakBuckets; ++bucket)
+    std::vector<float> built(static_cast<size_t>(bucketCount), 0.0f);
+
+    for (int bucket = 0; bucket < bucketCount; ++bucket)
     {
         const auto start = bucket * perBucket;
 

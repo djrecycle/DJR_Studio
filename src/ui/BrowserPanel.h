@@ -13,6 +13,7 @@ namespace djr
 /** Left hand browser: search field, section chips, a file/plugin tree and the
     Plugin scan progress footer.
 */
+/** Marks a drag that carries a file out of the browser. */
 class BrowserPanel final : public juce::Component,
                            private juce::Button::Listener,
                            private juce::TextEditor::Listener
@@ -24,6 +25,11 @@ public:
         right,
         bottom
     };
+
+    /** What a browser drag's description starts with, so a drop can tell it
+        apart from anything else this window might drag later.
+    */
+    static constexpr const char* fileDragPrefix = "djr:file:";
 
     BrowserPanel();
     ~BrowserPanel() override;
@@ -69,6 +75,11 @@ private:
         int getNumRows() override;
         void paintListBoxItem(int row, juce::Graphics& g, int width, int height, bool rowIsSelected) override;
         void listBoxItemDoubleClicked(int row, const juce::MouseEvent&) override;
+        /** What a drag out of this list carries. A sample carries its path so
+            the playlist can place it where it was dropped; everything else
+            carries nothing, which is how a drag refuses to start.
+        */
+        juce::var getDragSourceDescription(const juce::SparseSet<int>& rows) override;
 
     private:
         BrowserPanel& owner;

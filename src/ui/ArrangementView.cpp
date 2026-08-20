@@ -1,5 +1,6 @@
 #include "ArrangementView.h"
 
+#include "BrowserPanel.h"
 #include "Theme.h"
 #include "audio/AudioTrack.h"
 #include "audio/BusTrack.h"
@@ -72,6 +73,11 @@ ArrangementView::ArrangementView(Mixer& mixerToUse, Transport& transportToUse)
     zoomSlider.setTooltip("Zoom playlist");
     zoomSlider.addListener(this);
     addAndMakeVisible(zoomSlider);
+
+    horizontalBar.onRangeChanged = [this] (double start, double size) { applyHorizontalRange(start, size); };
+    verticalBar.onRangeChanged = [this] (double start, double size) { applyVerticalRange(start, size); };
+    addAndMakeVisible(horizontalBar);
+    addAndMakeVisible(verticalBar);
 
     // Delete acts on the selection, so the grid needs keys. Anything this view
     // does not claim still bubbles up to the window shortcuts.
@@ -327,11 +333,27 @@ void ArrangementView::paint(juce::Graphics& g)
                 const auto firstBucket = clip.trimStartFraction * bucketCount;
                 const auto bucketSpan = juce::jmax(1.0, (clip.trimEndFraction - clip.trimStartFraction) * bucketCount);
 
+                // One pixel usually covers several buckets now, so it takes the
+                // loudest of them rather than whichever one it happened to land
+                // on. Sampling a single bucket per pixel drops peaks between
+                // them, and a waveform that misses its own transients is worse
+                // than a coarse one.
                 for (int x = 0; x < body.getWidth(); ++x)
                 {
-                    const auto position = firstBucket + bucketSpan * x / juce::jmax(1, body.getWidth());
-                    const auto bucket = juce::jlimit(0, bucketCount - 1, static_cast<int>(position));
-                    const auto amplitude = (*clip.peaks)[static_cast<size_t>(bucket)] * halfHeight;
+                    const auto span = juce::jmax(1, body.getWidth());
+                    const auto from = firstBucket + bucketSpan * x / span;
+                    const auto to = firstBucket + bucketSpan * (x + 1) / span;
+
+                    const auto firstIndex = juce::jlimit(0, bucketCount - 1, static_cast<int>(from));
+                    const auto lastIndex = juce::jlimit(firstIndex, bucketCount - 1,
+                                                        static_cast<int>(std::ceil(to)) - 1);
+
+                    auto peak = 0.0f;
+
+                    for (int bucket = firstIndex; bucket <= lastIndex; ++bucket)
+                        peak = juce::jmax(peak, (*clip.peaks)[static_cast<size_t>(bucket)]);
+
+                    const auto amplitude = peak * halfHeight;
 
                     g.drawVerticalLine(body.getX() + x,
                                        centreY - amplitude,
@@ -497,8 +519,17 @@ void ArrangementView::resized()
 
     zoomSlider.setBounds(header.removeFromRight(80).withSizeKeepingCentre(80, 16));
 
+    auto body = getLocalBounds().withTrimmedTop(panelHeaderHeight);
+    auto bottomStrip = body.removeFromBottom(ZoomScrollBar::thickness);
+    auto rightStrip = body.removeFromRight(ZoomScrollBar::thickness);
+
+    horizontalBar.setBounds(bottomStrip.withTrimmedLeft(headerWidth)
+                                       .withTrimmedRight(ZoomScrollBar::thickness));
+    verticalBar.setBounds(rightStrip.withTrimmedTop(rulerHeight));
+
     rebuildRows();
     clampScroll();
+    refreshScrollBars();
 }
 
 void ArrangementView::mouseDown(const juce::MouseEvent& event)
@@ -1030,6 +1061,7 @@ void ArrangementView::mouseWheelMove(const juce::MouseEvent& event, const juce::
     if (event.mods.isShiftDown())
     {
         scrollBeats = juce::jmax(0.0, scrollBeats - wheel.deltaY * 8.0);
+        refreshScrollBars();
         repaint();
         return;
     }
@@ -1427,16 +1459,19 @@ void ArrangementView::sliderValueChanged(juce::Slider* slider)
         return;
 
     pixelsPerBar = zoomSlider.getValue();
+    refreshScrollBars();
     repaint();
 }
 
 juce::Rectangle<int> ArrangementView::getGridArea() const
 {
+    // The bars live inside the panel rather than over the grid, so nothing is
+    // ever hidden underneath them.
     return getLocalBounds()
         .withTrimmedTop(panelHeaderHeight + rulerHeight)
         .withTrimmedLeft(headerWidth)
-        .withTrimmedRight(1)
-        .withTrimmedBottom(1);
+        .withTrimmedRight(1 + ZoomScrollBar::thickness)
+        .withTrimmedBottom(1 + ZoomScrollBar::thickness);
 }
 
 juce::Rectangle<int> ArrangementView::getRowBounds(int trackIndex) const
@@ -1685,6 +1720,79 @@ void ArrangementView::clampScroll()
 
     // The cached row positions are relative to scrollY, so they move with it.
     refreshRowTops();
+    refreshScrollBars();
+}
+
+double ArrangementView::getTimelineBeats() const
+{
+    auto lastBeat = 16.0 * transport.getBeatsPerBar();
+
+    for (int i = 0; i < mixer.getNumTracks(); ++i)
+        for (const auto& clip : getClipsForTrack(i))
+            lastBeat = juce::jmax(lastBeat, clip.startBeat + clip.lengthBeats);
+
+    // Room past the end, so the view can be scrolled to where the next thing
+    // would go rather than stopping dead at the last clip.
+    return lastBeat * 1.25;
+}
+
+void ArrangementView::refreshScrollBars()
+{
+    const auto grid = getGridArea();
+    const auto pixelsPerBeat = pixelsPerBar / transport.getBeatsPerBar();
+    const auto timeline = juce::jmax(1.0, getTimelineBeats());
+    const auto visibleBeats = grid.getWidth() / juce::jmax(1.0, pixelsPerBeat);
+
+    horizontalBar.setMinimumSize(juce::jlimit(0.0001, 1.0, 1.0 / juce::jmax(1.0, timeline)));
+    horizontalBar.setRange(scrollBeats / timeline, visibleBeats / timeline);
+
+    const auto content = juce::jmax(1, getContentHeight());
+    verticalBar.setRange(static_cast<double>(scrollY) / content,
+                         static_cast<double>(grid.getHeight()) / content);
+}
+
+void ArrangementView::applyHorizontalRange(double start, double size)
+{
+    const auto grid = getGridArea();
+    const auto timeline = juce::jmax(1.0, getTimelineBeats());
+    const auto visibleBeats = juce::jmax(0.25, size * timeline);
+
+    // The bar says how much is showing; the zoom is whatever makes that much
+    // fit. Written through the slider so both controls keep the same answer.
+    const auto beatsPerPixel = visibleBeats / juce::jmax(1, grid.getWidth());
+    const auto newPixelsPerBar = transport.getBeatsPerBar() / juce::jmax(1.0e-6, beatsPerPixel);
+
+    scrollBeats = juce::jmax(0.0, start * timeline);
+    zoomSlider.setValue(juce::jlimit(zoomSlider.getMinimum(), zoomSlider.getMaximum(), newPixelsPerBar),
+                        juce::sendNotificationSync);
+
+    // A zoom the slider refused still has to leave the scroll where it was put.
+    pixelsPerBar = zoomSlider.getValue();
+    rebuildRows();
+    repaint();
+}
+
+void ArrangementView::applyVerticalRange(double start, double size)
+{
+    const auto grid = getGridArea();
+    const auto content = juce::jmax(1, getContentHeight());
+    const auto wanted = juce::jmax(1.0, size * content);
+    const auto factor = grid.getHeight() / wanted;
+
+    // Zooming down this edge is the rows getting taller or shorter together,
+    // which is what a playlist has instead of a vertical scale.
+    if (! juce::approximatelyEqual(factor, 1.0))
+    {
+        for (int row = 0; row < getRowCount(); ++row)
+            setRowHeightAt(row, juce::roundToInt(getRowHeightAt(row) * factor));
+
+        rebuildRows();
+    }
+
+    scrollY = juce::roundToInt(start * juce::jmax(1, getContentHeight()));
+    clampScroll();
+    refreshScrollBars();
+    repaint();
 }
 
 void ArrangementView::zoomToFit()
@@ -1698,6 +1806,7 @@ void ArrangementView::zoomToFit()
     const auto grid = juce::jmax(120, getGridArea().getWidth());
     scrollBeats = 0.0;
     zoomSlider.setValue(juce::jlimit(24.0, 320.0, grid / (lastBeat / transport.getBeatsPerBar()) * 0.95));
+    refreshScrollBars();
 }
 
 std::vector<ArrangementView::Clip> ArrangementView::getClipsForTrack(int trackIndex) const
@@ -3038,6 +3147,62 @@ bool ArrangementView::isAudioFileName(const juce::String& path)
 void ArrangementView::setFileDropCallback(std::function<void(const juce::File&, int trackIndex, double beat)> callback)
 {
     fileDropCallback = std::move(callback);
+}
+
+namespace
+{
+    /** The file behind a drag description from the browser, or an empty File. */
+    juce::File fileFromDragDescription(const juce::var& description)
+    {
+        const auto text = description.toString();
+
+        if (! text.startsWith(BrowserPanel::fileDragPrefix))
+            return {};
+
+        return juce::File(text.fromFirstOccurrenceOf(BrowserPanel::fileDragPrefix, false, false));
+    }
+}
+
+bool ArrangementView::isInterestedInDragSource(const SourceDetails& details)
+{
+    return fileDropCallback != nullptr && fileFromDragDescription(details.description) != juce::File();
+}
+
+void ArrangementView::itemDragEnter(const SourceDetails& details)
+{
+    itemDragMove(details);
+}
+
+void ArrangementView::itemDragMove(const SourceDetails& details)
+{
+    const auto row = rowAt(details.localPosition);
+
+    if (row == fileDropRow)
+        return;
+
+    fileDropRow = row;
+    repaint();
+}
+
+void ArrangementView::itemDragExit(const SourceDetails&)
+{
+    fileDragExit({});
+}
+
+void ArrangementView::itemDropped(const SourceDetails& details)
+{
+    const auto row = rowAt(details.localPosition);
+    fileDropRow = -1;
+    repaint();
+
+    const auto file = fileFromDragDescription(details.description);
+
+    if (fileDropCallback == nullptr || file == juce::File() || ! juce::isPositiveAndBelow(row, getRowCount()))
+        return;
+
+    fileDropCallback(file,
+                     rows[static_cast<size_t>(row)].trackIndex,
+                     juce::jmax(0.0, snapBeat(xToBeat(details.localPosition.x))));
 }
 
 bool ArrangementView::findDropTarget(juce::Point<int> screenPosition, int& trackIndexOut, double& beatOut) const

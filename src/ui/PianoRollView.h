@@ -5,6 +5,8 @@
 #include "audio/Transport.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
+#include "ZoomScrollBar.h"
+
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <functional>
 
@@ -45,6 +47,7 @@ public:
     std::function<void(bool)> onEditGesture;
 
     void paint(juce::Graphics& g) override;
+    void resized() override;
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
@@ -112,12 +115,28 @@ private:
     bool drawing = false;
     double lastDrawnBeat = -1.0;
     int lastDrawnPitch = -1;
+    /** Where the roll is and how much of it is showing - the same two bars the
+        playlist has, so navigating one is navigating the other.
+    */
+    ZoomScrollBar horizontalBar { ZoomScrollBar::Orientation::horizontal };
+    ZoomScrollBar verticalBar { ZoomScrollBar::Orientation::vertical };
+
     int keyHeight = 12;
     int keyboardWidth = 44;
     SnapUnit snapUnit = SnapUnit::step;
     double pixelsPerBeat = 14.0;
     double scrollBeats = 0.0;
     int topPitch = 84;
+
+    /** What the drawing and the mouse both work inside: everything but the
+        strips the two bars sit in.
+    */
+    juce::Rectangle<int> getContentBounds() const;
+    /** Beats the horizontal bar treats as the whole roll. */
+    double getTimelineBeats() const;
+    void refreshScrollBars();
+    void applyHorizontalRange(double start, double size);
+    void applyVerticalRange(double start, double size);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PianoRollView)
 };

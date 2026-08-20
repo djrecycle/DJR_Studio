@@ -20,7 +20,79 @@ PianoRollView::PianoRollView(PianoRollModel& modelToUse, Transport& transportToU
 {
     setWantsKeyboardFocus(true);
     model.addChangeListener(this);
+
+    horizontalBar.onRangeChanged = [this] (double start, double size) { applyHorizontalRange(start, size); };
+    verticalBar.onRangeChanged = [this] (double start, double size) { applyVerticalRange(start, size); };
+    addAndMakeVisible(horizontalBar);
+    addAndMakeVisible(verticalBar);
+
     startTimerHz(30);
+}
+
+juce::Rectangle<int> PianoRollView::getContentBounds() const
+{
+    return getLocalBounds()
+        .withTrimmedRight(ZoomScrollBar::thickness)
+        .withTrimmedBottom(ZoomScrollBar::thickness);
+}
+
+void PianoRollView::resized()
+{
+    auto bottomStrip = getLocalBounds().removeFromBottom(ZoomScrollBar::thickness);
+    auto rightStrip = getLocalBounds().removeFromRight(ZoomScrollBar::thickness);
+
+    horizontalBar.setBounds(bottomStrip.withTrimmedLeft(keyboardWidth)
+                                       .withTrimmedRight(ZoomScrollBar::thickness));
+    verticalBar.setBounds(rightStrip.withTrimmedBottom(ZoomScrollBar::thickness));
+    refreshScrollBars();
+}
+
+double PianoRollView::getTimelineBeats() const
+{
+    // The pattern's own length, with room past it: a note can be written after
+    // the last one there is.
+    auto lastBeat = 16.0;
+
+    for (const auto& note : model.getNotes())
+        lastBeat = juce::jmax(lastBeat, note.startBeat + note.lengthBeats);
+
+    return lastBeat * 1.25;
+}
+
+void PianoRollView::refreshScrollBars()
+{
+    const auto grid = juce::jmax(1, getContentBounds().getWidth() - keyboardWidth);
+    const auto timeline = juce::jmax(1.0, getTimelineBeats());
+
+    horizontalBar.setMinimumSize(juce::jlimit(0.0001, 1.0, 1.0 / timeline));
+    horizontalBar.setRange(scrollBeats / timeline, (grid / pixelsPerBeat) / timeline);
+
+    // Pitch runs the other way round: the top of the bar is the top of the
+    // keyboard, which is the highest note.
+    const auto visibleKeys = juce::jmax(1, getContentBounds().getHeight() / juce::jmax(1, keyHeight));
+    verticalBar.setRange((127.0 - topPitch) / 128.0, visibleKeys / 128.0);
+}
+
+void PianoRollView::applyHorizontalRange(double start, double size)
+{
+    const auto grid = juce::jmax(1, getContentBounds().getWidth() - keyboardWidth);
+    const auto timeline = juce::jmax(1.0, getTimelineBeats());
+
+    pixelsPerBeat = juce::jlimit(6.0, 96.0, grid / juce::jmax(0.25, size * timeline));
+    scrollBeats = juce::jmax(0.0, start * timeline);
+    refreshScrollBars();
+    repaint();
+}
+
+void PianoRollView::applyVerticalRange(double start, double size)
+{
+    const auto height = juce::jmax(1, getContentBounds().getHeight());
+    const auto wantedKeys = juce::jlimit(4.0, 128.0, size * 128.0);
+
+    keyHeight = juce::jlimit(4, 40, juce::roundToInt(height / wantedKeys));
+    topPitch = juce::jlimit(11, 127, 127 - juce::roundToInt(start * 128.0));
+    refreshScrollBars();
+    repaint();
 }
 
 PianoRollView::~PianoRollView()
@@ -43,7 +115,7 @@ juce::Colour PianoRollView::velocityColour(float velocity)
 
 void PianoRollView::paint(juce::Graphics& g)
 {
-    const auto bounds = getLocalBounds();
+    const auto bounds = getContentBounds();
     g.fillAll(Theme::panelDeep());
 
     const auto visibleRows = bounds.getHeight() / keyHeight + 2;
@@ -174,7 +246,7 @@ void PianoRollView::mouseDown(const juce::MouseEvent& event)
     // Zoom and Playback act on the timeline, never on the note under the cursor.
     if (activeTool == Tool::zoom)
     {
-        zoomDrag = juce::Rectangle<int>(event.x, 0, 1, getHeight());
+        zoomDrag = juce::Rectangle<int>(event.x, 0, 1, getContentBounds().getHeight());
         return;
     }
 
@@ -263,7 +335,7 @@ void PianoRollView::mouseDrag(const juce::MouseEvent& event)
     {
         const auto left = juce::jmin(event.getMouseDownPosition().x, event.x);
         const auto right = juce::jmax(event.getMouseDownPosition().x, event.x);
-        zoomDrag = juce::Rectangle<int>(left, 0, right - left, getHeight());
+        zoomDrag = juce::Rectangle<int>(left, 0, right - left, getContentBounds().getHeight());
         repaint();
         return;
     }
@@ -328,7 +400,7 @@ void PianoRollView::mouseUp(const juce::MouseEvent& event)
             const auto fromBeat = xToBeat(zoomDrag.getX());
             const auto beats = juce::jmax(0.5, xToBeat(zoomDrag.getRight()) - fromBeat);
 
-            pixelsPerBeat = juce::jlimit(6.0, 96.0, (getWidth() - keyboardWidth) / beats);
+            pixelsPerBeat = juce::jlimit(6.0, 96.0, (getContentBounds().getWidth() - keyboardWidth) / beats);
             scrollBeats = juce::jmax(0.0, fromBeat);
         }
 
@@ -558,6 +630,7 @@ void PianoRollView::mouseWheelMove(const juce::MouseEvent& event, const juce::Mo
     if (event.mods.isCtrlDown() || event.mods.isCommandDown())
     {
         pixelsPerBeat = juce::jlimit(6.0, 96.0, pixelsPerBeat * (wheel.deltaY > 0.0f ? 1.12 : 0.89));
+        refreshScrollBars();
         repaint();
         return;
     }
@@ -565,11 +638,13 @@ void PianoRollView::mouseWheelMove(const juce::MouseEvent& event, const juce::Mo
     if (event.mods.isShiftDown())
     {
         scrollBeats = juce::jmax(0.0, scrollBeats - wheel.deltaY * 6.0);
+        refreshScrollBars();
         repaint();
         return;
     }
 
     topPitch = juce::jlimit(11, 127, topPitch + juce::roundToInt(wheel.deltaY * 4.0f));
+    refreshScrollBars();
     repaint();
 }
 

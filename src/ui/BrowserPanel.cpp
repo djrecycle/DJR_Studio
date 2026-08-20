@@ -97,6 +97,26 @@ void BrowserPanel::RowsModel::listBoxItemDoubleClicked(int row, const juce::Mous
         owner.fileActivatedCallback(item.file);
 }
 
+juce::var BrowserPanel::RowsModel::getDragSourceDescription(const juce::SparseSet<int>& rows)
+{
+    if (rows.isEmpty())
+        return {};
+
+    const auto row = rows[0];
+
+    if (! juce::isPositiveAndBelow(row, static_cast<int>(owner.rows.size())))
+        return {};
+
+    const auto& item = owner.rows[static_cast<size_t>(row)];
+
+    if (! item.file.existsAsFile())
+        return {};
+
+    // Prefixed so a drop can tell this apart from anything else that might be
+    // dragged around this window later.
+    return juce::var(BrowserPanel::fileDragPrefix + item.file.getFullPathName());
+}
+
 //==============================================================================
 BrowserPanel::BrowserPanel()
 {

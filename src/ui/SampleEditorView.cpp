@@ -50,6 +50,10 @@ SampleEditorView::SampleEditorView()
     }
 
     zoomOutButton.setIconInset(8.0f);
+
+    horizontalBar.onRangeChanged = [this] (double start, double size) { applyViewRange(start, size); };
+    addAndMakeVisible(horizontalBar);
+
     setWantsKeyboardFocus(false);
 }
 
@@ -71,6 +75,40 @@ void SampleEditorView::setClipSource(std::function<AudioClip*()> source, const j
     clipTitle = title;
     refreshClipPointer();
     zoomToFit();
+    repaint();
+}
+
+void SampleEditorView::refreshScrollBar()
+{
+    const auto total = getTotalSamples();
+    const auto area = getWaveformArea();
+
+    if (total <= 0 || area.getWidth() <= 0)
+    {
+        horizontalBar.setRange(0.0, 1.0);
+        return;
+    }
+
+    const auto visible = static_cast<double>(area.getWidth()) * samplesPerPixel;
+
+    horizontalBar.setMinimumSize(juce::jlimit(0.000001, 1.0,
+                                              area.getWidth() * finestSamplesPerPixel / total));
+    horizontalBar.setRange(viewStartSample / total, visible / total);
+}
+
+void SampleEditorView::applyViewRange(double start, double size)
+{
+    const auto total = getTotalSamples();
+    const auto area = getWaveformArea();
+
+    if (total <= 0 || area.getWidth() <= 0)
+        return;
+
+    samplesPerPixel = juce::jlimit(finestSamplesPerPixel,
+                                   getFitSamplesPerPixel(),
+                                   size * total / area.getWidth());
+    viewStartSample = start * total;
+    clampView();
     repaint();
 }
 
@@ -288,6 +326,7 @@ void SampleEditorView::clampView()
 
     const auto visible = static_cast<double>(area.getWidth()) * samplesPerPixel;
     viewStartSample = juce::jlimit(0.0, juce::jmax(0.0, total - visible), viewStartSample);
+    refreshScrollBar();
 }
 
 double SampleEditorView::sampleAtX(int x) const
@@ -305,8 +344,11 @@ double SampleEditorView::xAtSample(double sample) const
 //==============================================================================
 juce::Rectangle<int> SampleEditorView::getWaveformArea() const
 {
+    // The bar sits below the waveform rather than over it: what it says about
+    // the view has to be readable at the same time as the view.
     return getLocalBounds()
         .withTrimmedTop(headerHeight + rulerHeight)
+        .withTrimmedBottom(ZoomScrollBar::thickness + 2)
         .reduced(edgePadding, edgePadding);
 }
 
@@ -365,7 +407,12 @@ void SampleEditorView::resized()
     header.removeFromRight(2);
     zoomOutButton.setBounds(header.removeFromRight(22).withSizeKeepingCentre(20, 20));
 
+    horizontalBar.setBounds(getLocalBounds()
+                                .removeFromBottom(ZoomScrollBar::thickness + 2)
+                                .reduced(edgePadding, 1));
+
     clampView();
+    refreshScrollBar();
 }
 
 //==============================================================================
