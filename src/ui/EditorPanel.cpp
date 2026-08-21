@@ -187,6 +187,18 @@ void EditorPanel::paint(juce::Graphics& g)
                juce::Justification::centredLeft,
                false);
 
+    // Whose notes these are, dimmer than the pattern badge: the pattern is what
+    // is being edited, the track is where it belongs.
+    if (trackName.isNotEmpty())
+    {
+        g.setColour(Theme::mutedText());
+        g.setFont(Theme::ui(10.5f));
+        g.drawText(trackName,
+                   nameArea.withX(nameArea.getRight() + 6).withWidth(110),
+                   juce::Justification::centredLeft,
+                   true);
+    }
+
     // The pattern's loop length, and whether it follows the notes or is pinned.
     const auto lengthArea = getPatternLengthBounds();
     g.setColour(Theme::control());
@@ -212,7 +224,12 @@ juce::Rectangle<int> EditorPanel::getPatternNameBounds() const
 
 juce::Rectangle<int> EditorPanel::getPatternLengthBounds() const
 {
-    const auto name = getPatternNameBounds();
+    // Past the track name when there is one, so the two never sit on top of
+    // each other on a narrow panel.
+    const auto name = trackName.isEmpty()
+        ? getPatternNameBounds()
+        : getPatternNameBounds().withWidth(getPatternNameBounds().getWidth() + 6
+                                               + juce::jmin(110, Theme::textWidth(Theme::ui(10.5f), trackName) + 4));
     return juce::Rectangle<int>(name.getRight() + 8, name.getY(), 48, name.getHeight());
 }
 
@@ -243,6 +260,16 @@ void EditorPanel::setNoteGestureCallback(std::function<void(bool)> callback)
 {
     pianoRoll.onEditGesture = callback;
     velocityLane.onEditGesture = std::move(callback);
+}
+
+void EditorPanel::setTrackName(const juce::String& name)
+{
+    if (name == trackName)
+        return;
+
+    trackName = name;
+    resized();
+    repaint();
 }
 
 void EditorPanel::setPatternName(const juce::String& name)

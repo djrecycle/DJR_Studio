@@ -133,6 +133,10 @@ private:
     void applyEdit(AudioClip::SampleEdit edit);
     /** Asks where to write, then writes the played region there. */
     void exportSample();
+    /** Reads a tempo and a pitch out of what is on screen and says so in the
+        header. Both are guesses, and the wording keeps them guesses.
+    */
+    void detectTempoAndPitch();
     /** Writes `file`, picking the format from its extension. Empty on success,
         otherwise why it failed.
     */
@@ -198,6 +202,7 @@ private:
     PillButton clearButton { "Clear" };
     PillButton loadButton { "Load...", Icon::folder };
     PillButton sendButton { "To playlist", Icon::chevronRight };
+    PillButton detectButton { "Detect", Icon::search };
     PillButton normaliseButton { "Normalize", Icon::waveform };
     PillButton reverseButton { "Reverse", Icon::undo };
     IconChipButton zoomInButton { "Zoom in", Icon::zoom };

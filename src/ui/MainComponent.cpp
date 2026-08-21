@@ -1836,6 +1836,13 @@ void MainComponent::applySelectionToPanels()
     refreshPatternName();
     refreshPatternLength();
 
+    // Whose notes the roll is showing. Only a track that has notes puts its
+    // name up there: on an audio track the roll is empty and naming it would
+    // suggest the two had something to do with each other.
+    const auto* selected = getTrack(trackIndex);
+    editorPanel.setTrackName(dynamic_cast<const MidiTrack*>(selected) != nullptr ? selected->getName()
+                                                                                 : juce::String());
+
     arrangementView.setSelectedTrack(trackIndex);
     insertChainPanel.setSelectedTrack(trackIndex);
     pluginBrowserView.setTargetTrack(trackIndex);

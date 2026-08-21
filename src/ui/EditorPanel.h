@@ -47,6 +47,13 @@ public:
     void setPatternChangedCallback(std::function<void(int)> callback);
     /** The pattern's display name, shown in place of the "PAT n" default. */
     void setPatternName(const juce::String& name);
+    /** Which track's notes are on screen.
+
+        A pattern number says which pattern; it does not say whose. Opening the
+        roll from a clip on the playlist is exactly the moment that question
+        arises, so the answer is kept next to the pattern badge.
+    */
+    void setTrackName(const juce::String& name);
     /** Fired when the name badge is clicked, to ask the host for a rename. */
     void setPatternRenameCallback(std::function<void()> callback);
     /** Shows the pattern's loop length; `locked` means it was set by hand. */
@@ -118,6 +125,7 @@ private:
     std::function<void(double)> patternLengthChangedCallback;
     std::function<void()> patternRenameCallback;
     juce::String patternName;
+    juce::String trackName;
     int activePattern = 0;
     double patternLengthBeats = 4.0;
     bool patternLengthLocked = false;

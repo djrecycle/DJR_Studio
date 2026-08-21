@@ -55,7 +55,10 @@ namespace
                 processor.dropOnPlaylistAt(screenPosition);
             });
             addAndMakeVisible(view);
-            setSize(760, 420);
+            // Wide enough that the header still has room for the name and for
+            // whatever the last action has to report, once the buttons have
+            // taken their share. At 760 the two were squeezed to an ellipsis.
+            setSize(980, 430);
 
             // Ten a second is enough to read a timer by and slow enough that
             // the redraw is free; the clip behind it is rebuilt on its own,

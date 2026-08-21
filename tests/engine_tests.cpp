@@ -3,6 +3,7 @@
 
 #include "audio/AlignmentDelay.h"
 #include "audio/TimeStretch.h"
+#include "audio/AudioAnalysis.h"
 #include "audio/AudioClip.h"
 #include "audio/AutomationLane.h"
 #include "audio/ChannelSettings.h"
@@ -57,7 +58,11 @@ namespace
                      int numBlocks,
                      const juce::AudioBuffer<float>* input = nullptr,
                      double startBeat = 0.0,
-                     const juce::MidiBuffer* liveMidi = nullptr)
+                     const juce::MidiBuffer* liveMidi = nullptr,
+                     // Clips on the timeline only play in Song mode, the same
+                     // way patterns only play in Pattern mode. The default is
+                     // Pattern because that is what most of these tests drive.
+                     bool songMode = false)
     {
         juce::AudioBuffer<float> output(2, blockSize);
         const auto beatsPerBlock = (static_cast<double>(blockSize) / sampleRate) * (tempoBpm / 60.0);
@@ -73,6 +78,7 @@ namespace
             context.startBeat = beat;
             context.endBeat = beat + beatsPerBlock;
             context.isPlaying = playing;
+            context.songMode = songMode;
             context.inputBuffer = input;
             // Live notes belong to the first block only, like a real key press.
             context.liveMidi = block == 0 ? liveMidi : nullptr;
@@ -506,20 +512,26 @@ int main()
 
             if (onlyAudio != nullptr)
             {
-                check(isSilent(renderPeak(audioMixer, true, 8)), "an empty audio track is silent");
+                check(isSilent(renderPeak(audioMixer, true, 8, nullptr, 0.0, nullptr, true)), "an empty audio track is silent");
 
                 clip->setStartBeat(4.0);
                 onlyAudio->addClip(std::move(clip));
                 check(onlyAudio->getNumClips() == 1, "the clip is on the track");
 
                 // Before the clip starts there must be nothing.
-                check(isSilent(renderPeak(audioMixer, true, 6, nullptr, 0.0)),
+                check(isSilent(renderPeak(audioMixer, true, 6, nullptr, 0.0, nullptr, true)),
                       "nothing plays before the clip's start beat");
 
-                check(! isSilent(renderPeak(audioMixer, true, 6, nullptr, 4.0)),
+                check(! isSilent(renderPeak(audioMixer, true, 6, nullptr, 4.0, nullptr, true)),
                       "the clip plays once the playhead reaches it");
 
-                check(isSilent(renderPeak(audioMixer, true, 6, nullptr, 40.0)),
+                // The transport has two meanings and the timeline belongs to
+                // one of them. Audio used to ignore that and play under both,
+                // which made Pattern mode play half a song.
+                check(isSilent(renderPeak(audioMixer, true, 6, nullptr, 4.0, nullptr, false)),
+                      "and stays quiet in Pattern mode, where the timeline is not what plays");
+
+                check(isSilent(renderPeak(audioMixer, true, 6, nullptr, 40.0, nullptr, true)),
                       "nothing plays past the end of the clip");
 
                 auto* placed = onlyAudio->getClip(0);
@@ -529,9 +541,9 @@ int main()
                 {
                     // --- Moving -------------------------------------------
                     placed->setStartBeat(12.0);
-                    check(isSilent(renderPeak(audioMixer, true, 6, nullptr, 4.0)),
+                    check(isSilent(renderPeak(audioMixer, true, 6, nullptr, 4.0, nullptr, true)),
                           "moving a clip takes the audio with it");
-                    check(! isSilent(renderPeak(audioMixer, true, 6, nullptr, 12.0)),
+                    check(! isSilent(renderPeak(audioMixer, true, 6, nullptr, 12.0, nullptr, true)),
                           "the clip now plays at its new position");
                     placed->setStartBeat(4.0);
 
@@ -542,7 +554,7 @@ int main()
                           "trimming the end shortens the clip");
                     check(std::abs(placed->getLengthBeats(120.0) - 1.0) < 0.05,
                           "the trimmed clip covers the beats it was dragged to");
-                    check(isSilent(renderPeak(audioMixer, true, 6, nullptr, 6.0)),
+                    check(isSilent(renderPeak(audioMixer, true, 6, nullptr, 6.0, nullptr, true)),
                           "the trimmed-off tail no longer sounds");
 
                     // --- Trimming the start -------------------------------
@@ -552,7 +564,7 @@ int main()
                           "trimming the start skips into the source");
                     check(std::abs(placed->getStartBeat() - 5.0) < 0.05,
                           "the clip now begins where the edge was dragged");
-                    check(isSilent(renderPeak(audioMixer, true, 4, nullptr, 4.0)),
+                    check(isSilent(renderPeak(audioMixer, true, 4, nullptr, 4.0, nullptr, true)),
                           "nothing plays in the trimmed-off head");
 
                     // Trimming can never invert or erase the clip.
@@ -588,14 +600,14 @@ int main()
                         onlyAudio->addClip(std::move(warpClip));
 
                         // At double tempo the warped clip still fills its four beats.
-                        check(! isSilent(renderPeak(audioMixer, true, 4, nullptr, 3.5)),
+                        check(! isSilent(renderPeak(audioMixer, true, 4, nullptr, 3.5, nullptr, true)),
                               "a warped clip is still sounding at the end of its span");
                     }
                 }
 
                 onlyAudio->clearClips();
                 check(onlyAudio->getNumClips() == 0, "clips can be cleared");
-                check(isSilent(renderPeak(audioMixer, true, 6, nullptr, 4.0)),
+                check(isSilent(renderPeak(audioMixer, true, 6, nullptr, 4.0, nullptr, true)),
                       "a cleared track goes quiet again");
             }
         }
@@ -3112,6 +3124,57 @@ int main()
         }
 
         file.deleteFile();
+    }
+
+    // Reading a tempo and a pitch back out of audio. Both are guesses, so what
+    // is pinned down is that they are the right guess for material where the
+    // answer is known, and that they refuse rather than invent for material
+    // where there is none.
+    {
+        constexpr double rate = 44100.0;
+
+        // Four seconds of A440.
+        juce::AudioBuffer<float> tone(1, static_cast<int>(rate * 4.0));
+        double phase = 0.0;
+
+        for (int i = 0; i < tone.getNumSamples(); ++i)
+        {
+            tone.setSample(0, i, static_cast<float>(std::sin(phase)) * 0.5f);
+            phase += juce::MathConstants<double>::twoPi * 440.0 / rate;
+        }
+
+        const auto pitch = djr::AudioAnalysis::detectPitch(tone, tone.getNumSamples(), rate);
+
+        check(std::abs(pitch.frequencyHz - 440.0) < 5.0,
+              "a sine at 440 Hz is heard as 440 Hz");
+        check(pitch.midiNote == 69, "which is the A above middle C");
+
+        // Eight seconds of clicks at 120 BPM: one every half second.
+        juce::AudioBuffer<float> clicks(1, static_cast<int>(rate * 8.0));
+        clicks.clear();
+
+        for (int beat = 0; beat < 16; ++beat)
+        {
+            const auto at = static_cast<int>(beat * rate * 0.5);
+
+            for (int i = 0; i < 400 && at + i < clicks.getNumSamples(); ++i)
+                clicks.setSample(0, at + i, (i % 2 == 0 ? 0.8f : -0.8f) * (1.0f - i / 400.0f));
+        }
+
+        const auto tempo = djr::AudioAnalysis::detectTempo(clicks, clicks.getNumSamples(), rate);
+
+        check(std::abs(tempo.bpm - 120.0) < 3.0,
+              "clicks every half second are heard as 120 BPM");
+        check(tempo.confidence > 0.15, "and the answer is confident enough to show");
+
+        // Silence has no tempo and no pitch, and saying so is the point.
+        juce::AudioBuffer<float> silence(1, static_cast<int>(rate * 8.0));
+        silence.clear();
+
+        check(djr::AudioAnalysis::detectPitch(silence, silence.getNumSamples(), rate).midiNote < 0,
+              "silence is not given a pitch");
+        check(djr::AudioAnalysis::detectTempo(silence, silence.getNumSamples(), rate).bpm <= 0.0,
+              "and not given a tempo either");
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

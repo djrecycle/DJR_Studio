@@ -1,5 +1,7 @@
 #include "SampleEditorView.h"
 
+#include "audio/AudioAnalysis.h"
+
 #include "Theme.h"
 
 #include <cmath>
@@ -24,11 +26,12 @@ namespace
 
 SampleEditorView::SampleEditorView()
 {
+    detectButton.setStyle(PillButton::Style::outline);
     normaliseButton.setStyle(PillButton::Style::outline);
     reverseButton.setStyle(PillButton::Style::outline);
     fitButton.setStyle(PillButton::Style::ghost);
 
-    for (auto* button : { &normaliseButton, &reverseButton, &exportButton, &fitButton })
+    for (auto* button : { &detectButton, &normaliseButton, &reverseButton, &exportButton, &fitButton })
     {
         button->addListener(this);
         addAndMakeVisible(button);
@@ -59,7 +62,7 @@ SampleEditorView::SampleEditorView()
 
 SampleEditorView::~SampleEditorView()
 {
-    for (auto* button : { &normaliseButton, &reverseButton, &exportButton, &fitButton })
+    for (auto* button : { &detectButton, &normaliseButton, &reverseButton, &exportButton, &fitButton })
         button->removeListener(this);
 
     for (auto* button : { &recordButton, &clearButton, &loadButton, &sendButton })
@@ -395,6 +398,8 @@ void SampleEditorView::resized()
     if (captureControlsVisible || loadCallback || sendCallback)
         header.removeFromLeft(4);
 
+    detectButton.setBounds(header.removeFromLeft(detectButton.getPreferredWidth()));
+    header.removeFromLeft(6);
     normaliseButton.setBounds(header.removeFromLeft(normaliseButton.getPreferredWidth()));
     header.removeFromLeft(6);
     reverseButton.setBounds(header.removeFromLeft(reverseButton.getPreferredWidth()));
@@ -793,7 +798,9 @@ void SampleEditorView::buttonClicked(juce::Button* button)
         return;
     }
 
-    if (button == &normaliseButton)
+    if (button == &detectButton)
+        detectTempoAndPitch();
+    else if (button == &normaliseButton)
         applyEdit(AudioClip::SampleEdit::normalise);
     else if (button == &reverseButton)
         applyEdit(AudioClip::SampleEdit::reverse);
@@ -838,6 +845,52 @@ void SampleEditorView::applyEdit(AudioClip::SampleEdit edit)
 
     if (editCallback)
         editCallback(name);
+}
+
+void SampleEditorView::detectTempoAndPitch()
+{
+    refreshClipPointer();
+
+    if (clip == nullptr)
+    {
+        setNotice(TRANS("There is nothing to listen to yet."));
+        return;
+    }
+
+    int first = 0;
+    int length = 0;
+    clip->getPlayedRegion(first, length);
+
+    juce::AudioBuffer<float> region;
+
+    if (length <= 0 || ! clip->copySamples(first, length, region))
+    {
+        setNotice(TRANS("That audio could not be read."));
+        return;
+    }
+
+    const auto rate = clip->getClipSampleRate();
+    const auto tempo = AudioAnalysis::detectTempo(region, length, rate);
+    const auto pitch = AudioAnalysis::detectPitch(region, length, rate);
+
+    juce::StringArray parts;
+
+    // Written as approximations because that is what they are. A number with no
+    // hedge in front of it reads as a measurement.
+    if (tempo.bpm > 0.0 && tempo.confidence > 0.15)
+        parts.add(juce::String(tempo.bpm, 1) + TRANS(" BPM"));
+
+    if (pitch.midiNote >= 0 && pitch.confidence > 0.3)
+    {
+        const auto cents = juce::roundToInt(pitch.centsOff);
+        parts.add(juce::MidiMessage::getMidiNoteName(pitch.midiNote, true, true, 3)
+                      + (std::abs(cents) >= 5 ? " " + juce::String(cents > 0 ? "+" : "") + juce::String(cents) + "c"
+                                              : juce::String())
+                      + " (" + juce::String(pitch.frequencyHz, 1) + " Hz)");
+    }
+
+    setNotice(parts.isEmpty() ? TRANS("No tempo or pitch stood out.")
+                              : "~ " + parts.joinIntoString("  -  "));
 }
 
 void SampleEditorView::exportSample()
