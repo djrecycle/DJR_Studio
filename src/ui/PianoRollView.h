@@ -127,11 +127,19 @@ private:
     double pixelsPerBeat = 14.0;
     double scrollBeats = 0.0;
     int topPitch = 84;
+    /** A drag that started on the ruler keeps moving the playhead, even once
+        the pointer has wandered down into the notes.
+    */
+    bool scrubbingRuler = false;
 
     /** What the drawing and the mouse both work inside: everything but the
         strips the two bars sit in.
     */
     juce::Rectangle<int> getContentBounds() const;
+    /** The bar numbers along the top. Clicking it moves the playhead, which is
+        what everyone who has used a piano roll before will try first.
+    */
+    juce::Rectangle<int> getRulerBounds() const;
     /** Beats the horizontal bar treats as the whole roll. */
     double getTimelineBeats() const;
     void refreshScrollBars();
