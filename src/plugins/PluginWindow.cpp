@@ -93,6 +93,8 @@ PluginShell::~PluginShell()
     for (auto* chip : envelopeTabs)
         chip->removeListener(this);
 
+    presetBox.removeListener(this);
+
     for (auto* toggle : { &onSwitch, &envelopeSwitch, &lfoSwitch, &filterSwitch })
         toggle->removeListener(this);
 
@@ -126,6 +128,30 @@ PluginShell::~PluginShell()
     generatorEditor = nullptr;
 }
 
+void PluginShell::refreshPresetList()
+{
+    presetBox.clear(juce::dontSendNotification);
+
+    const auto count = audioProcessor.getNumPrograms();
+
+    // One program is what a plugin with no presets reports, and a list holding
+    // only that is a control that promises a choice nobody has.
+    if (count < 2)
+    {
+        presetBox.setVisible(false);
+        return;
+    }
+
+    for (int i = 0; i < count; ++i)
+    {
+        const auto name = audioProcessor.getProgramName(i);
+        presetBox.addItem(name.isNotEmpty() ? name : TRANS("Preset ") + juce::String(i + 1), i + 1);
+    }
+
+    presetBox.setSelectedId(audioProcessor.getCurrentProgram() + 1, juce::dontSendNotification);
+    presetBox.setVisible(true);
+}
+
 void PluginShell::buildTopStrip()
 {
     // FL puts the three tabs at the left of the strip: the generator, the
@@ -147,6 +173,11 @@ void PluginShell::buildTopStrip()
 
     tabButtons[0]->setHighlighted(true);
 
+    presetBox.addListener(this);
+    presetBox.setTextWhenNothingSelected(TRANS("Preset"));
+    addChildComponent(presetBox);
+    refreshPresetList();
+
     // The strip is the channel's, not the plugin's, so these drive the track.
     onSwitch.addListener(this);
     onSwitch.setToggleState(channelTrack == nullptr || ! channelTrack->isMuted(),
@@ -163,11 +194,10 @@ void PluginShell::buildTopStrip()
     volKnob.setValue(channelTrack != nullptr ? channelTrack->getVolume() : 0.8,
                      juce::dontSendNotification);
 
-    // Nothing carries a per-channel pitch offset yet, so this one is drawn but
-    // does not pretend to work.
+    // Live on a channel driven by notes, where transposing means rewriting the
+    // notes. On a track that has none it stays grey - see refreshControlStates.
     pitchKnob.setRange(-12.0, 12.0, 1.0);
     pitchKnob.setDoubleClickReturnValue(true, 0.0);
-    pitchKnob.setAwaitingEngine(true);
 
     for (auto* knob : { &panKnob, &volKnob, &pitchKnob })
     {
@@ -283,9 +313,14 @@ void PluginShell::buildMiscPage()
     addLive(miscKnobs, miscPage, "TIME");
     addLive(miscKnobs, miscPage, "GATE");
 
-    for (auto* caption : { "FEED", "PAN", "PITCH", "TIME" })
-        addPending(miscKnobs, miscPage, caption,
-                   juce::String(caption) == "FEED" ? Knob::Style::unipolar : Knob::Style::bipolar);
+    // All four of the echo's. Pitch works here in a way it does not for the
+    // pitch envelope: detuning a repeat only means reading the delay line at
+    // another rate, where shifting a whole rendered channel would need a
+    // proper resampler.
+    addLive(miscKnobs, miscPage, "FEED", Knob::Style::unipolar);
+    addLive(miscKnobs, miscPage, "PAN", Knob::Style::bipolar);
+    addLive(miscKnobs, miscPage, "PITCH", Knob::Style::bipolar);
+    addLive(miscKnobs, miscPage, "TIME", Knob::Style::bipolar);
 
     // Direction picks the pattern and doubles as the arpeggiator's on switch:
     // "off" is a direction in FL too, and one control is one less thing to
@@ -336,11 +371,20 @@ void PluginShell::loadTargetIntoControls()
     envelopeSwitch.setToggleState(envelope.enabled, juce::dontSendNotification);
     lfoSwitch.setToggleState(lfo.enabled, juce::dontSendNotification);
     filterSwitch.setToggleState(settings->isFilterEnabled(), juce::dontSendNotification);
+    pitchKnob.setValue(settings->getPitchSemitones(), juce::dontSendNotification);
 
     if (static_cast<size_t>(arpGate) < miscKnobs.size())
     {
         miscKnobs[static_cast<size_t>(arpTime)]->setValue(settings->getArpTime(), juce::dontSendNotification);
         miscKnobs[static_cast<size_t>(arpGate)]->setValue(settings->getArpGate(), juce::dontSendNotification);
+    }
+
+    if (static_cast<size_t>(echoTime) < miscKnobs.size())
+    {
+        miscKnobs[static_cast<size_t>(echoFeed)]->setValue(settings->getEchoFeedback(), juce::dontSendNotification);
+        miscKnobs[static_cast<size_t>(echoPan)]->setValue(settings->getEchoPan(), juce::dontSendNotification);
+        miscKnobs[static_cast<size_t>(echoPitch)]->setValue(settings->getEchoPitch(), juce::dontSendNotification);
+        miscKnobs[static_cast<size_t>(echoTime)]->setValue(settings->getEchoTime(), juce::dontSendNotification);
     }
 
     arpDirectionBox.setSelectedId(static_cast<int>(settings->getArpDirection()) + 1,
@@ -385,11 +429,20 @@ void PluginShell::writeTargetFromControls()
     settings->setFilterEnabled(filterSwitch.getToggleState());
     settings->setFilterCutoff(value(filterCut));
     settings->setFilterResonance(value(filterRes));
+    settings->setPitchSemitones(juce::roundToInt(pitchKnob.getValue()));
 
     if (static_cast<size_t>(arpGate) < miscKnobs.size())
     {
         settings->setArpTime(static_cast<float>(miscKnobs[static_cast<size_t>(arpTime)]->getValue()));
         settings->setArpGate(static_cast<float>(miscKnobs[static_cast<size_t>(arpGate)]->getValue()));
+    }
+
+    if (static_cast<size_t>(echoTime) < miscKnobs.size())
+    {
+        settings->setEchoFeedback(static_cast<float>(miscKnobs[static_cast<size_t>(echoFeed)]->getValue()));
+        settings->setEchoPan(static_cast<float>(miscKnobs[static_cast<size_t>(echoPan)]->getValue()));
+        settings->setEchoPitch(static_cast<float>(miscKnobs[static_cast<size_t>(echoPitch)]->getValue()));
+        settings->setEchoTime(static_cast<float>(miscKnobs[static_cast<size_t>(echoTime)]->getValue()));
     }
 }
 
@@ -406,6 +459,11 @@ void PluginShell::refreshControlStates()
 
     filterSwitch.setEnabled(hasChannel);
 
+    // The one knob on the strip that belongs to the channel rather than the
+    // track. An audio track has no notes to transpose, so there it is drawn
+    // and stays honest about doing nothing.
+    pitchKnob.setAwaitingEngine(! hasChannel);
+
     const auto grey = [this] (int first, int last, bool awaiting)
     {
         for (auto i = first; i < last && static_cast<size_t>(i) < envelopeKnobs.size(); ++i)
@@ -420,6 +478,14 @@ void PluginShell::refreshControlStates()
 
     for (auto i = static_cast<size_t>(arpTime); i <= static_cast<size_t>(arpGate) && i < miscKnobs.size(); ++i)
         miscKnobs[i]->setAwaitingEngine(! arpOn);
+
+    // All four echo knobs together. Making the other three wait for feedback
+    // was a rule nobody asked for: a knob that will not turn until another one
+    // has been turned reads as broken, whatever the reason behind it.
+    for (const auto i : { static_cast<size_t>(echoFeed), static_cast<size_t>(echoPan),
+                          static_cast<size_t>(echoPitch), static_cast<size_t>(echoTime) })
+        if (i < miscKnobs.size())
+            miscKnobs[i]->setAwaitingEngine(! hasChannel);
 
     arpDirectionBox.setEnabled(hasChannel);
     arpRangeBox.setEnabled(arpOn);
@@ -681,6 +747,16 @@ void PluginShell::comboBoxChanged(juce::ComboBox* box)
     if (settings == nullptr || loadingControls)
         return;
 
+    if (box == &presetBox)
+    {
+        const auto index = presetBox.getSelectedId() - 1;
+
+        if (index >= 0 && index != audioProcessor.getCurrentProgram())
+            audioProcessor.setCurrentProgram(index);
+
+        return;
+    }
+
     if (box == &arpDirectionBox)
         settings->setArpDirection(
             static_cast<ChannelSettings::ArpDirection>(juce::jmax(0, arpDirectionBox.getSelectedId() - 1)));
@@ -759,7 +835,7 @@ void PluginShell::paint(juce::Graphics& g)
     g.setFont(Theme::ui(10.0f));
     g.drawText(currentPage == Page::envelope
                    ? TRANS("The channel's own envelope, LFO and filter. A pitch envelope is drawn but not yet played.")
-                   : TRANS("The arpeggiator is live; the rest of this page is drawn while its engine is built."),
+                   : TRANS("The arpeggiator and the echo are live; the rest of this page is drawn while its engine is built."),
                page.withHeight(14).translated(0, page.getHeight() - 14),
                juce::Justification::centredLeft, true);
 }
@@ -820,6 +896,14 @@ void PluginShell::resized()
     {
         return right.removeFromRight(width).withSizeKeepingCentre(width, knobHeight);
     };
+
+    // Between the tabs and the channel's own controls, because it belongs to
+    // the plugin rather than to the channel.
+    if (presetBox.isVisible())
+    {
+        const auto width = juce::jlimit(90, 190, right.getWidth() - 260);
+        presetBox.setBounds(left.removeFromLeft(width).withSizeKeepingCentre(width, 20));
+    }
 
     for (auto* knob : { &pitchKnob, &volKnob, &panKnob })
     {

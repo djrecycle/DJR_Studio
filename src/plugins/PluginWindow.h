@@ -80,6 +80,11 @@ private:
     void refreshPageVisibility();
 
     void buildTopStrip();
+    /** Fills the preset list from the plugin, and hides it when there is
+        nothing to fill it with. Most plugins report one nameless program,
+        which is a list of nothing worth showing.
+    */
+    void refreshPresetList();
     void drawSections(juce::Graphics& g, const std::vector<Section>& sections) const;
     void buildEnvelopePage();
     void buildMiscPage();
@@ -130,6 +135,17 @@ private:
 
     juce::OwnedArray<IconChipButton> tabButtons;
     juce::OwnedArray<TabChip> envelopeTabs;
+
+    /** The plugin's own presets, which JUCE hands over as programs - LV2
+        calls them presets, VST3 calls them programs, and a reader only wants
+        the list either way.
+
+        Worth having on its own, and worth more than it looks: a plugin whose
+        GUI cannot open a file dialog inside a host that is not its own toolkit
+        - which is every Qt plugin here - can still be given a preset from
+        outside its window.
+    */
+    juce::ComboBox presetBox;
 
     SwitchButton onSwitch { "channel on" };
     /** The ON switch's own column, so its caption lines up with the knobs'. */

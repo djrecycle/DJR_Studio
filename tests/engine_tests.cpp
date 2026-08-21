@@ -2899,6 +2899,144 @@ int main()
               "a ring nobody drained says how much audio it lost");
     }
 
+    // The channel's echo. Audible behaviour nobody can check by looking, and
+    // the delay time is derived from the tempo, so it is worth pinning down.
+    {
+        djr::ChannelSettings channel;
+        channel.prepare(48000.0);
+        channel.setTempo(120.0);
+        channel.setEchoFeedback(0.5f);
+        channel.setEchoTime(0.0f);   // the short end of the knob: a sixteenth
+        channel.setEchoPan(0.0f);
+
+        // A sixteenth at 120 BPM is an eighth of a second: 6000 samples at 48k.
+        juce::AudioBuffer<float> block(2, 16000);
+        block.clear();
+        block.setSample(0, 0, 1.0f);
+        block.setSample(1, 0, 1.0f);
+
+        channel.processAudio(block);
+
+        check(juce::approximatelyEqual(block.getSample(0, 0), 1.0f),
+              "the echo leaves the dry signal where it was");
+        check(std::abs(block.getSample(0, 6000) - 0.5f) < 1.0e-4f,
+              "the first repeat lands a sixteenth later, at the feedback level");
+        check(std::abs(block.getSample(0, 12000) - 0.25f) < 1.0e-4f,
+              "and the second is the first fed back through again");
+
+        djr::ChannelSettings silent;
+        silent.prepare(48000.0);
+        silent.setTempo(120.0);
+        silent.setEchoFeedback(0.0f);
+
+        juce::AudioBuffer<float> untouched(2, 16000);
+        untouched.clear();
+        untouched.setSample(0, 0, 1.0f);
+        silent.processAudio(untouched);
+
+        check(juce::approximatelyEqual(untouched.getSample(0, 6000), 0.0f),
+              "no feedback means no repeats at all");
+
+        // Tempo decides where the repeat lands, so a slower one must move it.
+        djr::ChannelSettings slower;
+        slower.prepare(48000.0);
+        slower.setTempo(60.0);
+        slower.setEchoFeedback(0.5f);
+        slower.setEchoTime(0.0f);
+
+        juce::AudioBuffer<float> slowBlock(2, 16000);
+        slowBlock.clear();
+        slowBlock.setSample(0, 0, 1.0f);
+        slower.processAudio(slowBlock);
+
+        check(std::abs(slowBlock.getSample(0, 12000) - 0.5f) < 1.0e-4f,
+              "at half the tempo the repeat waits twice as long");
+
+        // Pitch reads the line faster than it is written, so the repeat comes
+        // back early as well as high - the two are the same fact about tape.
+        djr::ChannelSettings pitched;
+        pitched.prepare(48000.0);
+        pitched.setTempo(120.0);
+        pitched.setEchoFeedback(0.5f);
+        pitched.setEchoTime(0.0f);
+        pitched.setEchoPitch(1.0f);   // an octave up: read twice as fast
+
+        juce::AudioBuffer<float> pitchedBlock(2, 16000);
+        pitchedBlock.clear();
+
+        for (int i = 0; i < 200; ++i)
+            pitchedBlock.setSample(0, i, 1.0f);
+
+        pitched.processAudio(pitchedBlock);
+
+        const auto energyBetween = [] (const juce::AudioBuffer<float>& b, int from, int to)
+        {
+            auto sum = 0.0f;
+
+            for (int i = from; i < to; ++i)
+                sum += std::abs(b.getSample(0, i));
+
+            return sum;
+        };
+
+        // Half the length at twice the speed, and the second repeat arrives
+        // sooner still - both follow from reading the line faster.
+        check(energyBetween(pitchedBlock, 5900, 6120) > 0.0f,
+              "a detuned echo still repeats");
+        check(energyBetween(pitchedBlock, 6000, 6100) > energyBetween(pitchedBlock, 6100, 6200),
+              "an octave up returns the repeat in half the time it went in");
+    }
+
+    // The channel's pitch, which is done to the notes rather than to the audio.
+    {
+        const auto notesFrom = [] (const juce::MidiBuffer& buffer)
+        {
+            std::vector<int> notes;
+
+            for (const auto metadata : buffer)
+                if (metadata.getMessage().isNoteOn())
+                    notes.push_back(metadata.getMessage().getNoteNumber());
+
+            return notes;
+        };
+
+        djr::ChannelSettings channel;
+        channel.prepare(48000.0);
+        channel.setPitchSemitones(5);
+
+        juce::MidiBuffer midi;
+        midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        midi.addEvent(juce::MidiMessage::noteOff(1, 60), 200);
+        channel.processMidi(midi, 512, 120.0);
+
+        const auto shifted = notesFrom(midi);
+        check(shifted.size() == 1 && shifted[0] == 65,
+              "a channel pitched up five semitones plays five semitones up");
+
+        djr::ChannelSettings straight;
+        straight.prepare(48000.0);
+
+        juce::MidiBuffer untouched;
+        untouched.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+        straight.processMidi(untouched, 512, 120.0);
+
+        check(notesFrom(untouched) == std::vector<int> { 60 },
+              "and a channel at zero leaves the notes where they were written");
+
+        // Off the end of the keyboard is dropped, not wrapped: a wrapped note
+        // would sound ten octaves from where it was written.
+        djr::ChannelSettings high;
+        high.prepare(48000.0);
+        high.setPitchSemitones(12);
+
+        juce::MidiBuffer edge;
+        edge.addEvent(juce::MidiMessage::noteOn(1, 120, 1.0f), 0);
+        high.processMidi(edge, 512, 120.0);
+
+        check(notesFrom(edge).empty(),
+              "a note pushed past the top of the keyboard is dropped rather than wrapped");
+    }
+
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
                                 : "\n" + std::to_string(failures) + " engine test(s) failed\n");
     return failures == 0 ? 0 : 1;

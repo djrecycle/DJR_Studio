@@ -181,9 +181,69 @@ bool ChannelSettings::isArpActive() const noexcept
     return getArpDirection() != ArpDirection::off;
 }
 
+void ChannelSettings::setPitchSemitones(int semitones) noexcept
+{
+    pitchSemitones.store(juce::jlimit(-12, 12, semitones), std::memory_order_release);
+}
+
+int ChannelSettings::getPitchSemitones() const noexcept
+{
+    return pitchSemitones.load(std::memory_order_acquire);
+}
+
+void ChannelSettings::setEchoFeedback(float normalised) noexcept
+{
+    echoFeedback.store(juce::jlimit(0.0f, 1.0f, normalised), std::memory_order_release);
+}
+
+float ChannelSettings::getEchoFeedback() const noexcept
+{
+    return echoFeedback.load(std::memory_order_acquire);
+}
+
+void ChannelSettings::setEchoTime(float normalised) noexcept
+{
+    echoTime.store(juce::jlimit(0.0f, 1.0f, normalised), std::memory_order_release);
+}
+
+float ChannelSettings::getEchoTime() const noexcept
+{
+    return echoTime.load(std::memory_order_acquire);
+}
+
+void ChannelSettings::setEchoPan(float normalised) noexcept
+{
+    echoPan.store(juce::jlimit(-1.0f, 1.0f, normalised), std::memory_order_release);
+}
+
+float ChannelSettings::getEchoPan() const noexcept
+{
+    return echoPan.load(std::memory_order_acquire);
+}
+
+void ChannelSettings::setTempo(double bpm) noexcept
+{
+    tempoBpm.store(bpm > 0.0 ? bpm : 120.0, std::memory_order_release);
+}
+
+void ChannelSettings::setEchoPitch(float normalised) noexcept
+{
+    echoPitch.store(juce::jlimit(-1.0f, 1.0f, normalised), std::memory_order_release);
+}
+
+float ChannelSettings::getEchoPitch() const noexcept
+{
+    return echoPitch.load(std::memory_order_acquire);
+}
+
+bool ChannelSettings::isEchoActive() const noexcept
+{
+    return getEchoFeedback() > 0.001f;
+}
+
 bool ChannelSettings::isActive() const noexcept
 {
-    if (isFilterEnabled() || isArpActive())
+    if (isFilterEnabled() || isArpActive() || isEchoActive())
         return true;
 
     for (int i = 0; i < numTargets; ++i)
@@ -213,6 +273,11 @@ void ChannelSettings::resetToDefaults() noexcept
     setArpRange(1);
     setArpTime(0.25f);
     setArpGate(0.6f);
+    setPitchSemitones(0);
+    setEchoFeedback(0.0f);
+    setEchoTime(0.25f);
+    setEchoPan(0.0f);
+    setEchoPitch(0.0f);
 }
 
 //==============================================================================
@@ -255,6 +320,11 @@ juce::var ChannelSettings::toVar() const
     object->setProperty("arpRange", getArpRange());
     object->setProperty("arpTime", getArpTime());
     object->setProperty("arpGate", getArpGate());
+    object->setProperty("pitchSemitones", getPitchSemitones());
+    object->setProperty("echoFeedback", getEchoFeedback());
+    object->setProperty("echoTime", getEchoTime());
+    object->setProperty("echoPan", getEchoPan());
+    object->setProperty("echoPitch", getEchoPitch());
 
     return juce::var(object);
 }
@@ -328,17 +398,34 @@ void ChannelSettings::fromVar(const juce::var& value)
 
     setArpTime(number(object->getProperty("arpTime"), 0.25f));
     setArpGate(number(object->getProperty("arpGate"), 0.6f));
+    setPitchSemitones(static_cast<int>(number(object->getProperty("pitchSemitones"), 0.0f)));
+    setEchoFeedback(number(object->getProperty("echoFeedback"), 0.0f));
+    setEchoTime(number(object->getProperty("echoTime"), 0.25f));
+    setEchoPan(number(object->getProperty("echoPan"), 0.0f));
+    setEchoPitch(number(object->getProperty("echoPitch"), 0.0f));
 }
 
 //==============================================================================
 void ChannelSettings::prepare(double newSampleRate)
 {
-    sampleRate.store(newSampleRate > 0.0 ? newSampleRate : 44100.0, std::memory_order_release);
+    const auto rate = newSampleRate > 0.0 ? newSampleRate : 44100.0;
+    sampleRate.store(rate, std::memory_order_release);
+
+    // Room for the longest repeat the knob can ask for, at the slowest tempo
+    // anyone is going to use, so the audio thread never resizes this.
+    echoBuffer.setSize(2, juce::jmax(1, static_cast<int>(rate * maxEchoSeconds)), false, true, false);
+    echoWritePosition = 0;
+
     reset();
 }
 
 void ChannelSettings::reset() noexcept
 {
+    echoBuffer.clear();
+    echoWritePosition = 0;
+    echoReadPositions = {};
+    echoResyncFade = {};
+    echoReadPositionsValid = false;
     envelopeStates = {};
     lfoStates = {};
     filterStates = {};
@@ -872,17 +959,180 @@ void ChannelSettings::processAudio(juce::AudioBuffer<float>& buffer)
     // a gate that has already changed.
     renderGate = gateOpen;
     gateEventCount = 0;
+
+    // Last, after the filter: FL's echo repeats what the channel ended up
+    // sounding like, not what it sounded like before the channel shaped it.
+    applyEcho(buffer);
+}
+
+void ChannelSettings::transposeMidi(juce::MidiBuffer& midi)
+{
+    const auto semitones = getPitchSemitones();
+
+    if (semitones == 0)
+        return;
+
+    juce::MidiBuffer transposed;
+
+    for (const auto metadata : midi)
+    {
+        auto message = metadata.getMessage();
+
+        if (message.isNoteOnOrOff() || message.isAftertouch())
+        {
+            const auto note = message.getNoteNumber() + semitones;
+
+            // A note pushed off the end of the keyboard is dropped rather than
+            // wrapped: the wrap would play a note nobody wrote, an octave or
+            // ten from where they wrote it.
+            if (! juce::isPositiveAndBelow(note, 128))
+                continue;
+
+            message.setNoteNumber(note);
+        }
+
+        transposed.addEvent(message, metadata.samplePosition);
+    }
+
+    midi.swapWith(transposed);
+}
+
+void ChannelSettings::applyEcho(juce::AudioBuffer<float>& buffer)
+{
+    // How close the read head may come to the write head before it is put back,
+    // and how long the fade that hides the jump lasts.
+    constexpr int resyncGuardSamples = 128;
+    constexpr int resyncFadeSamples = 192;
+
+    const auto feedback = getEchoFeedback();
+
+    if (feedback <= 0.001f || echoBuffer.getNumSamples() <= 1)
+        return;
+
+    const auto rate = sampleRate.load(std::memory_order_acquire);
+    const auto beatsPerSecond = tempoBpm.load(std::memory_order_acquire) / 60.0;
+
+    // A sixteenth at one end of the knob, a bar at the other. Timed in beats
+    // rather than milliseconds so the repeats stay on the grid when the tempo
+    // moves.
+    const auto beats = juce::jmap(static_cast<double>(getEchoTime()), 0.25, 4.0);
+    const auto delaySamples = juce::jlimit(1,
+                                           echoBuffer.getNumSamples() - 1,
+                                           juce::roundToInt(beats / juce::jmax(1.0e-6, beatsPerSecond) * rate));
+
+    // Pan throws the two repeats apart in time rather than in level: the left
+    // one arrives early, the right one late, which is what makes it wide
+    // without making it lopsided.
+    const auto spread = juce::roundToInt(getEchoPan() * delaySamples * 0.25f);
+    const auto numSamples = buffer.getNumSamples();
+    const auto capacity = echoBuffer.getNumSamples();
+    const auto channels = juce::jmin(buffer.getNumChannels(), echoBuffer.getNumChannels());
+
+    // An octave either way. At the middle the line is read at the rate it is
+    // written and this is an ordinary echo; away from it the repeats detune,
+    // the way a tape echo does when it runs off speed.
+    const auto ratio = std::pow(2.0, getEchoPitch() * 12.0 / 12.0);
+    const auto detuned = std::abs(ratio - 1.0) > 1.0e-6;
+
+    const auto offsetFor = [delaySamples, spread, capacity] (int channel)
+    {
+        return juce::jlimit(1, capacity - 1, channel == 0 ? delaySamples - spread : delaySamples + spread);
+    };
+
+    if (! echoReadPositionsValid)
+    {
+        for (int channel = 0; channel < channels; ++channel)
+            echoReadPositions[static_cast<size_t>(channel)] =
+                (echoWritePosition - offsetFor(channel) + capacity) % capacity;
+
+        echoReadPositionsValid = true;
+    }
+
+    for (int sample = 0; sample < numSamples; ++sample)
+    {
+        for (int channel = 0; channel < channels; ++channel)
+        {
+            const auto offset = offsetFor(channel);
+
+            auto* line = echoBuffer.getWritePointer(channel);
+            auto* samples = buffer.getWritePointer(channel);
+
+            auto repeat = 0.0f;
+
+            if (! detuned)
+            {
+                // The straight case stays exactly as it was: no interpolation,
+                // no drift, nothing to re-anchor.
+                const auto readAt = (echoWritePosition - offset + capacity) % capacity;
+                repeat = line[readAt];
+                echoReadPositions[static_cast<size_t>(channel)] = readAt;
+            }
+            else
+            {
+                auto& readPosition = echoReadPositions[static_cast<size_t>(channel)];
+
+                // Reading between samples is the whole trick: it is what makes
+                // the repeat come back at another pitch.
+                const auto lower = static_cast<int>(readPosition);
+                const auto fraction = static_cast<float>(readPosition - lower);
+                const auto upper = (lower + 1) % capacity;
+
+                repeat = line[lower % capacity] * (1.0f - fraction) + line[upper] * fraction;
+
+                readPosition += ratio;
+
+                if (readPosition >= capacity)
+                    readPosition -= capacity;
+
+                // Reading faster than writing walks into the write head;
+                // reading slower falls a whole buffer behind it. Either way the
+                // repeat has to be put back where it belongs, and the jump that
+                // does it is faded so it is not heard as a click.
+                const auto gap = std::fmod(echoWritePosition - readPosition + capacity, capacity);
+
+                if (gap < resyncGuardSamples || gap > capacity - resyncGuardSamples)
+                {
+                    readPosition = (echoWritePosition - offset + capacity) % capacity;
+                    echoResyncFade[static_cast<size_t>(channel)] = resyncFadeSamples;
+                }
+            }
+
+            auto& fade = echoResyncFade[static_cast<size_t>(channel)];
+
+            if (fade > 0)
+            {
+                repeat *= 1.0f - static_cast<float>(fade) / static_cast<float>(resyncFadeSamples);
+                --fade;
+            }
+
+            // What goes into the line is the dry signal plus the repeat that
+            // just came out of it, which is what makes it repeat again.
+            line[echoWritePosition] = samples[sample] + repeat * feedback;
+            samples[sample] += repeat * feedback;
+        }
+
+        echoWritePosition = (echoWritePosition + 1) % capacity;
+    }
 }
 
 void ChannelSettings::processMidi(juce::MidiBuffer& midi, int numSamples, double tempoBpm)
 {
     gateEventCount = 0;
 
+    // The echo runs in processAudio, which is not told the tempo; this is the
+    // one call per block that is, so it is where the tempo is handed over.
+    setTempo(tempoBpm);
+
     if (isArpActive())
         runArpeggiator(midi, numSamples, tempoBpm);
 
-    // After the arpeggiator, so the envelopes follow the notes that are
-    // actually played rather than the ones that were held down.
+    // After the arpeggiator: it builds its pattern from the intervals it was
+    // given, and moving those first would only arrive at the same notes by a
+    // longer route.
+    transposeMidi(midi);
+
+    // After both, so the envelopes follow the notes that are actually played
+    // rather than the ones that were held down.
     trackGate(midi);
 }
 

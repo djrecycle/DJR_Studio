@@ -94,6 +94,57 @@ public:
     /** 0..1 across a table of note lengths, from a sixteenth to a whole bar. */
     void setArpTime(float normalised) noexcept;
     float getArpTime() const noexcept;
+
+    /** Semitones the channel plays away from what is written.
+
+        Done to the notes, not to the audio: a channel driven by MIDI can be
+        transposed by rewriting what reaches the generator, and that costs
+        nothing and loses nothing. An audio track has no notes to rewrite,
+        which is why the same knob stays grey there - pitching audio that has
+        already been rendered is a different job with a different price.
+    */
+    void setPitchSemitones(int semitones) noexcept;
+    int getPitchSemitones() const noexcept;
+
+    // Echo delay -------------------------------------------------------------
+    /** FL's echo sits on the channel, not in an insert, which is why a channel
+        can be echoed without spending a mixer slot on it.
+
+        Three knobs of the four are here. Pitch is left drawn and grey for the
+        same reason the pitch envelope is: shifting audio that has already been
+        rendered needs a resampler, and a knob that pretends otherwise is worse
+        than one that admits it.
+    */
+    void setEchoFeedback(float normalised) noexcept;
+    float getEchoFeedback() const noexcept;
+    /** Time between repeats, as a fraction of the knob's range - a sixteenth
+        note at the low end, a bar at the high one, so it stays musical however
+        the tempo moves.
+    */
+    void setEchoTime(float normalised) noexcept;
+    float getEchoTime() const noexcept;
+    /** How far apart the two channels' repeats are thrown. Bipolar: the middle
+        is both repeats in the same place.
+    */
+    void setEchoPan(float normalised) noexcept;
+    float getEchoPan() const noexcept;
+    /** The tempo the echo times itself against. Written whenever the transport
+        changes, because a repeat that does not follow the tempo is a repeat in
+        the wrong place.
+    */
+    void setTempo(double bpm) noexcept;
+    /** Detunes the repeats, up or down an octave at the ends of the knob.
+
+        The line is read at a different rate than it is written, which is what
+        a tape echo does when it runs off speed, and what FL's fat mode is
+        after. It also means the repeats drift out of time, so the read is
+        re-anchored when it gets too close to the write - see applyEcho.
+    */
+    void setEchoPitch(float normalised) noexcept;
+    float getEchoPitch() const noexcept;
+
+    /** Whether the echo would do anything - no feedback is no repeats. */
+    bool isEchoActive() const noexcept;
     /** How much of each step the note actually sounds for. */
     void setArpGate(float normalised) noexcept;
     float getArpGate() const noexcept;
@@ -244,6 +295,41 @@ private:
     std::atomic<int> arpRange { 1 };
     std::atomic<float> arpTime { 0.25f };
     std::atomic<float> arpGate { 0.6f };
+
+    std::atomic<int> pitchSemitones { 0 };
+    std::atomic<float> echoFeedback { 0.0f };
+    std::atomic<float> echoTime { 0.25f };
+    std::atomic<float> echoPan { 0.0f };
+    std::atomic<float> echoPitch { 0.0f };
+    std::atomic<double> tempoBpm { 120.0 };
+
+    /** The repeats themselves. Sized once in prepare for the longest delay the
+        knob can ask for, so the audio thread only ever writes into it.
+    */
+    /** The longest repeat the knob can ask for: a bar at 40 BPM is six
+        seconds, and the line is sized for that once rather than per tempo.
+    */
+    static constexpr double maxEchoSeconds = 6.5;
+
+    juce::AudioBuffer<float> echoBuffer;
+    int echoWritePosition = 0;
+    /** Where each channel is reading the line, as a fraction: a detuned echo
+        reads between samples.
+    */
+    std::array<double, 2> echoReadPositions { 0.0, 0.0 };
+    /** Samples left of the fade that hides a re-anchor. A jump in the read
+        position is a step in the waveform, and a step is a click.
+    */
+    std::array<int, 2> echoResyncFade { 0, 0 };
+    /** False until the read positions have been placed behind the write one,
+        which cannot happen before the delay time is known.
+    */
+    bool echoReadPositionsValid = false;
+
+    /** Adds this block's repeats and takes the tail away with it. */
+    void applyEcho(juce::AudioBuffer<float>& buffer);
+    /** Moves every note in the block by the channel's pitch. */
+    void transposeMidi(juce::MidiBuffer& midi);
 
     std::atomic<double> sampleRate { 44100.0 };
 
