@@ -1180,6 +1180,13 @@ void ArrangementView::showTrackContextMenu(int trackIndex)
     menu.addItem(4, TRANS("Rename track..."));
     menu.addItem(1, TRANS("Delete track"), mixer.getNumTracks() > 1);
     menu.addSeparator();
+    // Opens whatever the channel holds - a plugin, or nothing but the preview
+    // synth a MIDI channel falls back on. An audio track has neither unless
+    // something was loaded onto it, and the channel pages do not act on one.
+    const auto hasChannel = track->getKind() == TrackKind::midi
+                         || track->getKind() == TrackKind::instrument
+                         || track->getPluginCount() > 0;
+    menu.addItem(7, TRANS("Channel settings..."), hasChannel);
     menu.addItem(2, TRANS("Monitor input"), true, track->isInputMonitoring());
     menu.addItem(3, TRANS("Remove all plugins"), track->getPluginCount() > 0);
     menu.addSeparator();
@@ -1240,6 +1247,11 @@ void ArrangementView::showTrackContextMenu(int trackIndex)
                 case 6:
                     if (trackBounceCallback)
                         trackBounceCallback(trackIndex);
+                    break;
+
+                case 7:
+                    if (trackChannelCallback)
+                        trackChannelCallback(trackIndex);
                     break;
 
                 default:
@@ -2484,6 +2496,11 @@ void ArrangementView::setTrackRenameCallback(std::function<void(int)> callback)
 void ArrangementView::setTrackFreezeCallback(std::function<void(int)> callback)
 {
     trackFreezeCallback = std::move(callback);
+}
+
+void ArrangementView::setTrackChannelCallback(std::function<void(int)> callback)
+{
+    trackChannelCallback = std::move(callback);
 }
 
 void ArrangementView::setTrackBounceCallback(std::function<void(int)> callback)

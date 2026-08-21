@@ -5,6 +5,8 @@
 #include "utils/FileUtils.h"
 #include "utils/Logger.h"
 
+#include <algorithm>
+
 namespace djr
 {
 
@@ -146,6 +148,7 @@ MainComponent::MainComponent()
     arrangementView.setTrackSelectedCallback([this] (int trackIndex) { selectTrack(trackIndex); });
     arrangementView.setTrackRenameCallback([this] (int trackIndex) { renameTrack(trackIndex); });
     arrangementView.setTrackFreezeCallback([this] (int trackIndex) { freezeTrack(trackIndex); });
+    arrangementView.setTrackChannelCallback([this] (int trackIndex) { openTrackPluginEditor(trackIndex); });
     arrangementView.setTrackBounceCallback([this] (int trackIndex) { bounceTrackToAudio(trackIndex); });
     arrangementView.setClipEditedCallback([this]
     {
@@ -158,6 +161,7 @@ MainComponent::MainComponent()
     });
     arrangementView.setTrackListChangedCallback([this]
     {
+        closeWindowsForMissingTracks();
         mixerView.refreshStrips();
         insertChainPanel.refresh();
         pluginBrowserView.refreshTrackList();
@@ -315,6 +319,7 @@ MainComponent::MainComponent()
                                              typingKeyboard.getBaseOctave());
 
     mixerView.setTrackSelectedCallback([this] (int trackIndex) { selectTrack(trackIndex); });
+    mixerView.setOpenChannelCallback([this] (int trackIndex) { openTrackPluginEditor(trackIndex); });
 
     // A lane created from a mixer strip has to show up as a playlist row, and
     // counts as an unsaved change like any other edit.
@@ -1457,9 +1462,17 @@ void MainComponent::loadSelectedPluginIntoTrack(int pluginIndex, int trackIndex)
 
                 // Instruments own the track's synth slot; everything else is an insert.
                 if (description.isInstrument)
+                {
                     targetTrack->setInstrument(std::move(instance));
+
+                    // Whatever channel window was open for this track showed the
+                    // preview synth's placeholder page. It is no longer true.
+                    closeEmptyChannelWindow(targetTrack);
+                }
                 else
+                {
                     targetTrack->addPlugin(std::move(instance));
+                }
 
                 mixerView.repaint();
                 insertChainPanel.refresh();
@@ -1492,7 +1505,7 @@ void MainComponent::openTrackPlugin(int trackIndex, PluginSlot slot, int insertI
     {
         if (auto* synth = track->getInstrument())
         {
-            showPluginWindow(*synth, track);
+            showPluginWindow(synth, track);
             return;
         }
 
@@ -1505,6 +1518,18 @@ void MainComponent::openTrackPlugin(int trackIndex, PluginSlot slot, int insertI
 
     if (track->getPluginCount() == 0)
     {
+        // A MIDI channel with nothing loaded is not empty: it plays through its
+        // preview synth, and the channel's own envelope, filter and arpeggiator
+        // pages act on it. So the window opens with no generator in it rather
+        // than refusing, the way FL opens a channel whatever is inside it.
+        const auto kind = track->getKind();
+
+        if (slot == PluginSlot::automatic && (kind == TrackKind::midi || kind == TrackKind::instrument))
+        {
+            showPluginWindow(nullptr, track);
+            return;
+        }
+
         setStatusMessage(TRANS("This track has no plugin to open."));
         return;
     }
@@ -1513,7 +1538,7 @@ void MainComponent::openTrackPlugin(int trackIndex, PluginSlot slot, int insertI
                                     slot == PluginSlot::insert ? insertIndex : track->getPluginCount() - 1);
 
     if (auto* plugin = track->getPlugin(index))
-        showPluginWindow(*plugin, track);
+        showPluginWindow(plugin, track);
 }
 
 void MainComponent::prepareBuiltInEditor(juce::AudioPluginInstance& plugin, int trackIndex)
@@ -1567,11 +1592,20 @@ void MainComponent::prepareBuiltInEditor(juce::AudioPluginInstance& plugin, int 
     });
 }
 
-void MainComponent::showPluginWindow(juce::AudioPluginInstance& plugin, Track* track)
+void MainComponent::showPluginWindow(juce::AudioProcessor* plugin, Track* track)
 {
     for (auto& window : pluginWindows)
     {
-        if (window != nullptr && &window->getProcessor() == &plugin)
+        if (window == nullptr)
+            continue;
+
+        // A window with no plugin in it is identified by its track instead:
+        // there is no processor to match it by, and one channel wants one window.
+        const auto sameWindow = plugin != nullptr
+                                    ? window->getProcessor() == plugin
+                                    : (window->getProcessor() == nullptr && window->getTrack() == track);
+
+        if (sameWindow)
         {
             window->setVisible(true);
             window->toFront(true);
@@ -1579,9 +1613,53 @@ void MainComponent::showPluginWindow(juce::AudioPluginInstance& plugin, Track* t
         }
     }
 
+    // The channel window opened before anything was loaded is now out of date:
+    // this track has a generator, and the placeholder page would sit there
+    // claiming it does not.
+    if (plugin != nullptr && track != nullptr)
+        closeEmptyChannelWindow(track);
+
     auto window = std::make_unique<PluginWindow>(plugin, track);
     window->toFront(true);
     pluginWindows.push_back(std::move(window));
+}
+
+void MainComponent::closeWindowsForMissingTracks()
+{
+    // A deleted track takes its plugins with it, so a window still pointing at
+    // either is holding a dangling pointer - and it is still on screen.
+    const auto gone = std::remove_if(pluginWindows.begin(), pluginWindows.end(),
+        [this] (const std::unique_ptr<PluginWindow>& window)
+        {
+            if (window == nullptr)
+                return true;
+
+            auto* track = window->getTrack();
+
+            if (track == nullptr)
+                return false;
+
+            auto& mixer = audioEngine.getMixer();
+
+            for (int i = 0; i < mixer.getNumTracks(); ++i)
+                if (mixer.getTrack(i) == track)
+                    return false;
+
+            return true;
+        });
+
+    pluginWindows.erase(gone, pluginWindows.end());
+}
+
+void MainComponent::closeEmptyChannelWindow(Track* track)
+{
+    const auto stale = std::remove_if(pluginWindows.begin(), pluginWindows.end(),
+        [track] (const std::unique_ptr<PluginWindow>& window)
+        {
+            return window != nullptr && window->getProcessor() == nullptr && window->getTrack() == track;
+        });
+
+    pluginWindows.erase(stale, pluginWindows.end());
 }
 
 void MainComponent::selectTrack(int trackIndex)
@@ -2106,7 +2184,7 @@ void MainComponent::openClipInBuiltInEditor(AudioEditorProcessor& editor, int tr
     }
 
     editor.adoptAudio(audio, length, clip->getClipSampleRate(), clip->getName());
-    showPluginWindow(editor, getTrack(trackIndex));
+    showPluginWindow(&editor, getTrack(trackIndex));
 
     setStatusMessage(clip->getName() + TRANS(" opened in the audio editor - send it back when you are done."));
 }

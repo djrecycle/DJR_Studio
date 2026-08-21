@@ -35,7 +35,12 @@ class PluginShell final : public juce::Component,
                           private juce::ComponentListener
 {
 public:
-    PluginShell(juce::AudioProcessor& processor, Track* track);
+    /** `processor` is the generator this channel holds, or nullptr when the
+        track has none and is still playing through its preview synth. The
+        channel's own pages work either way - they belong to the track, not to
+        the plugin.
+    */
+    PluginShell(juce::AudioProcessor* processor, Track* track);
     ~PluginShell() override;
 
     void paint(juce::Graphics& g) override;
@@ -117,7 +122,7 @@ private:
     juce::Path buildEnvelopePath(juce::Rectangle<float> area) const;
     juce::Path buildLfoPath(juce::Rectangle<float> area) const;
 
-    juce::AudioProcessor& audioProcessor;
+    juce::AudioProcessor* audioProcessor = nullptr;
     Track* channelTrack = nullptr;
     Page currentPage = Page::generator;
 
@@ -130,7 +135,9 @@ private:
     juce::Component generatorHolder;
     juce::Component envelopePage;
     juce::Component miscPage;
-    /** The plugin's own editor, or the generic panel when it has none. */
+    /** The plugin's own editor, the generic panel when it has none, or the
+        preview-synth placeholder when there is no plugin at all.
+    */
     std::unique_ptr<juce::Component> generatorEditor;
 
     juce::OwnedArray<IconChipButton> tabButtons;
@@ -200,17 +207,22 @@ private:
 class PluginWindow final : public juce::DocumentWindow
 {
 public:
-    PluginWindow(juce::AudioProcessor& processor, Track* track);
+    PluginWindow(juce::AudioProcessor* processor, Track* track);
     ~PluginWindow() override;
 
-    juce::AudioProcessor& getProcessor() noexcept;
+    /** The generator this window was opened for, or nullptr for a channel that
+        has none. Together with getTrack() it is what identifies a window.
+    */
+    juce::AudioProcessor* getProcessor() noexcept;
+    Track* getTrack() noexcept;
     void closeButtonPressed() override;
 
 private:
     /** Keeps the window from being dragged smaller than the page can survive. */
     void applyResizeLimits();
 
-    juce::AudioProcessor& audioProcessor;
+    juce::AudioProcessor* audioProcessor = nullptr;
+    Track* channelTrack = nullptr;
     PluginShell* shell = nullptr;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginWindow)
 };

@@ -136,7 +136,12 @@ private:
     void loadSelectedPluginIntoTrack(int pluginIndex, int trackIndex);
     void openTrackPluginEditor(int trackIndex);
     void openTrackPlugin(int trackIndex, PluginSlot slot, int insertIndex);
-    void showPluginWindow(juce::AudioPluginInstance& plugin, Track* track);
+    /** `plugin` may be nullptr: a channel with no generator still has a window. */
+    void showPluginWindow(juce::AudioProcessor* plugin, Track* track);
+    /** Drops the generator-less channel window for `track`, if one is open. */
+    void closeEmptyChannelWindow(Track* track);
+    /** Drops every window whose track is no longer in the mixer. */
+    void closeWindowsForMissingTracks();
     /** Rebuilds the pitch-preserved copies when the tempo has moved. */
     void prepareWarpedClips();
     void selectTrack(int trackIndex);

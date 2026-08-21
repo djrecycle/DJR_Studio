@@ -98,6 +98,8 @@ public:
     void setTrackRenameCallback(std::function<void(int)> callback);
     /** Freeze or unfreeze a track; the host decides which, since it knows. */
     void setTrackFreezeCallback(std::function<void(int)> callback);
+    /** Fired by the track menu's channel entry: open this track's channel. */
+    void setTrackChannelCallback(std::function<void(int)> callback);
     /** Render a track onto a new audio track. */
     void setTrackBounceCallback(std::function<void(int)> callback);
 
@@ -442,6 +444,7 @@ private:
     std::function<void(int)> patternRenameCallback;
     std::function<void(int)> trackRenameCallback;
     std::function<void(int)> trackFreezeCallback;
+    std::function<void(int)> trackChannelCallback;
     std::function<void(int)> trackBounceCallback;
     std::function<void(const juce::File&, int trackIndex, double beat)> fileDropCallback;
     /** The row a dragged file is over, for the outline that says where it would

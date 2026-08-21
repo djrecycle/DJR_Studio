@@ -41,6 +41,38 @@ namespace
         return area;
     }
 
+    /** What the generator page shows for a channel with no plugin in it. The
+        track is not silent in that case - it plays through its preview synth -
+        so the page has to say that rather than look broken. Its controls are
+        still to come; the rest of the channel window works today.
+    */
+    class PreviewGeneratorPanel final : public juce::Component
+    {
+    public:
+        PreviewGeneratorPanel()
+        {
+            setSize(460, 240);
+        }
+
+        void paint(juce::Graphics& g) override
+        {
+            auto area = getLocalBounds().reduced(24);
+
+            g.setColour(Theme::text());
+            g.setFont(Theme::ui(16.0f, true));
+            g.drawText(TRANS("Preview instrument"), area.removeFromTop(24),
+                       juce::Justification::centredTop, false);
+
+            area.removeFromTop(8);
+            g.setColour(Theme::textSoft());
+            g.setFont(Theme::ui(13.0f));
+            g.drawFittedText(TRANS("This channel has no plugin, so it plays through the built-in preview "
+                                   "instrument. The Envelope and Misc pages work on it just as they do on "
+                                   "a plugin; drop an instrument onto the track to replace it."),
+                             area, juce::Justification::centredTop, 6);
+        }
+    };
+
     /** The inside of a titled box: below the heading, inset from the border. */
     juce::Rectangle<int> sectionBody(juce::Rectangle<int> bounds)
     {
@@ -48,7 +80,7 @@ namespace
     }
 }
 
-PluginShell::PluginShell(juce::AudioProcessor& processor, Track* track)
+PluginShell::PluginShell(juce::AudioProcessor* processor, Track* track)
     : audioProcessor(processor), channelTrack(track)
 {
     addAndMakeVisible(generatorPage);
@@ -58,16 +90,23 @@ PluginShell::PluginShell(juce::AudioProcessor& processor, Track* track)
     // The generator page is the plugin itself: its own editor when it has one,
     // and the generic parameter panel when it has none. hasEditor() can say yes
     // and still hand back nothing, so the result is what decides.
-    if (audioProcessor.hasEditor())
-        if (auto* editor = audioProcessor.createEditorIfNeeded())
-            generatorEditor.reset(editor);
-
-    if (generatorEditor == nullptr)
+    if (audioProcessor != nullptr)
     {
-        auto* generic = new juce::GenericAudioProcessorEditor(audioProcessor);
-        const auto height = juce::jlimit(200, 560, generic->getHeight());
-        generic->setSize(juce::jmax(460, generic->getWidth()), height);
-        generatorEditor.reset(generic);
+        if (audioProcessor->hasEditor())
+            if (auto* editor = audioProcessor->createEditorIfNeeded())
+                generatorEditor.reset(editor);
+
+        if (generatorEditor == nullptr)
+        {
+            auto* generic = new juce::GenericAudioProcessorEditor(*audioProcessor);
+            const auto height = juce::jlimit(200, 560, generic->getHeight());
+            generic->setSize(juce::jmax(460, generic->getWidth()), height);
+            generatorEditor.reset(generic);
+        }
+    }
+    else
+    {
+        generatorEditor.reset(new PreviewGeneratorPanel());
     }
 
     generatorViewport.setViewedComponent(&generatorHolder, false);
@@ -121,8 +160,8 @@ PluginShell::~PluginShell()
         generatorHolder.removeChildComponent(generatorEditor.get());
 
         if (auto* editor = dynamic_cast<juce::AudioProcessorEditor*>(generatorEditor.get()))
-            if (audioProcessor.getActiveEditor() == editor)
-                audioProcessor.editorBeingDeleted(editor);
+            if (audioProcessor != nullptr && audioProcessor->getActiveEditor() == editor)
+                audioProcessor->editorBeingDeleted(editor);
     }
 
     generatorEditor = nullptr;
@@ -132,7 +171,13 @@ void PluginShell::refreshPresetList()
 {
     presetBox.clear(juce::dontSendNotification);
 
-    const auto count = audioProcessor.getNumPrograms();
+    if (audioProcessor == nullptr)
+    {
+        presetBox.setVisible(false);
+        return;
+    }
+
+    const auto count = audioProcessor->getNumPrograms();
 
     // One program is what a plugin with no presets reports, and a list holding
     // only that is a control that promises a choice nobody has.
@@ -144,11 +189,11 @@ void PluginShell::refreshPresetList()
 
     for (int i = 0; i < count; ++i)
     {
-        const auto name = audioProcessor.getProgramName(i);
+        const auto name = audioProcessor->getProgramName(i);
         presetBox.addItem(name.isNotEmpty() ? name : TRANS("Preset ") + juce::String(i + 1), i + 1);
     }
 
-    presetBox.setSelectedId(audioProcessor.getCurrentProgram() + 1, juce::dontSendNotification);
+    presetBox.setSelectedId(audioProcessor->getCurrentProgram() + 1, juce::dontSendNotification);
     presetBox.setVisible(true);
 }
 
@@ -751,8 +796,8 @@ void PluginShell::comboBoxChanged(juce::ComboBox* box)
     {
         const auto index = presetBox.getSelectedId() - 1;
 
-        if (index >= 0 && index != audioProcessor.getCurrentProgram())
-            audioProcessor.setCurrentProgram(index);
+        if (audioProcessor != nullptr && index >= 0 && index != audioProcessor->getCurrentProgram())
+            audioProcessor->setCurrentProgram(index);
 
         return;
     }
@@ -1050,9 +1095,11 @@ void PluginShell::resized()
 }
 
 //==============================================================================
-PluginWindow::PluginWindow(juce::AudioProcessor& processor, Track* track)
-    : DocumentWindow(processor.getName(), Theme::panel(), DocumentWindow::closeButton),
-      audioProcessor(processor)
+PluginWindow::PluginWindow(juce::AudioProcessor* processor, Track* track)
+    : DocumentWindow(processor != nullptr ? processor->getName()
+                                          : (track != nullptr ? track->getName() : TRANS("Channel")),
+                     Theme::panel(), DocumentWindow::closeButton),
+      audioProcessor(processor), channelTrack(track)
 {
     setUsingNativeTitleBar(true);
 
@@ -1112,9 +1159,14 @@ void PluginWindow::applyResizeLimits()
         peer->setConstrainer(getConstrainer());
 }
 
-juce::AudioProcessor& PluginWindow::getProcessor() noexcept
+juce::AudioProcessor* PluginWindow::getProcessor() noexcept
 {
     return audioProcessor;
+}
+
+Track* PluginWindow::getTrack() noexcept
+{
+    return channelTrack;
 }
 
 void PluginWindow::closeButtonPressed()

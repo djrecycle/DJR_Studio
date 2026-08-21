@@ -587,6 +587,17 @@ void MixerChannelStrip::mouseDrag(const juce::MouseEvent& event)
 
 void MixerChannelStrip::mouseDoubleClick(const juce::MouseEvent& event)
 {
+
+    // The name is the channel, so double clicking it opens the channel window -
+    // whatever the channel holds, including nothing but the preview synth.
+    if (getNameRowBounds().contains(event.getPosition()) && track != nullptr)
+    {
+        if (onOpenChannel)
+            onOpenChannel();
+
+        return;
+    }
+
     if (getPanKnobArea().expanded(3).contains(event.getPosition()) && track != nullptr)
     {
         track->setPan(0.0f);
@@ -661,6 +672,11 @@ juce::Rectangle<int> MixerChannelStrip::getMeterArea() const
     auto row = area.removeFromTop(getFaderRowHeight());
     row.removeFromLeft(faderColumnWidth + 4);
     return row;
+}
+
+juce::Rectangle<int> MixerChannelStrip::getNameRowBounds() const
+{
+    return getLocalBounds().reduced(stripPadding).removeFromTop(nameRowHeight);
 }
 
 juce::Rectangle<int> MixerChannelStrip::getPanKnobArea() const

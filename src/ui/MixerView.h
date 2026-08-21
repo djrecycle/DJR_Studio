@@ -26,6 +26,8 @@ public:
     void setTrackSelectedCallback(std::function<void(int)> callback);
     /** Fired when a strip creates or removes an automation lane. */
     void setAutomationChangedCallback(std::function<void()> callback);
+    /** Fired when a strip's name is double clicked: open that channel. */
+    void setOpenChannelCallback(std::function<void(int)> callback);
 
 private:
     class StripHolder final : public juce::Component
@@ -40,6 +42,7 @@ private:
     StripHolder holder;
     std::function<void(int)> trackSelectedCallback;
     std::function<void()> automationChangedCallback;
+    std::function<void(int)> openChannelCallback;
     int selectedTrack = 0;
 
     int deviceInputCount = 0;

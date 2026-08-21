@@ -114,6 +114,12 @@ void MixerView::refreshStrips()
                     automationChangedCallback();
             };
 
+            strip->onOpenChannel = [this, i]
+            {
+                if (openChannelCallback)
+                    openChannelCallback(i);
+            };
+
             // Routing is set through the mixer, which is the only thing that can
             // see the whole graph and refuse a route that would feed back.
             strip->setMixer(&mixer, i);
@@ -153,6 +159,11 @@ void MixerView::setSelectedTrack(int trackIndex)
 void MixerView::setTrackSelectedCallback(std::function<void(int)> callback)
 {
     trackSelectedCallback = std::move(callback);
+}
+
+void MixerView::setOpenChannelCallback(std::function<void(int)> callback)
+{
+    openChannelCallback = std::move(callback);
 }
 
 void MixerView::setAutomationChangedCallback(std::function<void()> callback)

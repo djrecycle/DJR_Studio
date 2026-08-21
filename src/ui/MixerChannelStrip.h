@@ -45,6 +45,12 @@ public:
     */
     std::function<void()> onRoutingChanged;
 
+    /** Double clicking the name opens the channel window, the way double
+        clicking a channel does in FL. Never fired for the master strip: it has
+        no track, and so no channel.
+    */
+    std::function<void()> onOpenChannel;
+
     /** The strip needs the mixer to change routing: only the mixer can see the
         whole graph and refuse a route that would feed back.
     */
@@ -72,6 +78,8 @@ private:
     juce::Rectangle<int> getFaderHandle() const;
     juce::Rectangle<int> getMeterArea() const;
     juce::Rectangle<int> getPanKnobArea() const;
+    /** The name plate at the top of the strip. */
+    juce::Rectangle<int> getNameRowBounds() const;
     /** Everything under the fader, in one place, so the send row and the button
         row cannot be measured from opposite ends and land on each other.
     */
