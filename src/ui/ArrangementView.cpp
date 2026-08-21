@@ -3006,10 +3006,26 @@ void ArrangementView::showClipContextMenu(int trackIndex, int clipIndex)
     warpMenu.addItem(11, TRANS("Stretch (keep pitch)"), true,
                      clip->getWarpMode() == AudioClip::WarpMode::stretch);
 
+    // Semitones, in the range the stretcher still sounds like the source.
+    // Written as +5 / -3 rather than as a number on its own: a pitch with no
+    // sign reads as a note, and this is a distance.
+    juce::PopupMenu pitchMenu;
+    const auto currentPitch = clip->getPitchSemitones();
+
+    for (int semitones = AudioClip::maxPitchSemitones; semitones >= -AudioClip::maxPitchSemitones; --semitones)
+    {
+        const auto label = semitones == 0 ? juce::String(TRANS("None"))
+                         : (semitones > 0 ? "+" : "") + juce::String(semitones) + TRANS(" st");
+
+        pitchMenu.addItem(300 + semitones + AudioClip::maxPitchSemitones,
+                          label, true, semitones == currentPitch);
+    }
+
     juce::PopupMenu menu;
     menu.addSectionHeader(clip->getName());
     menu.addItem(1, TRANS("Warp to tempo"), true, clip->isWarpEnabled());
     menu.addSubMenu(TRANS("Warp mode"), warpMenu, clip->isWarpEnabled());
+    menu.addSubMenu(TRANS("Pitch"), pitchMenu, true, nullptr, currentPitch != 0);
     menu.addItem(2, TRANS("Restore full length"));
     menu.addSeparator();
     menu.addSubMenu(TRANS("Fade in"), buildFadeMenu(100, clip->getFadeInSeconds()));
@@ -3040,6 +3056,18 @@ void ArrangementView::showClipContextMenu(int trackIndex, int clipIndex)
 
                 // Built here rather than waiting for the next tempo change, or
                 // switching to stretch would keep resampling until one happened.
+                selected->prepareWarp(transport.getTempoBpm());
+                notifyClipEdited();
+                return;
+            }
+
+            if (result >= 300)
+            {
+                pushUndo(TRANS("Change clip pitch"));
+                selected->setPitchSemitones(result - 300 - AudioClip::maxPitchSemitones);
+
+                // Built here rather than at the next tempo change: the pitch is
+                // wanted now, and nothing else would ask for it.
                 selected->prepareWarp(transport.getTempoBpm());
                 notifyClipEdited();
                 return;

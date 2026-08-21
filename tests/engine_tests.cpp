@@ -3037,6 +3037,83 @@ int main()
               "a note pushed past the top of the keyboard is dropped rather than wrapped");
     }
 
+    // A clip's own pitch: audio has no notes to move, so it is read faster and
+    // stretched back. What must not move is where the clip sits or how long it
+    // lasts - only the pitch.
+    {
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+
+        const auto file = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                              .getChildFile("djr_engine_test_pitch.wav");
+        file.deleteFile();
+
+        // Two seconds of tone, the same way the clip tests above make one.
+        {
+            juce::WavAudioFormat wavFormat;
+            std::unique_ptr<juce::FileOutputStream> stream(file.createOutputStream());
+            std::unique_ptr<juce::AudioFormatWriter> writer(
+                wavFormat.createWriterFor(stream.get(), 48000.0, 2, 16, {}, 0));
+
+            if (writer != nullptr)
+            {
+                stream.release();
+
+                const auto totalSamples = 96000;
+                juce::AudioBuffer<float> tone(2, totalSamples);
+                double phase = 0.0;
+
+                for (int i = 0; i < totalSamples; ++i)
+                {
+                    const auto value = static_cast<float>(std::sin(phase)) * 0.5f;
+                    tone.setSample(0, i, value);
+                    tone.setSample(1, i, value);
+                    phase += juce::MathConstants<double>::twoPi * 220.0 / 48000.0;
+                }
+
+                writer->writeFromAudioSampleBuffer(tone, 0, totalSamples);
+            }
+        }
+
+        juce::String error;
+        auto clip = djr::AudioClip::createFromFile(file, 48000.0, formats, error);
+
+        check(clip != nullptr, "the pitch test clip loads");
+
+        if (clip != nullptr)
+        {
+            clip->setWarpEnabled(false);
+            const auto beforeLength = clip->getLengthBeats(120.0);
+            const auto beforeSource = clip->getNumSourceSamples();
+
+            clip->setPitchSemitones(12);
+            clip->prepareWarp(120.0);
+
+            check(clip->getPitchSemitones() == 12, "the clip keeps the pitch it was given");
+            check(std::abs(clip->getLengthBeats(120.0) - beforeLength) < 1.0e-9,
+                  "pitching a clip does not change how long it lasts on the timeline");
+            check(clip->getNumSourceSamples() == beforeSource,
+                  "and does not rewrite the audio it came from");
+
+            // An octave up is read twice as fast, so the copy behind it has to
+            // be twice as long for the clip to still end where it did.
+            juce::AudioBuffer<float> block(2, 4096);
+            block.clear();
+            clip->addToBuffer(block, 0.0, 120.0, 48000.0);
+
+            check(block.getMagnitude(0, 0, block.getNumSamples()) > 0.01f,
+                  "a pitched clip still plays");
+
+            clip->setPitchSemitones(0);
+            clip->prepareWarp(120.0);
+
+            check(clip->getPitchSemitones() == 0,
+                  "and it can be put back where it was");
+        }
+
+        file.deleteFile();
+    }
+
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
                                 : "\n" + std::to_string(failures) + " engine test(s) failed\n");
     return failures == 0 ? 0 : 1;

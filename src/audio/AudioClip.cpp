@@ -288,28 +288,75 @@ AudioClip::WarpMode AudioClip::getWarpMode() const noexcept
 bool AudioClip::isWarpPrepared(double tempoBpm) const noexcept
 {
     const juce::SpinLock::ScopedLockType scoped(stretchLock);
-    return stretched != nullptr && std::abs(stretchedForTempo - tempoBpm) < 1.0e-9;
+    return stretched != nullptr
+        && std::abs(stretchedForTempo - tempoBpm) < 1.0e-9
+        && std::abs(stretchedForFactor - getPreparedFactor(tempoBpm)) < 1.0e-9;
+}
+
+void AudioClip::setPitchSemitones(int semitones) noexcept
+{
+    pitchSemitones.store(juce::jlimit(-maxPitchSemitones, maxPitchSemitones, semitones),
+                         std::memory_order_release);
+}
+
+int AudioClip::getPitchSemitones() const noexcept
+{
+    return pitchSemitones.load(std::memory_order_acquire);
+}
+
+double AudioClip::getPitchRatio() const noexcept
+{
+    const auto semitones = getPitchSemitones();
+    return semitones == 0 ? 1.0 : std::pow(2.0, semitones / 12.0);
+}
+
+bool AudioClip::needsPreparedCopy() const noexcept
+{
+    return (isWarpEnabled() && getWarpMode() == WarpMode::stretch) || getPitchSemitones() != 0;
+}
+
+double AudioClip::getPreparedFactor(double tempoBpm) const noexcept
+{
+    // Two jobs, one copy. Stretching for the tempo shortens it; pitching reads
+    // it faster afterwards, so it has to be lengthened by the same amount first
+    // or the clip would come out short as well as high.
+    const auto tempoPart = isWarpEnabled() && getWarpMode() == WarpMode::stretch
+        ? getPlaybackRate(tempoBpm)
+        : 1.0;
+
+    return tempoPart / getPitchRatio();
 }
 
 void AudioClip::prepareWarp(double tempoBpm)
 {
-    if (! isWarpEnabled() || getWarpMode() != WarpMode::stretch || samples == nullptr)
+    if (samples == nullptr)
         return;
+
+    if (! needsPreparedCopy())
+    {
+        // Nothing to prepare any more - drop the copy rather than leave a stale
+        // one for the audio thread to find.
+        const juce::SpinLock::ScopedLockType scoped(stretchLock);
+        stretched = nullptr;
+        stretchedForFactor = 1.0;
+        return;
+    }
 
     if (isWarpPrepared(tempoBpm))
         return;
 
-    const auto rate = getPlaybackRate(tempoBpm);
+    const auto factor = getPreparedFactor(tempoBpm);
 
-    // At the tempo it was recorded at there is nothing to stretch, and running
-    // it through the stretcher anyway would only cost quality.
-    auto built = std::abs(rate - 1.0) < 1.0e-9
+    // At a factor of one there is nothing to do, and running it through the
+    // stretcher anyway would only cost quality.
+    auto built = std::abs(factor - 1.0) < 1.0e-9
         ? std::make_shared<const juce::AudioBuffer<float>>(*samples)
-        : std::make_shared<const juce::AudioBuffer<float>>(TimeStretch::process(*samples, rate));
+        : std::make_shared<const juce::AudioBuffer<float>>(TimeStretch::process(*samples, factor));
 
     const juce::SpinLock::ScopedLockType scoped(stretchLock);
     stretched = std::move(built);
     stretchedForTempo = tempoBpm;
+    stretchedForFactor = factor;
 }
 
 double AudioClip::getFadeInSeconds() const noexcept
@@ -373,24 +420,31 @@ void AudioClip::addToBuffer(juce::AudioBuffer<float>& destination,
     // still: the resampling path below is exactly what moves it.
     auto sourceScale = 1.0;
 
-    if (isWarpEnabled() && getWarpMode() == WarpMode::stretch)
+    if (needsPreparedCopy())
     {
         const juce::SpinLock::ScopedTryLockType scoped(stretchLock);
 
-        // A failed try-lock, or a copy built for another tempo, falls back to
-        // resampling for this block rather than dropping the clip.
+        // A failed try-lock, or a copy built for another tempo or another
+        // pitch, falls back to resampling for this block rather than dropping
+        // the clip.
         if (scoped.isLocked() && stretched != nullptr
-            && std::abs(stretchedForTempo - tempoBpm) < 1.0e-9)
+            && std::abs(stretchedForTempo - tempoBpm) < 1.0e-9
+            && std::abs(stretchedForFactor - getPreparedFactor(tempoBpm)) < 1.0e-9)
         {
             playing = stretched;
 
-            // Everything below measures in source samples; the stretched copy
-            // holds the same audio at a different length, so the trim points
-            // move with it.
-            sourceScale = 1.0 / rate;
-            rate = 1.0;
+            // Everything below measures in source samples; the copy holds the
+            // same audio at a different length, so the trim points move with it.
+            sourceScale = 1.0 / stretchedForFactor;
+
+            if (isWarpEnabled() && getWarpMode() == WarpMode::stretch)
+                rate = 1.0;
         }
     }
+
+    // Reading faster is what raises the pitch; the copy above was lengthened by
+    // the same amount so the clip still ends where it did.
+    rate *= getPitchRatio();
 
     const auto totalSourceSamples = playing != nullptr ? playing->getNumSamples() : 0;
 
@@ -494,6 +548,7 @@ juce::var AudioClip::toVar() const
     object->setProperty("fadeIn", getFadeInSeconds());
     object->setProperty("fadeOut", getFadeOutSeconds());
     object->setProperty("warpMode", getWarpMode() == WarpMode::stretch ? "stretch" : "resample");
+    object->setProperty("pitchSemitones", getPitchSemitones());
 
     // The edits, not the edited audio: the file on disk is the original, and
     // replaying a short list over it is cheaper than saving a second copy of
@@ -529,6 +584,7 @@ void AudioClip::applyStateFromVar(const juce::var& value)
 
     // Absent in files written before there was a choice, and those clips were
     // all resampling - so that is what the fallback has to be.
+    setPitchSemitones(static_cast<int>(object->getProperty("pitchSemitones")));
     setWarpMode(object->getProperty("warpMode").toString() == "stretch"
                     ? WarpMode::stretch
                     : WarpMode::resample);

@@ -84,7 +84,9 @@ public:
         in stretch mode, or already holds the copy for this tempo.
     */
     void prepareWarp(double tempoBpm);
-    /** True when a stretched copy for `tempoBpm` is ready to play. */
+    /** True when the prepared copy for `tempoBpm` - and for the pitch the clip
+        is set to - is ready to play.
+    */
     bool isWarpPrepared(double tempoBpm) const noexcept;
 
     /** When warped the clip keeps a fixed length in beats and follows the tempo.
@@ -97,6 +99,24 @@ public:
 
     /** How much of the timeline this clip covers at the given tempo. */
     double getLengthBeats(double tempoBpm) const noexcept;
+
+    /** Semitones the clip plays away from what was recorded.
+
+        Unlike the channel's pitch, there are no notes here to rewrite: this is
+        audio that has already been played. So it is done the only way audio
+        can be pitched - read faster, then stretched back to the length it had -
+        using the same two pieces warp already uses. The work happens once, on
+        the message thread, like the warped copy; playback only reads it.
+
+        The clip keeps its place and its length on the timeline: only the pitch
+        moves.
+    */
+    void setPitchSemitones(int semitones) noexcept;
+    int getPitchSemitones() const noexcept;
+    /** Widest the knob goes either way. Past an octave the stretcher smears
+        more than the pitch is worth.
+    */
+    static constexpr int maxPitchSemitones = 12;
 
     float getGain() const noexcept;
     void setGain(float newGain) noexcept;
@@ -241,6 +261,14 @@ private:
     /** Re-applies the fade limits after the clip's length has changed. */
     void clampFadesToLength() noexcept;
     double getPlaybackRate(double tempoBpm) const noexcept;
+    /** The pitch as a speed: an octave up is twice as fast. */
+    double getPitchRatio() const noexcept;
+    /** Whether anything needs a copy built ahead of playback. Stretch-warping
+        needs one, and so does any pitch other than none.
+    */
+    bool needsPreparedCopy() const noexcept;
+    /** What the copy is stretched by. Above one it comes out shorter. */
+    double getPreparedFactor(double tempoBpm) const noexcept;
 
     juce::String name;
     juce::File sourceFile;
@@ -265,6 +293,7 @@ private:
     std::atomic<double> fadeInSeconds { 0.0 };
     std::atomic<double> fadeOutSeconds { 0.0 };
     std::atomic<WarpMode> warpMode { WarpMode::resample };
+    std::atomic<int> pitchSemitones { 0 };
     /** Guarded by sampleLock, like the audio it describes. */
     std::vector<SampleEditRecord> sampleEdits;
 
@@ -275,6 +304,10 @@ private:
     mutable juce::SpinLock stretchLock;
     std::shared_ptr<const juce::AudioBuffer<float>> stretched;
     double stretchedForTempo = 0.0;
+    /** The factor the copy was built with, which is what maps a position in
+        the source onto a position in the copy.
+    */
+    double stretchedForFactor = 1.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioClip)
 };
