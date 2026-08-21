@@ -143,14 +143,14 @@ void EditHistory::endGesture()
     gestureCaptured = false;
 }
 
-void EditHistory::pushSnapshot(const juce::String& actionName)
+bool EditHistory::pushSnapshot(const juce::String& actionName)
 {
     // Inside a gesture only the first push counts, so a drag that fires on every
     // mouse move still collapses to a single step.
     if (gestureOpen)
     {
         if (gestureCaptured)
-            return;
+            return false;
 
         gestureCaptured = true;
     }
@@ -162,6 +162,7 @@ void EditHistory::pushSnapshot(const juce::String& actionName)
 
     // A fresh edit makes any redo branch unreachable.
     redoStack.clear();
+    return true;
 }
 
 void EditHistory::abandonSnapshot()

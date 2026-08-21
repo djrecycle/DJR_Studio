@@ -1672,8 +1672,11 @@ void MainComponent::wireUndoHooks()
     // roll, the velocity lane and the step sequencer alike.
     pianoRollModel.onBeforeEdit = [this]
     {
-        editHistory.pushSnapshot("Edit note");
-        refreshMenuState();
+        // Only the first edit of a drag is a new undo step, and only then is
+        // there anything for the menus to say differently. Refreshing them on
+        // every mouse move made dragging a note feel like wading.
+        if (editHistory.pushSnapshot("Edit note"))
+            refreshMenuState();
     };
 
     const auto bracket = [this] (bool opening)

@@ -42,7 +42,13 @@ public:
     /** Records the state as it is now, tagged with what is about to happen.
         Call this immediately before mutating anything.
     */
-    void pushSnapshot(const juce::String& actionName);
+    /** Takes a snapshot, unless a gesture has already taken one.
+
+        Returns whether it actually took one: a drag fires this on every mouse
+        move, and everything that follows an undo step - refreshing menus,
+        marking the project dirty - is work only the first one is worth.
+    */
+    bool pushSnapshot(const juce::String& actionName);
     /** Drops the newest snapshot again, for a gesture that changed nothing. */
     void abandonSnapshot();
 

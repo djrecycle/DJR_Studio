@@ -48,6 +48,7 @@ public:
 
     void paint(juce::Graphics& g) override;
     void resized() override;
+    void mouseMove(const juce::MouseEvent& event) override;
     void mouseDown(const juce::MouseEvent& event) override;
     void mouseDrag(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
@@ -108,6 +109,11 @@ private:
     /** Note starts captured when a group drag began, parallel to selectedNotes. */
     juce::Array<MidiNote> groupDragOrigins;
     double dragGrabBeat = 0.0;
+    /** How far into the note it was grabbed. Without this a note dragged by
+        its middle jumps so its start lands under the pointer, which reads as
+        the note running away from the mouse.
+    */
+    double dragGrabOffsetBeats = 0.0;
     int dragGrabPitch = 60;
     /** Live drag rectangle for the zoom tool. */
     juce::Rectangle<int> zoomDrag;
@@ -140,6 +146,13 @@ private:
         what everyone who has used a piano roll before will try first.
     */
     juce::Rectangle<int> getRulerBounds() const;
+    /** The pointer for wherever it is now: the tool it is holding, or the
+        resize arrows when it is over the end of a note.
+
+        A cursor that never changes makes the reader guess which of the two a
+        click will do, and the answer is a pixel wide.
+    */
+    void refreshCursor(juce::Point<int> position);
     /** Beats the horizontal bar treats as the whole roll. */
     double getTimelineBeats() const;
     void refreshScrollBars();

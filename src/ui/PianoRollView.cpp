@@ -13,6 +13,17 @@ namespace
 {
     constexpr int noteHeightInset = 1;
     constexpr int resizeHandleWidth = 5;
+
+    /** How much of a note's right edge resizes rather than moves.
+
+        A fixed five pixels is a third of a sixteenth note zoomed out, so a
+        grab meant to move it resized it instead. Never more than a third of
+        the note, so the middle is always the middle.
+    */
+    int resizeZoneFor(juce::Rectangle<int> noteBounds)
+    {
+        return juce::jlimit(2, resizeHandleWidth, noteBounds.getWidth() / 3);
+    }
     /** The bar-number strip along the top, the same height as the playlist's so
         the two read as one timeline seen twice.
     */
@@ -292,6 +303,59 @@ void PianoRollView::paint(juce::Graphics& g)
     g.fillRect(keyboardWidth - 1, 0, 1, bounds.getHeight());
 }
 
+void PianoRollView::refreshCursor(juce::Point<int> position)
+{
+    // The keyboard and the ruler are not the grid: one plays notes, the other
+    // moves the playhead, and neither is where a tool applies.
+    if (position.x < keyboardWidth || getRulerBounds().contains(position))
+    {
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        return;
+    }
+
+    if (activeTool == Tool::select)
+    {
+        const auto noteIndex = noteAtPosition(position);
+
+        if (noteIndex >= 0)
+        {
+            const auto notes = model.getNotes();
+
+            if (juce::isPositiveAndBelow(noteIndex, notes.size()))
+            {
+                const auto bounds = noteToBounds(notes[noteIndex]);
+                const auto atEnd = position.x > bounds.getRight() - resizeZoneFor(bounds);
+
+                setMouseCursor(atEnd ? juce::MouseCursor::LeftRightResizeCursor
+                                     : juce::MouseCursor::DraggingHandCursor);
+                return;
+            }
+        }
+
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        return;
+    }
+
+    // The rest say what they are: JUCE has no eraser or knife, so the ones
+    // without a cursor of their own keep the crosshair - still a promise that
+    // this click will not be an ordinary one.
+    switch (activeTool)
+    {
+        case Tool::draw:     setMouseCursor(juce::MouseCursor::PointingHandCursor); break;
+        case Tool::erase:
+        case Tool::mute:
+        case Tool::slice:    setMouseCursor(juce::MouseCursor::CrosshairCursor); break;
+        case Tool::zoom:     setMouseCursor(juce::MouseCursor::CrosshairCursor); break;
+        case Tool::playback: setMouseCursor(juce::MouseCursor::IBeamCursor); break;
+        case Tool::select:   break;
+    }
+}
+
+void PianoRollView::mouseMove(const juce::MouseEvent& event)
+{
+    refreshCursor(event.getPosition());
+}
+
 void PianoRollView::mouseDown(const juce::MouseEvent& event)
 {
     if (event.x < keyboardWidth)
@@ -375,8 +439,9 @@ void PianoRollView::mouseDown(const juce::MouseEvent& event)
         if (juce::isPositiveAndBelow(noteIndex, notes.size()))
         {
             const auto noteBounds = noteToBounds(notes[noteIndex]);
-            resizingNote = event.x > noteBounds.getRight() - resizeHandleWidth;
+            resizingNote = event.x > noteBounds.getRight() - resizeZoneFor(noteBounds);
             dragGrabBeat = beat;
+            dragGrabOffsetBeats = beat - notes[noteIndex].startBeat;
             dragGrabPitch = yToPitch(event.y);
         }
 
@@ -468,7 +533,9 @@ void PianoRollView::mouseDrag(const juce::MouseEvent& event)
         return;
     }
 
-    model.dragNote(draggedNote, xToBeat(event.x), yToPitch(event.y));
+    // Minus where the note was grabbed, so it moves with the pointer rather
+    // than snapping its own start underneath it.
+    model.dragNote(draggedNote, xToBeat(event.x) - dragGrabOffsetBeats, yToPitch(event.y));
 }
 
 void PianoRollView::mouseUp(const juce::MouseEvent& event)
@@ -524,6 +591,7 @@ void PianoRollView::setTool(Tool tool)
         return;
 
     activeTool = tool;
+    refreshCursor(getMouseXYRelative());
     marqueeActive = false;
     marquee = {};
     zoomDrag = {};
