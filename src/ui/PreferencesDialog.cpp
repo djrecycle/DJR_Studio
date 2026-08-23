@@ -335,7 +335,7 @@ void PreferencesDialog::paint(juce::Graphics& g)
         const auto meterArea = getContentBounds().withTrimmedTop(30 + 14).removeFromBottom(50).reduced(10, 10);
         
         // Smooth input level untuk visual yang lebih halus
-        const auto inputLevel = audioEngine.getInputPeak();
+        const auto inputLevel = Theme::meterPosition(audioEngine.getInputPeak());
         const auto smoothFactor = 0.7f;
         smoothedInputLevel = smoothedInputLevel * smoothFactor + inputLevel * (1.0f - smoothFactor);
 

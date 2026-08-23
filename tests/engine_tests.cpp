@@ -21,6 +21,7 @@
 #include "project/Project.h"
 #include "project/ProjectTrackLayout.h"
 #include "app/EditHistory.h"
+#include "ui/Theme.h"
 #include "audio/Metronome.h"
 #include "recording/Recorder.h"
 #include "recording/SampleCapture.h"
@@ -3293,6 +3294,31 @@ int main()
         check(clamped.getEnvelope().attack > 0.0f
                   && juce::approximatelyEqual(clamped.getEnvelope().sustain, 1.0f),
               "an impossible envelope is clamped rather than played");
+    }
+
+    // Meters are read in decibels. Drawn linearly, a note at a perfectly normal
+    // level sat in the bottom fifth of the bar and riding the fader barely
+    // moved it - which is what this arithmetic is here to keep fixed.
+    {
+        check(juce::approximatelyEqual(djr::Theme::meterPosition(0.0f), 0.0f),
+              "silence leaves the meter empty");
+        check(juce::approximatelyEqual(djr::Theme::meterPosition(1.0f), 1.0f),
+              "full scale fills it");
+        check(juce::approximatelyEqual(djr::Theme::meterPosition(2.0f), 1.0f),
+              "and past full scale it stays full rather than overflowing");
+
+        // -6 dBFS is half the amplitude and a tenth of the way down the meter.
+        const auto half = djr::Theme::meterPosition(0.5f);
+        check(half > 0.88f && half < 0.92f, "half the amplitude is 6 dB down, not half way down");
+
+        // The level a preview note actually plays at.
+        const auto normal = djr::Theme::meterPosition(0.14f);
+        check(normal > 0.6f && normal < 0.75f, "a note at -17 dBFS fills most of the meter");
+
+        check(djr::Theme::meterPosition(0.14f) < djr::Theme::meterPosition(0.26f),
+              "and raising the fader moves it up");
+        check(juce::approximatelyEqual(djr::Theme::meterPosition(0.001f), 0.0f),
+              "-60 dBFS is the floor");
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

@@ -614,9 +614,13 @@ void MixerChannelStrip::mouseDoubleClick(const juce::MouseEvent& event)
 
 void MixerChannelStrip::timerCallback()
 {
+    // Smoothed where it is drawn, not where it is measured: the fall has to
+    // look even on the meter, and a straight line in amplitude is a cliff in dB.
     const auto decay = 0.18f;
-    const auto left = track != nullptr ? track->getPeakLevel(0) : masterBus->getPeakLevel(0);
-    const auto right = track != nullptr ? track->getPeakLevel(1) : masterBus->getPeakLevel(1);
+    const auto left = Theme::meterPosition(track != nullptr ? track->getPeakLevel(0)
+                                                            : masterBus->getPeakLevel(0));
+    const auto right = Theme::meterPosition(track != nullptr ? track->getPeakLevel(1)
+                                                             : masterBus->getPeakLevel(1));
 
     smoothedLeft = juce::jmax(left, smoothedLeft - decay);
     smoothedRight = juce::jmax(right, smoothedRight - decay);

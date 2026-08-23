@@ -484,8 +484,10 @@ void TransportBar::timerCallback()
 {
     const auto& master = engine.getMixer().getMasterBus();
     const auto decay = 0.25f;
-    smoothedMasterLeft = juce::jmax(master.getPeakLevel(0), smoothedMasterLeft - decay);
-    smoothedMasterRight = juce::jmax(master.getPeakLevel(1), smoothedMasterRight - decay);
+    smoothedMasterLeft = juce::jmax(Theme::meterPosition(master.getPeakLevel(0)),
+                                    smoothedMasterLeft - decay);
+    smoothedMasterRight = juce::jmax(Theme::meterPosition(master.getPeakLevel(1)),
+                                     smoothedMasterRight - decay);
 
     refreshButtons();
     repaint();
