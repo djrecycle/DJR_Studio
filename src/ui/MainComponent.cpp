@@ -1983,6 +1983,12 @@ void MainComponent::synchroniseProjectState()
         state.inputChannel = track->getInputChannel();
         state.inputStereo = track->isInputStereo();
         state.channelSettings = track->getChannelSettings().toVar();
+
+        // Only when it is the thing making the sound, and only when it has been
+        // shaped: a track with an instrument loaded has no preview to describe.
+        if (const auto* midi = dynamic_cast<const MidiTrack*>(track))
+            if (! track->hasInstrument() && ! midi->getPreviewSynth().isDefault())
+                state.previewSynth = midi->getPreviewSynth().toVar();
         state.frozenFile = track->isFrozen() ? track->getFrozenFile().getFullPathName() : juce::String();
 
         for (int slot = 0; slot < Track::maxSends; ++slot)
@@ -2398,6 +2404,9 @@ void MainComponent::restoreRoutingFromProject()
             restored->setInputChannel(projectTrack.inputChannel);
             restored->setInputStereo(projectTrack.inputStereo);
             restored->getChannelSettings().fromVar(projectTrack.channelSettings);
+
+            if (auto* midi = dynamic_cast<MidiTrack*>(restored))
+                midi->getPreviewSynth().fromVar(projectTrack.previewSynth);
         }
 
         for (int slot = 0; slot < projectTrack.sends.size() && slot < Track::maxSends; ++slot)

@@ -124,6 +124,7 @@ set(DJR_STUDIO_SOURCES
     src/project/ProjectManager.cpp
     src/project/ProjectSerializer.cpp
     src/ui/Knob.cpp
+    src/ui/PreviewSynthPanel.cpp
     src/ui/ZoomScrollBar.cpp
     src/ui/MainComponent.cpp
     src/ui/MenuBarView.cpp

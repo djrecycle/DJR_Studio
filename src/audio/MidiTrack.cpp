@@ -185,6 +185,16 @@ bool MidiTrack::isPreviewDrumKit() const noexcept
     return previewSynth.isDrumMode();
 }
 
+SimpleSynth& MidiTrack::getPreviewSynth() noexcept
+{
+    return previewSynth;
+}
+
+const SimpleSynth& MidiTrack::getPreviewSynth() const noexcept
+{
+    return previewSynth;
+}
+
 void MidiTrack::prepare(double sampleRate, int blockSize)
 {
     Track::prepare(sampleRate, blockSize);

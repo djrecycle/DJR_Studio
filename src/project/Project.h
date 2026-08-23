@@ -47,6 +47,11 @@ struct ProjectTrackState
         the defaults - everything off, so an old project sounds unchanged.
     */
     juce::var channelSettings;
+    /** How the preview instrument is shaped - waveform and ADSR. Void on a
+        track that has a real instrument, and on anything saved before the
+        Generator page had controls, which reads back as the old fixed sine.
+    */
+    juce::var previewSynth;
     /** Playlist lane height in pixels. Zero means the default height. */
     int laneHeight = 0;
 };

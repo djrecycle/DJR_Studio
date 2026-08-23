@@ -1,6 +1,8 @@
 #include "PluginWindow.h"
 
+#include "audio/MidiTrack.h"
 #include "audio/Track.h"
+#include "ui/PreviewSynthPanel.h"
 #include "ui/Theme.h"
 
 namespace djr
@@ -41,38 +43,6 @@ namespace
         return area;
     }
 
-    /** What the generator page shows for a channel with no plugin in it. The
-        track is not silent in that case - it plays through its preview synth -
-        so the page has to say that rather than look broken. Its controls are
-        still to come; the rest of the channel window works today.
-    */
-    class PreviewGeneratorPanel final : public juce::Component
-    {
-    public:
-        PreviewGeneratorPanel()
-        {
-            setSize(460, 240);
-        }
-
-        void paint(juce::Graphics& g) override
-        {
-            auto area = getLocalBounds().reduced(24);
-
-            g.setColour(Theme::text());
-            g.setFont(Theme::ui(16.0f, true));
-            g.drawText(TRANS("Preview instrument"), area.removeFromTop(24),
-                       juce::Justification::centredTop, false);
-
-            area.removeFromTop(8);
-            g.setColour(Theme::textSoft());
-            g.setFont(Theme::ui(13.0f));
-            g.drawFittedText(TRANS("This channel has no plugin, so it plays through the built-in preview "
-                                   "instrument. The Envelope and Misc pages work on it just as they do on "
-                                   "a plugin; drop an instrument onto the track to replace it."),
-                             area, juce::Justification::centredTop, 6);
-        }
-    };
-
     /** The inside of a titled box: below the heading, inset from the border. */
     juce::Rectangle<int> sectionBody(juce::Rectangle<int> bounds)
     {
@@ -104,9 +74,13 @@ PluginShell::PluginShell(juce::AudioProcessor* processor, Track* track)
             generatorEditor.reset(generic);
         }
     }
-    else
+    else if (auto* midiTrack = dynamic_cast<MidiTrack*>(channelTrack))
     {
-        generatorEditor.reset(new PreviewGeneratorPanel());
+        // No plugin in the slot means the preview synth is what is playing, so
+        // the generator page is that synth's own controls rather than a notice
+        // saying there is nothing here.
+        generatorEditor.reset(new PreviewSynthPanel(midiTrack->getPreviewSynth(),
+                                                    midiTrack->isPreviewDrumKit()));
     }
 
     generatorViewport.setViewedComponent(&generatorHolder, false);
@@ -1124,6 +1098,13 @@ PluginWindow::PluginWindow(juce::AudioProcessor* processor, Track* track)
     const auto wanted = content->getPreferredBounds();
     setContentOwned(content.release(), false);
     setResizable(true, false);
+
+    // Sized before it is shown as well as after. A window is mapped with the
+    // bounds it had when its peer appeared, and the resize that follows can be
+    // dropped by the window manager - which is how a channel window sometimes
+    // came up as a 128 px stub. Setting it twice costs nothing and the first
+    // one is the geometry the window is actually mapped with.
+    setContentComponentSize(wanted.getWidth(), wanted.getHeight());
     setVisible(true);
 
     // Order matters: the peer only exists once the window is on screen, and the

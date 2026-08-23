@@ -12,6 +12,7 @@
 #include "audio/AudioTrack.h"
 #include "audio/MidiTrack.h"
 #include "audio/Mixer.h"
+#include "audio/SimpleSynth.h"
 #include "app/SessionState.h"
 #include "midi/MidiEngine.h"
 #include "midi/PianoRollModel.h"
@@ -3175,6 +3176,123 @@ int main()
               "silence is not given a pitch");
         check(djr::AudioAnalysis::detectTempo(silence, silence.getNumSamples(), rate).bpm <= 0.0,
               "and not given a tempo either");
+    }
+
+    // The preview synth's own controls. What a channel sounds like before an
+    // instrument is loaded is now settable, so the settings have to be proved
+    // to reach the sound rather than only the window.
+    {
+        using Synth = djr::SimpleSynth;
+
+        // One held note rendered through a synth, so two shapes can be compared.
+        const auto renderNote = [] (Synth& synth, int numSamples)
+        {
+            juce::AudioBuffer<float> buffer(2, numSamples);
+            buffer.clear();
+
+            juce::MidiBuffer midi;
+            midi.addEvent(juce::MidiMessage::noteOn(1, 69, 1.0f), 0);
+
+            synth.render(buffer, midi);
+            return buffer;
+        };
+
+        Synth sine;
+        sine.prepare(sampleRate);
+        const auto sineBuffer = renderNote(sine, 4096);
+
+        check(sineBuffer.getMagnitude(0, sineBuffer.getNumSamples()) > 0.01f,
+              "the preview synth answers a note with sound");
+
+        Synth square;
+        square.prepare(sampleRate);
+        square.setWaveform(Synth::Waveform::square);
+        const auto squareBuffer = renderNote(square, 4096);
+
+        auto sameShape = true;
+        for (int i = 1000; i < 4096 && sameShape; ++i)
+            sameShape = std::abs(sineBuffer.getSample(0, i) - squareBuffer.getSample(0, i)) < 1.0e-4f;
+
+        check(! sameShape, "and a different waveform is a different sound");
+
+        // A square holds its level between edges, a sine spends most of its
+        // period away from the peak - the crest factor is what separates them.
+        const auto crest = [] (const juce::AudioBuffer<float>& buffer)
+        {
+            auto peak = 0.0f;
+            auto sum = 0.0;
+
+            for (int i = 1000; i < buffer.getNumSamples(); ++i)
+            {
+                const auto value = buffer.getSample(0, i);
+                peak = juce::jmax(peak, std::abs(value));
+                sum += static_cast<double>(value) * value;
+            }
+
+            const auto rms = std::sqrt(sum / (buffer.getNumSamples() - 1000));
+            return rms > 0.0 ? peak / static_cast<float>(rms) : 0.0f;
+        };
+
+        check(crest(squareBuffer) < crest(sineBuffer),
+              "a square sits closer to its peak than a sine does");
+
+        // A long attack has to still be climbing where a short one has arrived.
+        Synth slow;
+        slow.prepare(sampleRate);
+        slow.setEnvelope({ 2.0f, 0.12f, 0.75f, 0.18f });
+        const auto slowBuffer = renderNote(slow, 4096);
+
+        check(slowBuffer.getMagnitude(0, 4096) < sineBuffer.getMagnitude(0, 4096) * 0.5f,
+              "a two second attack is still quiet where the default has opened");
+
+        // The envelope is read when the note starts, so a knob turned during a
+        // note must not retune the note already sounding.
+        Synth changed;
+        changed.prepare(sampleRate);
+        juce::AudioBuffer<float> holding(2, 4096);
+        holding.clear();
+        juce::MidiBuffer noteOn;
+        noteOn.addEvent(juce::MidiMessage::noteOn(1, 69, 1.0f), 0);
+        changed.render(holding, noteOn);
+        changed.setEnvelope({ 2.0f, 0.12f, 0.75f, 0.18f });
+
+        juce::AudioBuffer<float> after(2, 4096);
+        after.clear();
+        juce::MidiBuffer empty;
+        changed.render(after, empty);
+
+        check(after.getMagnitude(0, 4096) > 0.01f,
+              "a note already sounding keeps the envelope it began with");
+
+        // Round trip: what the window sets is what a project reads back.
+        Synth saved;
+        saved.setWaveform(Synth::Waveform::saw);
+        saved.setEnvelope({ 0.3f, 0.4f, 0.5f, 0.6f });
+
+        check(! saved.isDefault(), "a shaped preview synth knows it is not the default");
+
+        Synth loaded;
+        loaded.fromVar(saved.toVar());
+
+        check(loaded.getWaveform() == Synth::Waveform::saw,
+              "the waveform survives a save and an open");
+        check(std::abs(loaded.getEnvelope().attack - 0.3f) < 1.0e-4f
+                  && std::abs(loaded.getEnvelope().release - 0.6f) < 1.0e-4f,
+              "and so does the envelope");
+
+        Synth untouched;
+        untouched.fromVar(juce::var());
+
+        check(untouched.isDefault(),
+              "a project saved before any of this existed reads back as the old sine");
+
+        // Nothing but the shape: a zero attack would click, so it is clamped.
+        Synth clamped;
+        clamped.setEnvelope({ -1.0f, 0.0f, 4.0f, -2.0f });
+
+        check(clamped.getEnvelope().attack > 0.0f
+                  && juce::approximatelyEqual(clamped.getEnvelope().sustain, 1.0f),
+              "an impossible envelope is clamped rather than played");
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

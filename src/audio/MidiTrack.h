@@ -59,6 +59,12 @@ public:
     void setPreviewDrumKit(bool shouldUseDrums);
     bool isPreviewDrumKit() const noexcept;
 
+    /** The preview instrument itself, so the channel window can shape it and a
+        project can save what it was shaped into.
+    */
+    SimpleSynth& getPreviewSynth() noexcept;
+    const SimpleSynth& getPreviewSynth() const noexcept;
+
     void prepare(double sampleRate, int blockSize) override;
 
 protected:
