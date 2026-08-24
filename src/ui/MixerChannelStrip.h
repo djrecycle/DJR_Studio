@@ -93,6 +93,8 @@ private:
     void setLevel(float newLevel);
     float getPan() const;
     juce::String getDisplayName() const;
+    juce::Rectangle<int> getRoutingBounds() const;
+    juce::String getOutputDestinationName() const;
 
     Track* track = nullptr;
     MasterBus* masterBus = nullptr;

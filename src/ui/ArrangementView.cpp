@@ -367,9 +367,9 @@ void ArrangementView::paint(juce::Graphics& g)
                     if (fraction <= 0.0)
                         return;
 
-                    const auto width = static_cast<float>(fraction) * body.getWidth();
+                    const auto fadeWidth = static_cast<float>(fraction) * body.getWidth();
 
-                    if (width < 1.0f)
+                    if (fadeWidth < 1.0f)
                         return;
 
                     juce::Path wedge;
@@ -380,7 +380,7 @@ void ArrangementView::paint(juce::Graphics& g)
                     {
                         wedge.startNewSubPath(static_cast<float>(body.getX()),
                                               static_cast<float>(body.getY()));
-                        wedge.lineTo(body.getX() + width, static_cast<float>(body.getY()));
+                        wedge.lineTo(body.getX() + fadeWidth, static_cast<float>(body.getY()));
                         wedge.lineTo(static_cast<float>(body.getX()),
                                      static_cast<float>(body.getBottom()));
                     }
@@ -388,7 +388,7 @@ void ArrangementView::paint(juce::Graphics& g)
                     {
                         wedge.startNewSubPath(static_cast<float>(body.getRight()),
                                               static_cast<float>(body.getY()));
-                        wedge.lineTo(body.getRight() - width, static_cast<float>(body.getY()));
+                        wedge.lineTo(body.getRight() - fadeWidth, static_cast<float>(body.getY()));
                         wedge.lineTo(static_cast<float>(body.getRight()),
                                      static_cast<float>(body.getBottom()));
                     }
@@ -402,7 +402,7 @@ void ArrangementView::paint(juce::Graphics& g)
                     g.setColour(Theme::text().withAlpha(0.85f));
                     g.drawLine(fromLeft ? body.getX() : body.getRight(),
                                static_cast<float>(body.getBottom()),
-                               fromLeft ? body.getX() + width : body.getRight() - width,
+                               fromLeft ? body.getX() + fadeWidth : body.getRight() - fadeWidth,
                                static_cast<float>(body.getY()),
                                1.2f);
                 };

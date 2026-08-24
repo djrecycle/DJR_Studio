@@ -986,9 +986,9 @@ void PluginShell::resized()
         row.removeFromLeft(8);
         auto filterBox = row;
 
-        envelopeSections.push_back({ TRANS("Envelope"), envelopeBox });
-        envelopeSections.push_back({ TRANS("LFO"), lfoBox });
-        envelopeSections.push_back({ TRANS("Filter"), filterBox });
+        envelopeSections.push_back({ TRANS("Envelope"), envelopeBox, "" });
+        envelopeSections.push_back({ TRANS("LFO"), lfoBox, "" });
+        envelopeSections.push_back({ TRANS("Filter"), filterBox, "" });
 
         // Each box's switch sits in its own heading, at the far end of it: that
         // is the only free space on the page, and it puts the switch where the
@@ -1037,9 +1037,9 @@ void PluginShell::resized()
         firstRow.removeFromLeft(8);
         auto timeBox = firstRow.removeFromLeft(3 * knobPitch + 16);
 
-        miscSections.push_back({ TRANS("Levels adjustment"), levelsBox });
+        miscSections.push_back({ TRANS("Levels adjustment"), levelsBox, "" });
         miscSections.push_back({ TRANS("Polyphony"), polyBox, "Max / Slide\nPorta / Mono" });
-        miscSections.push_back({ TRANS("Time"), timeBox });
+        miscSections.push_back({ TRANS("Time"), timeBox, "" });
 
         placeKnobs(sectionBody(levelsBox), miscKnobs, 0, 4);
         placeKnobs(sectionBody(timeBox), miscKnobs, 4, 7);
@@ -1056,8 +1056,8 @@ void PluginShell::resized()
         auto echoBox = secondRow.removeFromLeft(4 * knobPitch + 16);
 
         miscSections.push_back({ TRANS("Group"), groupBox, "Cut / By\nCut self" });
-        miscSections.push_back({ TRANS("Arpeggiator"), arpBox });
-        miscSections.push_back({ TRANS("Echo delay / fat mode"), echoBox });
+        miscSections.push_back({ TRANS("Arpeggiator"), arpBox, "" });
+        miscSections.push_back({ TRANS("Echo delay / fat mode"), echoBox, "" });
 
         auto arpBody = placeKnobs(sectionBody(arpBox), miscKnobs, 7, 9);
         arpBody.removeFromLeft(6);

@@ -241,7 +241,7 @@ void ZoomScrollBar::mouseDoubleClick(const juce::MouseEvent&)
 
 void ZoomScrollBar::mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
 {
-    const auto amount = wheel.deltaY != 0.0f ? wheel.deltaY : wheel.deltaX;
+    const auto amount = ! juce::approximatelyEqual(wheel.deltaY, 0.0f) ? wheel.deltaY : wheel.deltaX;
 
     if (juce::approximatelyEqual(amount, 0.0f))
         return;

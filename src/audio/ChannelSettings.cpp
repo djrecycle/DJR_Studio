@@ -536,13 +536,13 @@ int ChannelSettings::nextArpNote() noexcept
     return juce::jlimit(0, 127, note);
 }
 
-void ChannelSettings::runArpeggiator(juce::MidiBuffer& midi, int numSamples, double tempoBpm)
+void ChannelSettings::runArpeggiator(juce::MidiBuffer& midi, int numSamples, double currentTempoBpm)
 {
     const auto rate = sampleRate.load(std::memory_order_acquire);
     const auto steps = static_cast<int>(std::size(arpStepBeats));
     const auto beats = arpStepBeats[juce::jlimit(0, steps - 1,
                                                  static_cast<int>(getArpTime() * static_cast<float>(steps)))];
-    const auto stepSamples = juce::jmax(16.0, 60.0 / juce::jmax(1.0, tempoBpm) * beats * rate);
+    const auto stepSamples = juce::jmax(16.0, 60.0 / juce::jmax(1.0, currentTempoBpm) * beats * rate);
     // Never the whole step: a note ending exactly where the next one starts
     // leaves the instrument no gap to retrigger in.
     const auto gateSamples = stepSamples * juce::jlimit(0.05, 0.95, static_cast<double>(getArpGate()));
@@ -1115,16 +1115,16 @@ void ChannelSettings::applyEcho(juce::AudioBuffer<float>& buffer)
     }
 }
 
-void ChannelSettings::processMidi(juce::MidiBuffer& midi, int numSamples, double tempoBpm)
+void ChannelSettings::processMidi(juce::MidiBuffer& midi, int numSamples, double currentTempoBpm)
 {
     gateEventCount = 0;
 
     // The echo runs in processAudio, which is not told the tempo; this is the
     // one call per block that is, so it is where the tempo is handed over.
-    setTempo(tempoBpm);
+    setTempo(currentTempoBpm);
 
     if (isArpActive())
-        runArpeggiator(midi, numSamples, tempoBpm);
+        runArpeggiator(midi, numSamples, currentTempoBpm);
 
     // After the arpeggiator: it builds its pattern from the intervals it was
     // given, and moving those first would only arrive at the same notes by a

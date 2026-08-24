@@ -18,6 +18,7 @@ namespace
     constexpr int faderHandleHeight = 9;
     constexpr int rowGap = 4;
     constexpr int dbRowHeight = 13;
+    constexpr int routingRowHeight = 13;
     constexpr float maxLevel = 1.5f;
     /** The send row only exists when something is assigned, so an unrouted
         strip looks exactly as it always did.
@@ -180,8 +181,25 @@ void MixerChannelStrip::paint(juce::Graphics& g)
             g.fillRoundedRectangle(filled.toFloat(), 1.5f);
 
             g.setColour(Theme::windowBackground().withAlpha(0.85f));
-            g.setFont(Theme::mono(8.0f, true));
-            g.drawText(juce::String(slot + 1), bar, juce::Justification::centred, false);
+        }
+    }
+
+    // Output Routing Badge ---------------------------------------------------
+    if (! isMaster() && track != nullptr)
+    {
+        const auto routingBounds = getRoutingBounds();
+        if (! routingBounds.isEmpty())
+        {
+            const auto dest = track->getOutputDestination();
+            const auto isBusRoute = (dest != Track::masterDestination);
+            const auto badgeColour = isBusRoute ? Theme::amber() : Theme::control();
+
+            g.setColour(badgeColour.withAlpha(isBusRoute ? 0.35f : 0.22f));
+            g.fillRoundedRectangle(routingBounds.toFloat(), 2.5f);
+
+            g.setColour(isBusRoute ? Theme::amber() : Theme::mutedText());
+            g.setFont(Theme::mono(8.5f, true));
+            g.drawText("Out: " + getOutputDestinationName(), routingBounds, juce::Justification::centred, true);
         }
     }
 
@@ -490,6 +508,13 @@ void MixerChannelStrip::mouseDown(const juce::MouseEvent& event)
             return;
         }
 
+        // Clicking the routing badge opens the routing menu immediately.
+        if (getRoutingBounds().expanded(2, 2).contains(position))
+        {
+            showRoutingMenu();
+            return;
+        }
+
         // Sends are dragged like little faders of their own.
         for (const auto slot : getAssignedSends())
         {
@@ -640,6 +665,9 @@ int MixerChannelStrip::getFaderRowHeight() const
                + buttonRowHeight + rowGap
                + dbRowHeight;
 
+    if (! isMaster() && track != nullptr)
+        fixed += routingRowHeight + rowGap;
+
     if (! getAssignedSends().empty())
         fixed += sendRowHeight + rowGap;
 
@@ -752,6 +780,40 @@ float MixerChannelStrip::getPan() const
 juce::String MixerChannelStrip::getDisplayName() const
 {
     return track != nullptr ? track->getName() : juce::String("MASTER");
+}
+
+juce::Rectangle<int> MixerChannelStrip::getRoutingBounds() const
+{
+    if (isMaster() || track == nullptr)
+        return {};
+
+    auto area = getRowsBelowFader();
+    if (! getAssignedSends().empty())
+        area.removeFromTop(sendRowHeight + rowGap);
+
+    area.removeFromTop(buttonRowHeight + rowGap);
+    return area.removeFromTop(routingRowHeight);
+}
+
+juce::String MixerChannelStrip::getOutputDestinationName() const
+{
+    if (isMaster() || track == nullptr)
+        return "OUT";
+
+    const auto dest = track->getOutputDestination();
+    if (dest == Track::masterDestination)
+        return "Master";
+
+    if (dest < 0)
+        return "Off";
+
+    if (mixer != nullptr && juce::isPositiveAndBelow(dest, mixer->getNumTracks()))
+    {
+        if (const auto* bus = mixer->getTrack(dest))
+            return bus->getName();
+    }
+
+    return "Master";
 }
 
 } // namespace djr

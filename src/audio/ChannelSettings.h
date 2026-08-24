@@ -172,7 +172,7 @@ public:
         opens and closes so the envelopes can follow it. Called before anything
         renders the MIDI, and always before processAudio for the same block.
     */
-    void processMidi(juce::MidiBuffer& midi, int numSamples, double tempoBpm);
+    void processMidi(juce::MidiBuffer& midi, int numSamples, double currentTempoBpm);
 
     /** Envelope, LFO and filter over the channel's own output. */
     void processAudio(juce::AudioBuffer<float>& buffer);
@@ -279,7 +279,7 @@ private:
     float advanceLfo(LfoState& state, const Lfo& shape, double seconds) const noexcept;
     void pushGateEvent(int sampleOffset, bool opening) noexcept;
     /** Rewrites `midi` into the arpeggiated pattern. */
-    void runArpeggiator(juce::MidiBuffer& midi, int numSamples, double tempoBpm);
+    void runArpeggiator(juce::MidiBuffer& midi, int numSamples, double currentTempoBpm);
     /** Watches note-ons and note-offs so the gate follows the channel. */
     void trackGate(const juce::MidiBuffer& midi) noexcept;
     int nextArpNote() noexcept;
