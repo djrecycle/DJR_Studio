@@ -416,6 +416,37 @@ void ArrangementView::paint(juce::Graphics& g)
                     g.setFont(Theme::mono(8.5f));
                     g.drawText("W", clipBounds.removeFromRight(11), juce::Justification::centredRight, false);
                 }
+
+                // Gain handle — a thin tinted bar at the very top of the clip.
+                // The fill width is proportional to gain so the eye reads it even
+                // without the label (similar to a meter that shows 0 dB at center).
+                {
+                    const auto cb = getClipBounds(i, clip);
+                    const auto handleRect = cb.withHeight(5).toFloat();
+                    const auto gainFraction = juce::jlimit(0.0f, 1.0f, clip.gain / 2.0f);
+                    const bool isGainDragging = gainDrag.active
+                                               && gainDrag.trackIndex == i
+                                               && gainDrag.clipIndex == clip.index;
+                    const auto handleColour = isGainDragging
+                                            ? Theme::accent().brighter(0.35f)
+                                            : Theme::accent().withAlpha(0.65f);
+
+                    // Filled portion (proportional to gain level).
+                    g.setColour(handleColour.withAlpha(0.25f));
+                    g.fillRoundedRectangle(handleRect, 2.0f);
+                    g.setColour(handleColour);
+                    g.fillRoundedRectangle(handleRect.withWidth(handleRect.getWidth() * gainFraction), 2.0f);
+
+                    // dB label — only when the clip is wide enough to fit it legibly.
+                    if (cb.getWidth() > 52)
+                    {
+                        const auto dbVal = clip.gain <= 0.0f ? "-inf"
+                                         : juce::String(20.0f * std::log10(clip.gain), 1) + " dB";
+                        g.setColour(Theme::text().withAlpha(isGainDragging ? 0.95f : 0.72f));
+                        g.setFont(Theme::mono(8.0f));
+                        g.drawText(dbVal, cb.withHeight(12).withTrimmedLeft(4), juce::Justification::centredLeft, false);
+                    }
+                }
             }
             else
             {
@@ -543,6 +574,36 @@ void ArrangementView::paint(juce::Graphics& g)
             }
         }
     }
+
+    // Floating Gain Tooltip Overlay -------------------------------------------
+    if (gainDrag.active)
+    {
+        for (const auto& clip : getClipsForTrack(gainDrag.trackIndex))
+        {
+            if (clip.index != gainDrag.clipIndex || clip.midi)
+                continue;
+
+            const auto dbVal = clip.gain <= 0.0f ? juce::String("-inf dB")
+                             : juce::String(20.0f * std::log10(clip.gain), 1) + " dB";
+            const auto text = juce::String("Gain: ") + dbVal;
+
+            const auto mousePos = getMouseXYRelative();
+            const auto font = Theme::ui(11.0f, true);
+            juce::GlyphArrangement glyphs;
+            glyphs.addFittedText(font, text, 0.0f, 0.0f, 1000.0f, 20.0f, juce::Justification::left, 1);
+            const auto textWidth = juce::roundToInt(glyphs.getBoundingBox(0, -1, true).getWidth()) + 16;
+            const auto tooltipRect = juce::Rectangle<int>(mousePos.x + 14, mousePos.y - 24, textWidth, 22);
+
+            g.setColour(Theme::panelDeep().withAlpha(0.92f));
+            g.fillRoundedRectangle(tooltipRect.toFloat(), 4.0f);
+            g.setColour(Theme::outlineStrong());
+            g.drawRoundedRectangle(tooltipRect.toFloat().reduced(0.5f), 4.0f, 1.0f);
+            g.setColour(Theme::text());
+            g.setFont(font);
+            g.drawText(text, tooltipRect, juce::Justification::centred, false);
+            break;
+        }
+    }
 }
 
 void ArrangementView::resized()
@@ -661,6 +722,31 @@ void ArrangementView::mouseDown(const juce::MouseEvent& event)
 
     // Zoom and Playback act on the timeline, never on the clip under the cursor.
     const auto toolIgnoresClips = activeTool == Tool::zoom || activeTool == Tool::playback;
+
+    // Gain handle — thin strip at the top of audio clips; only the select tool
+    // grabs it, so other tools can still act on the clip body underneath.
+    if (! toolIgnoresClips && activeTool == Tool::select
+        && ! event.mods.isRightButtonDown() && mode != ClipDragMode::none)
+    {
+        for (const auto& c : getClipsForTrack(clipTrack))
+        {
+            if (c.index != clipIndex || c.midi)
+                continue;
+
+            if (getGainHandleBounds(clipTrack, c).contains(position))
+            {
+                pushUndo(TRANS("Adjust clip gain"));
+                if (undoGestureCallback) undoGestureCallback(true);
+                gainDrag.active     = true;
+                gainDrag.trackIndex = clipTrack;
+                gainDrag.clipIndex  = clipIndex;
+                gainDrag.grabGain   = c.gain;
+                gainDrag.grabY      = position.y;
+                return;
+            }
+            break;
+        }
+    }
 
     if (mode != ClipDragMode::none && ! toolIgnoresClips)
     {
@@ -788,6 +874,19 @@ void ArrangementView::mouseMove(const juce::MouseEvent& event)
         return;
     }
 
+    // Hovering over the gain handle of an audio clip shows the resize cursor.
+    for (int t = 0; t < mixer.getNumTracks(); ++t)
+    {
+        for (const auto& c : getClipsForTrack(t))
+        {
+            if (! c.midi && getGainHandleBounds(t, c).contains(event.getPosition()))
+            {
+                setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+                return;
+            }
+        }
+    }
+
     int track = -1;
     int clip = -1;
     const auto mode = hitTestClip(event.getPosition(), track, clip);
@@ -805,6 +904,14 @@ void ArrangementView::mouseUp(const juce::MouseEvent& event)
         undoGestureCallback(false);
 
     painting = false;
+
+    if (gainDrag.active)
+    {
+        gainDrag = {};
+        notifyClipEdited();
+        repaint();
+        return;
+    }
 
     if (automationDrag.mode != AutomationDrag::Mode::none)
     {
@@ -865,6 +972,21 @@ void ArrangementView::mouseDrag(const juce::MouseEvent& event)
     {
         setRowHeightAt(resizingRow, resizeStartHeight + event.getPosition().y - resizeGrabY);
         clampScroll();
+        repaint();
+        return;
+    }
+
+    if (gainDrag.active)
+    {
+        // Drag upward raises gain (−1.0 px/unit → +gain), downward lowers it.
+        // 100 px = full ±2.0 gain range (±6 dB approx).
+        const auto deltaY   = gainDrag.grabY - event.getPosition().y;
+        const auto newGain  = juce::jlimit(0.0f, 2.0f, gainDrag.grabGain + static_cast<float>(deltaY) * 0.02f);
+        if (auto* audioTrack = dynamic_cast<AudioTrack*>(mixer.getTrack(gainDrag.trackIndex)))
+        {
+            if (auto* clip = audioTrack->getClip(gainDrag.clipIndex))
+                clip->setGain(newGain);
+        }
         repaint();
         return;
     }
@@ -1959,6 +2081,7 @@ std::vector<ArrangementView::Clip> ArrangementView::getClipsForTrack(int trackIn
             clip.trimEndFraction = source->getTrimEndFraction();
             clip.warped = source->isWarpEnabled();
             clip.muted = source->isMuted();
+            clip.gain = source->getGain();
 
             const auto playLength = juce::jmax(1.0e-9, source->getPlayLengthSeconds());
             clip.fadeInFraction = juce::jlimit(0.0, 1.0, source->getFadeInSeconds() / playLength);
@@ -2021,6 +2144,14 @@ juce::Rectangle<int> ArrangementView::getClipBounds(int trackIndex, const Clip& 
     const auto width = juce::jmax(20, beatToX(clip.startBeat + clip.lengthBeats) - left);
 
     return { left, row.getY() + 3, width, row.getHeight() - 6 };
+}
+
+juce::Rectangle<int> ArrangementView::getGainHandleBounds(int trackIndex, const Clip& clip) const
+{
+    const auto cb = getClipBounds(trackIndex, clip);
+    // A 7px-tall strip spanning the full clip top — wide enough to grab,
+    // narrow enough not to obscure the waveform label.
+    return { cb.getX(), cb.getY(), cb.getWidth(), 7 };
 }
 
 ArrangementView::ClipDragMode ArrangementView::hitTestClip(juce::Point<int> position,

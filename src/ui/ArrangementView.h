@@ -227,6 +227,8 @@ private:
         double trimEndFraction = 1.0;
         bool warped = false;
         bool muted = false;
+        /** Clip gain, 0.0–2.0 linear (audio only; always 1.0 for MIDI). */
+        float gain = 1.0f;
         /** Fade lengths as a fraction of what the clip plays, so the drawing
             does not need the tempo to work out where they end.
         */
@@ -251,10 +253,20 @@ private:
     {
         ClipDragMode mode = ClipDragMode::none;
         int trackIndex = -1;
-        int clipIndex = -1;
+        int clipIndex  = -1;
         double grabBeat = 0.0;
         double originalStart = 0.0;
         double originalEnd = 0.0;
+    };
+
+    /** State while the user drags a clip's gain handle. */
+    struct GainDrag
+    {
+        bool active    = false;
+        int trackIndex = -1;
+        int clipIndex  = -1;
+        float grabGain = 1.0f;
+        int grabY      = 0;
     };
 
     /** A clip the marquee picked up. Both kinds of clip are real objects now, so
@@ -327,6 +339,8 @@ private:
     /** Finds the clip under `position` and what a drag there would do. */
     ClipDragMode hitTestClip(juce::Point<int> position, int& trackIndexOut, int& clipIndexOut) const;
     juce::Rectangle<int> getClipBounds(int trackIndex, const Clip& clip) const;
+    /** The small handle strip at the top of an audio clip that adjusts gain. */
+    juce::Rectangle<int> getGainHandleBounds(int trackIndex, const Clip& clip) const;
     void showClipContextMenu(int trackIndex, int clipIndex);
     void showPlacementContextMenu(int trackIndex, int placementIndex);
     double snapBeat(double beat) const noexcept;
@@ -452,6 +466,7 @@ private:
     */
     int fileDropRow = -1;
     ClipDrag clipDrag;
+    GainDrag gainDrag;
     Tool activeTool = Tool::select;
     /** A paint drag in progress: the pointer keeps laying clips as it sweeps. */
     bool painting = false;
