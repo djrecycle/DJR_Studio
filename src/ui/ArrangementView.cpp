@@ -494,6 +494,55 @@ void ArrangementView::paint(juce::Graphics& g)
     // Last, so the row a dragged file would land on is drawn over the clips
     // rather than under them.
     paintFileDropRow(g);
+
+    // Floating Automation Value Tooltip Overlay --------------------------------
+    if (automationDrag.mode != AutomationDrag::Mode::none)
+    {
+        if (const auto* lane = getLane(automationDrag.trackIndex, automationDrag.laneIndex))
+        {
+            const auto target = lane->getTarget();
+            juce::String text;
+
+            if (automationDrag.mode == AutomationDrag::Mode::point)
+            {
+                const auto points = lane->getPoints();
+                if (juce::isPositiveAndBelow(automationDrag.pointIndex, static_cast<int>(points.size())))
+                {
+                    const auto val = points[static_cast<size_t>(automationDrag.pointIndex)].value;
+                    text = target.describe() + ": " + target.describeValue(val);
+                }
+            }
+            else if (automationDrag.mode == AutomationDrag::Mode::curve)
+            {
+                const auto points = lane->getPoints();
+                if (juce::isPositiveAndBelow(automationDrag.pointIndex, static_cast<int>(points.size())))
+                {
+                    const auto c = points[static_cast<size_t>(automationDrag.pointIndex)].curve;
+                    text = std::abs(c) < 1.0e-4 ? "Curve: Straight"
+                                                : "Curve: " + juce::String(c >= 0.0 ? "+" : "") + juce::String(c, 2);
+                }
+            }
+
+            if (text.isNotEmpty())
+            {
+                const auto mousePos = getMouseXYRelative();
+                const auto font = Theme::ui(11.0f, true);
+                juce::GlyphArrangement glyphs;
+                glyphs.addFittedText(font, text, 0.0f, 0.0f, 1000.0f, 20.0f, juce::Justification::left, 1);
+                const auto textWidth = juce::roundToInt(glyphs.getBoundingBox(0, -1, true).getWidth()) + 16;
+                const auto tooltipRect = juce::Rectangle<int>(mousePos.x + 14, mousePos.y - 24, textWidth, 22);
+
+                g.setColour(Theme::panelDeep().withAlpha(0.92f));
+                g.fillRoundedRectangle(tooltipRect.toFloat(), 4.0f);
+                g.setColour(Theme::outlineStrong());
+                g.drawRoundedRectangle(tooltipRect.toFloat().reduced(0.5f), 4.0f, 1.0f);
+
+                g.setColour(Theme::text());
+                g.setFont(font);
+                g.drawText(text, tooltipRect, juce::Justification::centred, false);
+            }
+        }
+    }
 }
 
 void ArrangementView::resized()
@@ -1002,6 +1051,35 @@ void ArrangementView::mouseDoubleClick(const juce::MouseEvent& event)
             trackRenameCallback(rows[static_cast<size_t>(rowIndex)].trackIndex);
 
         return;
+    }
+
+    const auto autoHit = hitTestAutomation(position);
+    if (autoHit.mode != AutomationDrag::Mode::none)
+    {
+        if (auto* lane = getLane(autoHit.trackIndex, autoHit.laneIndex))
+        {
+            if (autoHit.mode == AutomationDrag::Mode::curve)
+            {
+                pushUndo(TRANS("Reset automation curve"));
+                lane->setPointCurve(autoHit.pointIndex, 0.0);
+                notifyClipEdited();
+                repaint();
+                return;
+            }
+            else if (autoHit.mode == AutomationDrag::Mode::point)
+            {
+                pushUndo(TRANS("Reset automation point"));
+                const auto points = lane->getPoints();
+                if (juce::isPositiveAndBelow(autoHit.pointIndex, static_cast<int>(points.size())))
+                {
+                    const auto beat = points[static_cast<size_t>(autoHit.pointIndex)].beat;
+                    lane->movePoint(autoHit.pointIndex, beat, 0.5);
+                }
+                notifyClipEdited();
+                repaint();
+                return;
+            }
+        }
     }
 
     int trackIndex = -1;
