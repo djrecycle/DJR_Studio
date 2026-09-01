@@ -813,7 +813,26 @@ void PianoRollView::changeListenerCallback(juce::ChangeBroadcaster* source)
 void PianoRollView::timerCallback()
 {
     if (transport.isPlaying())
+    {
+        // Follow the playhead, so it does not simply run off the right edge.
+        // Only once it actually leaves the visible range, and it lands a little
+        // in from the left so the next bar is already on screen.
+        const auto visibleWidth = getContentBounds().getWidth() - keyboardWidth;
+
+        if (visibleWidth > 0)
+        {
+            const auto visibleBeats = visibleWidth / pixelsPerBeat;
+            const auto position = transport.getPositionBeats();
+
+            if (position < scrollBeats || position > scrollBeats + visibleBeats * 0.85)
+            {
+                scrollBeats = juce::jmax(0.0, position - visibleBeats * 0.15);
+                refreshScrollBars();
+            }
+        }
+
         repaint();
+    }
 }
 
 int PianoRollView::noteAtPosition(juce::Point<int> position) const
