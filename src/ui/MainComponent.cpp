@@ -213,6 +213,15 @@ MainComponent::MainComponent()
     arrangementView.setPatternRenameCallback([this] (int patternIndex) { renamePattern(patternIndex); });
     editorPanel.setPatternRenameCallback([this] { renamePattern(sessionState.getActivePattern()); });
 
+    // The track name next to the pattern badge is the channel these notes go to,
+    // so clicking it opens that channel - the instrument if one is loaded, and
+    // the preview synth's own pages if not, the way FL opens a channel whatever
+    // is inside it.
+    editorPanel.setInstrumentNameClickedCallback([this]
+    {
+        openTrackPluginEditor(sessionState.getSelectedTrack());
+    });
+
     wireUndoHooks();
 
     editorPanel.setViewChangedCallback([this] { handleEditorViewChanged(); });

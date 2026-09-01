@@ -59,6 +59,7 @@ public:
     /** Shows the pattern's loop length; `locked` means it was set by hand. */
     void setPatternLengthBeats(double beats, bool locked);
     void setPatternLengthChangedCallback(std::function<void(double)> callback);
+    void setInstrumentNameClickedCallback(std::function<void()> callback);
 
     /** Notes played on the on-screen keyboard, ready for the live MIDI path. */
     void setKeyboardMessageCallback(std::function<void(const juce::MidiMessage&)> callback);
@@ -118,10 +119,12 @@ private:
     /** The name badge; it widens with the name so long titles stay readable. */
     juce::Rectangle<int> getPatternNameBounds() const;
     juce::Rectangle<int> getPatternLengthBounds() const;
+    juce::Rectangle<int> getInstrumentNameBounds() const;
     void showPatternLengthMenu();
 
     std::function<void()> viewChangedCallback;
     std::function<void(int)> patternChangedCallback;
+    std::function<void()> instrumentNameClickedCallback;
     std::function<void(double)> patternLengthChangedCallback;
     std::function<void()> patternRenameCallback;
     juce::String patternName;

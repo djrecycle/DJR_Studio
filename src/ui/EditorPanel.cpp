@@ -232,6 +232,21 @@ juce::Rectangle<int> EditorPanel::getPatternLengthBounds() const
                                                + juce::jmin(110, Theme::textWidth(Theme::ui(10.5f), trackName) + 4));
     return juce::Rectangle<int>(name.getRight() + 8, name.getY(), 48, name.getHeight());
 }
+juce::Rectangle<int> EditorPanel::getInstrumentNameBounds() const
+{
+    const auto nameArea = getPatternNameBounds();
+
+    // The same width getPatternLengthBounds measures to place the badge after
+    // the name, so the two never overlap. A fixed width would sit underneath
+    // the badge on a short name and only work because of the order the clicks
+    // happen to be tested in. Empty on an audio track, where no name is drawn:
+    // an invisible region that swallows clicks is worse than none at all.
+    const auto width = trackName.isEmpty()
+        ? 0
+        : juce::jmin(110, Theme::textWidth(Theme::ui(10.5f), trackName) + 4);
+
+    return juce::Rectangle<int>(nameArea.getRight() + 6, nameArea.getY(), width, nameArea.getHeight());
+}
 
 void EditorPanel::setPatternLengthBeats(double beats, bool locked)
 {
@@ -284,6 +299,10 @@ void EditorPanel::setPatternName(const juce::String& name)
 void EditorPanel::setPatternRenameCallback(std::function<void()> callback)
 {
     patternRenameCallback = std::move(callback);
+}
+void EditorPanel::setInstrumentNameClickedCallback(std::function<void()> callback)
+{
+    instrumentNameClickedCallback = std::move(callback);
 }
 
 void EditorPanel::showPatternLengthMenu()
@@ -362,6 +381,13 @@ void EditorPanel::mouseDown(const juce::MouseEvent& event)
     {
         if (patternRenameCallback)
             patternRenameCallback();
+
+        return;
+    }
+    if (getInstrumentNameBounds().contains(event.getPosition()))
+    {
+        if (instrumentNameClickedCallback)
+            instrumentNameClickedCallback();
 
         return;
     }
