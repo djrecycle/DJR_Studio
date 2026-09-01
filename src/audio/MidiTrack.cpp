@@ -245,7 +245,12 @@ void MidiTrack::renderPatternMode(juce::MidiBuffer& midi, const TrackPlaybackCon
     const auto jumpedBackward = context.startBeat + 0.0001 < lastBlockStartBeat;
 
     if (! transportPrepared || jumpedBackward)
+    {
+        // Ahead of the notes at the new position, so one that spans the wrap is
+        // released and struck again rather than struck twice and left hanging.
+        releaseHeldNotes(midi);
         resetTransportState();
+    }
 
     emitNotes(midi,
               getClip().getNotesSnapshot(),
@@ -264,7 +269,12 @@ void MidiTrack::renderSongMode(juce::MidiBuffer& midi, const TrackPlaybackContex
     const auto jumpedBackward = context.startBeat + 0.0001 < lastBlockStartBeat;
 
     if (! transportPrepared || jumpedBackward)
+    {
+        // As in pattern mode: the placements about to be written cannot supply
+        // the note-off the previous pass was still waiting for.
+        releaseHeldNotes(midi);
         resetTransportState();
+    }
 
     // Skipping a block beats blocking the device while the playlist is edited.
     const juce::SpinLock::ScopedTryLockType scoped(placementLock);
@@ -354,7 +364,7 @@ void MidiTrack::emitNotes(juce::MidiBuffer& midi,
     }
 }
 
-void MidiTrack::sendAllNotesOff(juce::MidiBuffer& midi)
+void MidiTrack::releaseHeldNotes(juce::MidiBuffer& midi)
 {
     for (int pitch = 0; pitch < 128; ++pitch)
     {
@@ -364,7 +374,16 @@ void MidiTrack::sendAllNotesOff(juce::MidiBuffer& midi)
         midi.addEvent(juce::MidiMessage::noteOff(1, pitch), 0);
         activeNotes[static_cast<size_t>(pitch)] = false;
     }
+}
 
+void MidiTrack::sendAllNotesOff(juce::MidiBuffer& midi)
+{
+    releaseHeldNotes(midi);
+
+    // And the catch-all on top, for anything the instrument is holding that
+    // this track did not put there - a live note played over the sequence, or a
+    // tail an earlier take left behind. Only on the way to a stop: sending it
+    // every time a loop came round would reset the sustain pedal with it.
     midi.addEvent(juce::MidiMessage::allNotesOff(1), 0);
 }
 

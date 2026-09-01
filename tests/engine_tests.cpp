@@ -3321,6 +3321,88 @@ int main()
               "-60 dBFS is the floor");
     }
 
+    // --- A loop coming round must not leave a note held down -----------------
+    // The note-off a sustained note is waiting for sits at the end of the clip.
+    // When the transport wraps back to the top, that note-off is behind the
+    // playhead and never gets written, so the instrument goes on holding the
+    // note while the next pass strikes it again. The release has to be sent at
+    // the wrap instead, which is what this checks.
+    {
+        djr::MidiTrack track("Loop");
+        track.prepare(sampleRate, blockSize);
+
+        // One note long enough to still be sounding when the wrap happens.
+        juce::Array<djr::MidiNote> notes;
+        djr::MidiNote held;
+        held.pitch = 60;
+        held.velocity = 0.9f;
+        held.startBeat = 0.0;
+        held.lengthBeats = 4.0;
+        notes.add(held);
+        track.setClipNotes(notes);
+
+        const auto beatsPerBlock = (static_cast<double>(blockSize) / sampleRate) * (tempoBpm / 60.0);
+
+        juce::AudioBuffer<float> buffer(2, blockSize);
+        juce::MidiBuffer midi;
+
+        const auto renderAt = [&] (double startBeat)
+        {
+            djr::TrackPlaybackContext context;
+            context.sampleRate = sampleRate;
+            context.tempoBpm = tempoBpm;
+            context.startBeat = startBeat;
+            context.endBeat = startBeat + beatsPerBlock;
+            context.isPlaying = true;
+            context.songMode = false;
+
+            buffer.clear();
+            track.processAudio(buffer, midi, context);
+        };
+
+        // Where pitch 60 is struck or released, counted in the order the
+        // instrument reads the block. -1 when the block does not mention it.
+        // Position rather than sample offset: both land on sample 0 at a wrap,
+        // so only the order tells them apart.
+        const auto positionOf = [&] (bool wantNoteOn)
+        {
+            auto position = 0;
+
+            for (const auto metadata : midi)
+            {
+                const auto message = metadata.getMessage();
+
+                if (message.getNoteNumber() == 60
+                    && (wantNoteOn ? message.isNoteOn() : message.isNoteOff()))
+                    return position;
+
+                ++position;
+            }
+
+            return -1;
+        };
+
+        renderAt(0.0);
+        check(positionOf(true) >= 0, "a note at the top of the pattern is struck");
+        check(positionOf(false) < 0, "and not released in the same block");
+
+        // Halfway through the note: nothing to say, it is simply still held.
+        renderAt(2.0);
+        check(positionOf(true) < 0 && positionOf(false) < 0,
+              "a block in the middle of a held note emits nothing");
+
+        // The wrap: the playhead goes back to the top while the note is sounding.
+        renderAt(0.0);
+
+        const auto released = positionOf(false);
+        const auto struck = positionOf(true);
+
+        check(released >= 0, "a loop coming round releases the note it was holding");
+        check(struck >= 0, "and strikes it again for the new pass");
+        check(released >= 0 && struck >= 0 && released < struck,
+              "in that order, so the instrument is not left holding two of them");
+    }
+
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
                                 : "\n" + std::to_string(failures) + " engine test(s) failed\n");
     return failures == 0 ? 0 : 1;

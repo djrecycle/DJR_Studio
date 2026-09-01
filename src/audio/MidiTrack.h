@@ -89,6 +89,12 @@ private:
                    double windowStartBeat,
                    double windowEndBeat,
                    int numSamples);
+    /** Emits a note-off for everything this track is still holding down, and
+        forgets it. Whenever the playhead stops following the notes it started -
+        a loop wrapping, a seek backwards - the note-off those notes were waiting
+        for is behind us and will never be written, so it has to be sent here.
+    */
+    void releaseHeldNotes(juce::MidiBuffer& midi);
     void sendAllNotesOff(juce::MidiBuffer& midi);
     void resetTransportState();
 

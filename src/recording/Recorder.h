@@ -24,6 +24,11 @@ public:
 
 private:
     juce::TimeSliceThread writerThread { "DJR Recorder Writer" };
+
+    /** Held whenever the writer is touched. Without it, stop() can free the
+        writer while the audio thread is already inside write().
+    */
+    mutable juce::SpinLock writerLock;
     std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> threadedWriter;
     std::atomic<juce::AudioFormatWriter::ThreadedWriter*> activeWriter { nullptr };
     std::atomic<int> firstInputChannel { 0 };

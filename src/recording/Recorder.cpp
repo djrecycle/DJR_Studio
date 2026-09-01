@@ -34,18 +34,42 @@ bool Recorder::startRecording(const juce::File& wavFile, double sampleRate, int 
         return false;
 
     stream.release();
-    threadedWriter = std::make_unique<juce::AudioFormatWriter::ThreadedWriter>(writer.release(), writerThread, 32768);
-    firstInputChannel.store(juce::jmax(0, firstChannel), std::memory_order_release);
-    writerChannels.store(channels, std::memory_order_release);
-    activeWriter.store(threadedWriter.get(), std::memory_order_release);
+
+    // Built before the lock is taken: allocating the writer and its 32k queue is
+    // not something the audio thread should be made to wait for.
+    auto prepared = std::make_unique<juce::AudioFormatWriter::ThreadedWriter>(writer.release(), writerThread, 32768);
+
+    {
+        // Published under the lock, so the audio thread cannot pick up the
+        // pointer before the channel layout that goes with it.
+        const juce::SpinLock::ScopedLockType scoped(writerLock);
+        threadedWriter = std::move(prepared);
+        firstInputChannel.store(juce::jmax(0, firstChannel), std::memory_order_release);
+        writerChannels.store(channels, std::memory_order_release);
+        activeWriter.store(threadedWriter.get(), std::memory_order_release);
+    }
+
     Logger::write("Recording started: " + wavFile.getFullPathName());
     return true;
 }
 
 void Recorder::stop()
 {
-    activeWriter.store(nullptr, std::memory_order_release);
-    threadedWriter.reset();
+    std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> detached;
+
+    {
+        const juce::SpinLock::ScopedLockType scoped(writerLock);
+
+        // Clearing this under the lock is what makes the take safe to destroy:
+        // a callback already inside processInputBlock holds the lock, so we wait
+        // for it here, and every callback after this one sees nothing to write.
+        activeWriter.store(nullptr, std::memory_order_release);
+        detached = std::move(threadedWriter);
+    }
+
+    // Destroying the writer flushes the take and closes the file, which blocks
+    // on disk - do it outside the lock the audio thread contends for.
+    detached.reset();
 }
 
 bool Recorder::isRecording() const noexcept
@@ -55,6 +79,16 @@ bool Recorder::isRecording() const noexcept
 
 void Recorder::processInputBlock(const float* const* inputData, int numChannels, int numSamples) noexcept
 {
+    // Try rather than wait: the lock is only ever held while a take is being
+    // started or stopped, so the block this can cost is one at the very edge of
+    // a recording - never worth blocking the device for.
+    const juce::SpinLock::ScopedTryLockType scoped(writerLock);
+
+    if (! scoped.isLocked())
+        return;
+
+    // Read inside the lock. Outside it the writer could be freed between this
+    // load and the write below.
     auto* writer = activeWriter.load(std::memory_order_acquire);
 
     if (writer == nullptr || inputData == nullptr || numChannels <= 0)
