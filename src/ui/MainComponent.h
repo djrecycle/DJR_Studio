@@ -144,6 +144,15 @@ private:
     void closeWindowsForMissingTracks();
     /** Rebuilds the pitch-preserved copies when the tempo has moved. */
     void prepareWarpedClips();
+    /** Piano roll always auditions the active pattern, never the playlist.
+        Leaving it restores Song mode only when that was the mode before it
+        was opened.
+    */
+    void handleEditorViewChanged();
+    /** Keeps session, transport and the mode buttons in sync even when the
+        requested mode is already selected in the transport bar.
+    */
+    void setPatternPlaybackMode(bool shouldUsePatternMode);
     void selectTrack(int trackIndex);
     /** Pushes the current selection into every panel and the audio engine. */
     void applySelectionToPanels();
@@ -248,6 +257,12 @@ private:
     bool browserVisible = true;
     bool autoOpenPluginEditor = true;
     bool projectDirty = false;
+    /** Captured once per piano-roll visit; the velocity-lane toggle also
+        refreshes the editor, so it must not overwrite the original values.
+    */
+    bool pianoRollPlaybackOverrideActive = false;
+    bool wasFollowingPlayhead = true;
+    bool wasSongModeBeforePianoRoll = false;
 
     /** Tempo the warped clips were last stretched for. */
     double lastWarpTempo = 0.0;

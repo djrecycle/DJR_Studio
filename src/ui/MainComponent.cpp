@@ -120,6 +120,15 @@ MainComponent::MainComponent()
     });
     transportBar.setPatternModeChangeCallback([this] (bool patternMode)
     {
+        // The piano roll is an editor for one pattern. Letting Song mode through
+        // here would make the playlist sound while the user is auditioning its
+        // notes, so immediately keep the transport in Pattern mode.
+        if (editorPanel.isPianoRollVisible() && ! patternMode)
+        {
+            setPatternPlaybackMode(true);
+            return;
+        }
+
         sessionState.setSongMode(! patternMode);
         setStatusMessage(patternMode
                              ? TRANS("Pattern mode: the active pattern loops.")
@@ -206,7 +215,8 @@ MainComponent::MainComponent()
 
     wireUndoHooks();
 
-    editorPanel.setViewChangedCallback([this] { refreshMenuState(); });
+    editorPanel.setViewChangedCallback([this] { handleEditorViewChanged(); });
+    handleEditorViewChanged();
     editorPanel.setPatternChangedCallback([this] (int patternIndex)
     {
         sessionState.setActivePattern(patternIndex);
@@ -824,6 +834,53 @@ void MainComponent::prepareWarpedClips()
     }
 
     lastWarpTempo = tempo;
+}
+
+void MainComponent::handleEditorViewChanged()
+{
+    if (editorPanel.isPianoRollVisible())
+    {
+        // refreshTabs also runs when the velocity lane changes. Capture the
+        // previous mode only when actually entering the piano roll, otherwise
+        // toggling that lane would make us forget what has to be restored.
+        if (! pianoRollPlaybackOverrideActive)
+        {
+            pianoRollPlaybackOverrideActive = true;
+            wasFollowingPlayhead = arrangementView.isFollowingPlayhead();
+            wasSongModeBeforePianoRoll = sessionState.isSongMode();
+
+            arrangementView.setFollowPlayhead(false);
+            setPatternPlaybackMode(true);
+        }
+    }
+    else if (pianoRollPlaybackOverrideActive)
+    {
+        pianoRollPlaybackOverrideActive = false;
+        arrangementView.setFollowPlayhead(wasFollowingPlayhead);
+
+        // Do not force Song on people who were already in Pattern mode before
+        // opening the roll. Only restore the mode the piano roll replaced.
+        if (wasSongModeBeforePianoRoll)
+            setPatternPlaybackMode(false);
+    }
+
+    refreshMenuState();
+}
+
+void MainComponent::setPatternPlaybackMode(bool shouldUsePatternMode)
+{
+    if (transportBar.isPatternMode() != shouldUsePatternMode)
+    {
+        transportBar.setPatternMode(shouldUsePatternMode);
+        return;
+    }
+
+    // setPatternMode intentionally does nothing when its button already has
+    // this state. The editor can still need to correct the session after a
+    // project/view change, so keep the engine's three representations aligned.
+    sessionState.setSongMode(! shouldUsePatternMode);
+    audioEngine.getTransport().setSongMode(! shouldUsePatternMode);
+    audioEngine.getTransport().setLoopEnabled(shouldUsePatternMode);
 }
 
 void MainComponent::timerCallback()
