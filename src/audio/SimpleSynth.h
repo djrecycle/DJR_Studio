@@ -48,7 +48,11 @@ public:
     SimpleSynth();
 
     void prepare(double sampleRate);
-    void render(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi);
+    /** Const, because the synthesiser underneath only reads the notes. Taking it
+        by reference is what lets the caller hand over its own buffer instead of
+        copying one per block.
+    */
+    void render(juce::AudioBuffer<float>& buffer, const juce::MidiBuffer& midi);
     void allNotesOff();
 
     /** Drum mode maps the General MIDI percussion pitches to synthesised hits. */

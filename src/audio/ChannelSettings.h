@@ -313,6 +313,12 @@ private:
 
     juce::AudioBuffer<float> echoBuffer;
     int echoWritePosition = 0;
+    /** Where the arpeggiator and the transpose rebuild a block before swapping
+        it back. Members rather than locals, and sized in prepare, so that
+        rewriting the MIDI never reaches for the heap on the audio thread.
+    */
+    juce::MidiBuffer arpScratch;
+    juce::MidiBuffer transposeScratch;
     /** Where each channel is reading the line, as a fraction: a detuned echo
         reads between samples.
     */

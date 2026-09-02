@@ -123,6 +123,13 @@ private:
     juce::AudioBuffer<float> scratchBuffer;
     /** The pre-fader copy, filled only for tracks that have a pre-fader send. */
     juce::AudioBuffer<float> preFaderBuffer;
+    /** The MIDI handed to each track in turn. One buffer for the whole pass is
+        enough - processAudio clears it before it writes - and it is a member so
+        that adding an event does not have to reach for the heap: a buffer
+        constructed inside the loop starts with no storage at all, so the first
+        note of every block on every track paid for an allocation.
+    */
+    juce::MidiBuffer scratchMidi;
     /** One summing buffer per track index; only the bus ones are ever used.
         Allocated once in prepare, because the audio thread cannot allocate.
     */

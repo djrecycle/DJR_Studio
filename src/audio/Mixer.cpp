@@ -32,6 +32,11 @@ void Mixer::prepare(double sampleRate, int blockSize)
     scratchBuffer.setSize(2, blockSize, false, false, true);
     preFaderBuffer.setSize(2, blockSize, false, false, true);
 
+    // Room for far more events than a block can carry - an all-notes-off is 129
+    // of them, the densest pattern nothing like that - so the audio thread never
+    // grows this. clear() keeps the storage, so paying once here is the whole cost.
+    scratchMidi.ensureSize(8192);
+
     const juce::SpinLock::ScopedLockType scoped(trackLock);
     preparedSampleRate = sampleRate;
     preparedBlockSize = blockSize;
@@ -261,8 +266,7 @@ void Mixer::process(juce::AudioBuffer<float>& output, const TrackPlaybackContext
         if (wantsPreFader)
             preFaderBuffer.clear();
 
-        juce::MidiBuffer midi;
-        track->processAudio(scratchBuffer, midi, trackContext,
+        track->processAudio(scratchBuffer, scratchMidi, trackContext,
                             wantsPreFader ? &preFaderBuffer : nullptr);
 
         // Held back here, before the signal is summed anywhere: sends and the

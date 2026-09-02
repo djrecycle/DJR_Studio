@@ -353,7 +353,7 @@ void SimpleSynth::prepare(double sampleRate)
         synth.setCurrentPlaybackSampleRate(sampleRate);
 }
 
-void SimpleSynth::render(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+void SimpleSynth::render(juce::AudioBuffer<float>& buffer, const juce::MidiBuffer& midi)
 {
     synth.renderNextBlock(buffer, midi, 0, buffer.getNumSamples());
 }

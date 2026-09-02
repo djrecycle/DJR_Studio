@@ -416,6 +416,12 @@ void ChannelSettings::prepare(double newSampleRate)
     echoBuffer.setSize(2, juce::jmax(1, static_cast<int>(rate * maxEchoSeconds)), false, true, false);
     echoWritePosition = 0;
 
+    // Same reasoning as the echo line: sized once here so the audio thread never
+    // has to grow them. The arpeggiator can write several events per step, so
+    // there is room for far more than a block will ever hold.
+    arpScratch.ensureSize(8192);
+    transposeScratch.ensureSize(8192);
+
     reset();
 }
 
@@ -547,7 +553,13 @@ void ChannelSettings::runArpeggiator(juce::MidiBuffer& midi, int numSamples, dou
     // leaves the instrument no gap to retrigger in.
     const auto gateSamples = stepSamples * juce::jlimit(0.05, 0.95, static_cast<double>(getArpGate()));
 
-    juce::MidiBuffer output;
+    // A member, cleared rather than constructed: built here every block, it
+    // allocated on the audio thread for every note the arpeggiator wrote.
+    // swapWith below hands its storage to the caller and takes theirs, and both
+    // sides are sized up front, so neither ever has to grow.
+    auto& output = arpScratch;
+    output.clear();
+
     int cursor = 0;
 
     const auto stopNote = [&] (int offset)
@@ -972,7 +984,11 @@ void ChannelSettings::transposeMidi(juce::MidiBuffer& midi)
     if (semitones == 0)
         return;
 
-    juce::MidiBuffer transposed;
+    // A member for the same reason as the arpeggiator's: transposing rebuilt the
+    // whole block into a freshly constructed buffer, which starts with no
+    // storage and so allocated on the first note every time.
+    auto& transposed = transposeScratch;
+    transposed.clear();
 
     for (const auto metadata : midi)
     {

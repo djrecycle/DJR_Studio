@@ -233,11 +233,12 @@ void MidiTrack::renderAudio(juce::AudioBuffer<float>& buffer,
 
     // Live playing is merged by Track before the instrument runs, so the preview
     // synth has to see it too - render after the sequence has been written.
+    //
+    // Handed over directly: the synthesiser only reads the notes, and the copy
+    // this used to make allocated on the audio thread every block for every
+    // track that has no instrument loaded - which is the default state.
     if (! hasInstrument())
-    {
-        juce::MidiBuffer forSynth(midi);
-        previewSynth.render(buffer, forSynth);
-    }
+        previewSynth.render(buffer, midi);
 }
 
 void MidiTrack::renderPatternMode(juce::MidiBuffer& midi, const TrackPlaybackContext& context, int numSamples)
