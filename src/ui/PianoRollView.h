@@ -98,6 +98,17 @@ private:
     void beginGroupDrag();
     void moveSelectedNotes(double deltaBeats, int deltaPitch);
     void deleteSelectedNotes();
+    /** Snapshots the selected notes into the clipboard, pitch and position as
+        they are - paste puts them back untouched, ready to be dragged to
+        another octave or, once the target track changes, another instrument.
+    */
+    void copySelectedNotes();
+    /** Appends the clipboard notes to the current clip and selects just the
+        new copies, so they can be dragged straight away without disturbing
+        what was already there.
+    */
+    void pasteNotes();
+    void shiftSelectedNotesByOctave(int direction);
 
     Tool activeTool = Tool::draw;
     int draggedNote = -1;
@@ -108,6 +119,10 @@ private:
     juce::Array<int> selectedNotes;
     /** Note starts captured when a group drag began, parallel to selectedNotes. */
     juce::Array<MidiNote> groupDragOrigins;
+    /** Survives a track switch, so a block copied from one instrument can be
+        pasted into another's pattern.
+    */
+    juce::Array<MidiNote> clipboardNotes;
     double dragGrabBeat = 0.0;
     /** How far into the note it was grabbed. Without this a note dragged by
         its middle jumps so its start lands under the pointer, which reads as

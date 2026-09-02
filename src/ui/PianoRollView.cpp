@@ -681,6 +681,64 @@ void PianoRollView::deleteSelectedNotes()
     repaint();
 }
 
+void PianoRollView::copySelectedNotes()
+{
+    if (selectedNotes.isEmpty())
+        return;
+
+    const auto notes = model.getNotes();
+    clipboardNotes.clearQuick();
+
+    for (const auto index : selectedNotes)
+        if (juce::isPositiveAndBelow(index, notes.size()))
+            clipboardNotes.add(notes[index]);
+}
+
+void PianoRollView::pasteNotes()
+{
+    if (clipboardNotes.isEmpty())
+        return;
+
+    if (onEditGesture)
+        onEditGesture(true);
+
+    auto notes = model.getNotes();
+    juce::Array<int> pastedIndices;
+
+    for (const auto& note : clipboardNotes)
+    {
+        pastedIndices.add(notes.size());
+        notes.add(note);
+    }
+
+    model.setNotes(notes);
+
+    if (onEditGesture)
+        onEditGesture(false);
+
+    // Select the copies, not the originals, so the obvious next move -
+    // dragging them to another octave or beat - only touches what was pasted.
+    selectedNotes = std::move(pastedIndices);
+    repaint();
+}
+
+void PianoRollView::shiftSelectedNotesByOctave(int direction)
+{
+    if (selectedNotes.isEmpty())
+        return;
+
+    if (onEditGesture)
+        onEditGesture(true);
+
+    beginGroupDrag();
+    moveSelectedNotes(0.0, direction * 12);
+
+    if (onEditGesture)
+        onEditGesture(false);
+
+    repaint();
+}
+
 bool PianoRollView::applyToolToNote(int noteIndex)
 {
     auto notes = model.getNotes();
@@ -755,6 +813,36 @@ bool PianoRollView::drawNoteAt(juce::Point<int> position)
 
 bool PianoRollView::keyPressed(const juce::KeyPress& key)
 {
+    if (key.getModifiers().isCtrlDown() || key.getModifiers().isCommandDown())
+    {
+        // Not getTextCharacter(): with ctrl held, X11 reports a control code,
+        // so matching on the letter never fires on Linux. getKeyCode() gives
+        // the plain uppercase key regardless of modifiers.
+        const auto character = juce::CharacterFunctions::toLowerCase(
+            static_cast<juce::juce_wchar>(key.getKeyCode()));
+
+        if (character == 'c')
+        {
+            copySelectedNotes();
+            return true;
+        }
+
+        if (character == 'v')
+        {
+            pasteNotes();
+            return true;
+        }
+
+        // Only steals the typing keyboard's octave shortcut (MainComponent's
+        // job otherwise) when there is a note block here to move instead.
+        if (! selectedNotes.isEmpty()
+            && (key.isKeyCode(juce::KeyPress::upKey) || key.isKeyCode(juce::KeyPress::downKey)))
+        {
+            shiftSelectedNotesByOctave(key.isKeyCode(juce::KeyPress::upKey) ? 1 : -1);
+            return true;
+        }
+    }
+
     if (selectedNotes.isEmpty())
         return false;
 
