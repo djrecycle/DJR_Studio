@@ -875,11 +875,24 @@ void ArrangementView::mouseMove(const juce::MouseEvent& event)
     }
 
     // Hovering over the gain handle of an audio clip shows the resize cursor.
+    // A point can only ever be in one track's row, so find that row first
+    // instead of rebuilding every track's clip list on every mouse move.
+    int hoverTrack = -1;
+
     for (int t = 0; t < mixer.getNumTracks(); ++t)
     {
-        for (const auto& c : getClipsForTrack(t))
+        if (getRowBounds(t).contains(event.getPosition()))
         {
-            if (! c.midi && getGainHandleBounds(t, c).contains(event.getPosition()))
+            hoverTrack = t;
+            break;
+        }
+    }
+
+    if (hoverTrack >= 0)
+    {
+        for (const auto& c : getClipsForTrack(hoverTrack))
+        {
+            if (! c.midi && getGainHandleBounds(hoverTrack, c).contains(event.getPosition()))
             {
                 setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
                 return;
@@ -2149,9 +2162,11 @@ juce::Rectangle<int> ArrangementView::getClipBounds(int trackIndex, const Clip& 
 juce::Rectangle<int> ArrangementView::getGainHandleBounds(int trackIndex, const Clip& clip) const
 {
     const auto cb = getClipBounds(trackIndex, clip);
-    // A 7px-tall strip spanning the full clip top — wide enough to grab,
-    // narrow enough not to obscure the waveform label.
-    return { cb.getX(), cb.getY(), cb.getWidth(), 7 };
+    // A 7px-tall strip across the clip top, wide enough to grab but stopping
+    // short of the left/right trim zones — otherwise dragging a corner always
+    // changed gain instead of trimming the clip.
+    const auto inset = juce::jmin(clipEdgeGrab, cb.getWidth() / 2);
+    return { cb.getX() + inset, cb.getY(), juce::jmax(0, cb.getWidth() - inset * 2), 7 };
 }
 
 ArrangementView::ClipDragMode ArrangementView::hitTestClip(juce::Point<int> position,
