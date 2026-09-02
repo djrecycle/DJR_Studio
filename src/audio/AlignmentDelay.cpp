@@ -7,6 +7,13 @@ void AlignmentDelay::prepare(int numChannels, double sampleRate)
 {
     capacity = juce::jmax(1, static_cast<int>(sampleRate * maxDelaySeconds) + 1);
     history.setSize(juce::jmax(1, numChannels), capacity, false, true, false);
+
+    // Re-clamped against the capacity we just took. A lower sample rate makes
+    // the line shorter, and a delay set for the old one would send process()
+    // reading at a negative index: writePosition - delay + capacity goes below
+    // zero, and C++ leaves the remainder negative.
+    setDelaySamples(getDelaySamples());
+
     reset();
 }
 

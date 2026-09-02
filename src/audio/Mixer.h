@@ -47,6 +47,18 @@ public:
                                                 const std::vector<bool>& isBus,
                                                 const std::vector<int>& destinations,
                                                 int& longestPathOut);
+
+    /** The same arithmetic, written into a vector the caller already owns.
+
+        refreshLatencyCompensation runs at UI rate against the lock the audio
+        thread only try-locks, so it reuses a buffer rather than allocating one
+        every time; the overload above is the one that reads nicely in a test.
+    */
+    static void computeLatencyHolds(const std::vector<int>& ownLatency,
+                                    const std::vector<bool>& isBus,
+                                    const std::vector<int>& destinations,
+                                    std::vector<int>& holdsOut,
+                                    int& longestPathOut);
     /** Delay applied to `index` right now, for the UI to report. */
     int getLatencyCompensationSamples(int index) const;
     /** The latest path through the graph, which is the latency the whole mix
@@ -145,6 +157,19 @@ private:
     std::atomic<int> reportedLatency { 0 };
     /** Audio-thread scratch for the solo pass; a member so it never allocates. */
     std::vector<bool> audible;
+    /** Message-thread scratch for the latency pass. Members for the same reason
+        as `audible`: the refresh runs at UI rate and holds a lock the audio
+        thread cannot wait for, so it must not touch the heap while it does.
+    */
+    std::vector<int> latencyOwn;
+    std::vector<bool> latencyIsBus;
+    std::vector<int> latencyDestinations;
+    std::vector<int> latencyHolds;
+    /** What was last written to the delay lines. An unchanged graph - which is
+        nearly every tick, since the timer is only there to catch a plugin that
+        changes its own latency mid-run - then costs no second lock at all.
+    */
+    std::vector<int> latencyApplied;
     /** Guards the track vector, the process order and the routing. The audio
         thread only ever try-locks it.
     */

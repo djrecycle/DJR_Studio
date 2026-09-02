@@ -50,6 +50,19 @@ void Mixer::prepare(double sampleRate, int blockSize)
 
     audible.resize(static_cast<size_t>(maxTracks));
 
+    // Reserved rather than sized: the latency pass assigns into these every
+    // time, and an assign that fits inside the capacity never allocates. Taking
+    // that capacity here is what keeps the refresh's lock hold empty of malloc.
+    latencyOwn.reserve(static_cast<size_t>(maxTracks));
+    latencyIsBus.reserve(static_cast<size_t>(maxTracks));
+    latencyDestinations.reserve(static_cast<size_t>(maxTracks));
+    latencyHolds.reserve(static_cast<size_t>(maxTracks));
+
+    // A value no hold can take, so the first refresh after a device change
+    // always writes: prepare re-sizes the delay lines, and whatever they were
+    // holding for the old sample rate does not carry over.
+    latencyApplied.assign(static_cast<size_t>(maxTracks), -1);
+
     // One delay line per slot, sized here for the same reason as the buffers:
     // a track that appears mid-session must already have somewhere to be held.
     outputDelays.resize(static_cast<size_t>(maxTracks));
@@ -77,13 +90,27 @@ std::vector<int> Mixer::computeLatencyHolds(const std::vector<int>& ownLatency,
                                            const std::vector<int>& destinations,
                                            int& longestPathOut)
 {
+    std::vector<int> holds;
+    computeLatencyHolds(ownLatency, isBus, destinations, holds, longestPathOut);
+    return holds;
+}
+
+void Mixer::computeLatencyHolds(const std::vector<int>& ownLatency,
+                                const std::vector<bool>& isBus,
+                                const std::vector<int>& destinations,
+                                std::vector<int>& holds,
+                                int& longestPathOut)
+{
     const auto count = static_cast<int>(ownLatency.size());
-    std::vector<int> holds(static_cast<size_t>(juce::jmax(0, count)), 0);
+
+    // assign rather than construct: called with a buffer that already has the
+    // capacity, this never reaches for the heap.
+    holds.assign(static_cast<size_t>(juce::jmax(0, count)), 0);
     longestPathOut = 0;
 
     if (count <= 0 || static_cast<int>(isBus.size()) != count
         || static_cast<int>(destinations.size()) != count)
-        return holds;
+        return;
 
     // What a signal leaving `index` still has to pass through before it reaches
     // the master, following the main output.
@@ -119,15 +146,36 @@ std::vector<int> Mixer::computeLatencyHolds(const std::vector<int>& ownLatency,
         holds[static_cast<size_t>(i)] =
             juce::jmax(0, longestPathOut - (ownLatency[static_cast<size_t>(i)] + downstreamOf(i)));
     }
-
-    return holds;
 }
 
 void Mixer::refreshLatencyCompensation()
 {
-    const juce::SpinLock::ScopedLockType scoped(trackLock);
+    auto trackCount = 0;
 
-    const auto trackCount = static_cast<int>(tracks.size());
+    {
+        // A snapshot, and nothing else. This runs on the message thread at UI
+        // rate, and the lock it takes is the one the audio thread only ever
+        // try-locks - a failed try there costs a whole block of silence. So the
+        // hold has to be as short as it can be made: the allocations and the
+        // arithmetic that used to sit inside it are both out of it now.
+        const juce::SpinLock::ScopedLockType scoped(trackLock);
+
+        trackCount = static_cast<int>(tracks.size());
+
+        // assign, not resize: the capacity was taken in prepare, so none of
+        // these three touch the heap.
+        latencyOwn.assign(static_cast<size_t>(trackCount), 0);
+        latencyIsBus.assign(static_cast<size_t>(trackCount), false);
+        latencyDestinations.assign(static_cast<size_t>(trackCount), Track::masterDestination);
+
+        for (int i = 0; i < trackCount; ++i)
+        {
+            const auto& track = tracks[static_cast<size_t>(i)];
+            latencyOwn[static_cast<size_t>(i)] = track->getPluginLatencySamples();
+            latencyIsBus[static_cast<size_t>(i)] = track->getKind() == TrackKind::bus;
+            latencyDestinations[static_cast<size_t>(i)] = track->getOutputDestination();
+        }
+    }
 
     if (trackCount <= 0)
     {
@@ -135,24 +183,34 @@ void Mixer::refreshLatencyCompensation()
         return;
     }
 
-    std::vector<int> own(static_cast<size_t>(trackCount), 0);
-    std::vector<bool> buses(static_cast<size_t>(trackCount), false);
-    std::vector<int> destinations(static_cast<size_t>(trackCount), Track::masterDestination);
-
-    for (int i = 0; i < trackCount; ++i)
-    {
-        const auto& track = tracks[static_cast<size_t>(i)];
-        own[static_cast<size_t>(i)] = track->getPluginLatencySamples();
-        buses[static_cast<size_t>(i)] = track->getKind() == TrackKind::bus;
-        destinations[static_cast<size_t>(i)] = track->getOutputDestination();
-    }
-
+    // Outside the lock: from here on it is arithmetic on the copy above.
     auto longest = 0;
-    const auto holds = computeLatencyHolds(own, buses, destinations, longest);
+    computeLatencyHolds(latencyOwn, latencyIsBus, latencyDestinations, latencyHolds, longest);
 
-    for (int i = 0; i < trackCount && i < static_cast<int>(holds.size()); ++i)
+    reportedLatency.store(longest, std::memory_order_release);
+
+    // Nearly every tick finds the graph exactly as it left it - the timer is
+    // only here to catch a plugin that changes its own latency while it runs -
+    // so taking the lock a second time to write back the same numbers would be
+    // contention for nothing.
+    if (latencyHolds == latencyApplied)
+        return;
+
+    latencyApplied = latencyHolds;
+
+    const juce::SpinLock::ScopedLockType scoped(trackLock);
+
+    // Tracks may have come or gone since the snapshot; the delay lines are sized
+    // once in prepare and never shrink, but bound the walk by all of them rather
+    // than trusting the count we started with.
+    const auto limit = juce::jmin(trackCount,
+                                  static_cast<int>(latencyHolds.size()),
+                                  static_cast<int>(outputDelays.size()),
+                                  static_cast<int>(preFaderDelays.size()));
+
+    for (int i = 0; i < limit; ++i)
     {
-        const auto hold = holds[static_cast<size_t>(i)];
+        const auto hold = latencyHolds[static_cast<size_t>(i)];
 
         if (auto& delay = outputDelays[static_cast<size_t>(i)])
             delay->setDelaySamples(hold);
@@ -160,8 +218,6 @@ void Mixer::refreshLatencyCompensation()
         if (auto& delay = preFaderDelays[static_cast<size_t>(i)])
             delay->setDelaySamples(hold);
     }
-
-    reportedLatency.store(longest, std::memory_order_release);
 }
 
 int Mixer::getLatencyCompensationSamples(int index) const

@@ -1298,6 +1298,23 @@ int main()
         delay.setDelaySamples(1000000);
         check(delay.getDelaySamples() <= static_cast<int>(pdcRate * djr::AlignmentDelay::maxDelaySeconds),
               "an absurd delay is clamped to what the line can hold");
+
+        // Preparing again at a lower rate makes the line shorter. A delay left
+        // over from the faster one would send process() reading at a negative
+        // index - writePosition - delay + capacity drops below zero, and C++
+        // leaves that remainder negative - so it has to be clamped again there.
+        delay.setDelaySamples(1000000);
+        delay.prepare(1, 8000.0);
+
+        check(delay.getDelaySamples()
+                  <= static_cast<int>(8000.0 * djr::AlignmentDelay::maxDelaySeconds),
+              "and clamped again when a slower rate shortens the line");
+
+        // Actually read it back at that delay: this is what a sanitizer build
+        // has to walk over if the clamp ever goes missing again.
+        juce::AudioBuffer<float> shortened(1, pdcBlock);
+        shortened.clear();
+        delay.process(shortened);
     }
 
     // --- Latency compensation: what the mixer works out ---------------------
