@@ -449,6 +449,29 @@ int main()
                     clip->setFadeOutSeconds(0.0);
                 }
 
+                // A project saved before gain existed has no "gain" key at
+                // all. getProperty on a missing key returns a void var,
+                // which casts to 0.0 - silencing every clip from an older
+                // project unless the fallback is unity instead.
+                {
+                    auto stateVar = clip->toVar();
+
+                    if (auto* stateObject = stateVar.getDynamicObject())
+                        stateObject->removeProperty("gain");
+
+                    juce::String reloadError;
+                    auto reopened = djr::AudioClip::createFromFile(wav, sampleRate, formats, reloadError);
+                    check(reopened != nullptr, "the clip's file loads a third time");
+
+                    if (reopened != nullptr)
+                    {
+                        reopened->setGain(0.4f);
+                        reopened->applyStateFromVar(stateVar);
+                        check(std::abs(reopened->getGain() - 1.0f) < 1.0e-6f,
+                              "state missing gain falls back to unity, not silence");
+                    }
+                }
+
                 // Warp modes, on the clip rather than on the stretcher alone.
                 // The source is a 220 Hz tone recorded at 120 BPM; played at
                 // 240 the two modes must disagree about the pitch.

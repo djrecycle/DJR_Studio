@@ -579,7 +579,12 @@ void AudioClip::applyStateFromVar(const juce::var& value)
 
     setStartBeat(static_cast<double>(object->getProperty("startBeat")));
     setOriginalTempo(static_cast<double>(object->getProperty("originalTempo")));
-    setGain(static_cast<float>(static_cast<double>(object->getProperty("gain"))));
+
+    // Absent in state written before gain existed. getProperty then returns a
+    // void var that casts to 0.0, which would silence every clip from an
+    // older project instead of leaving it at unity.
+    const auto gainValue = object->getProperty("gain");
+    setGain(gainValue.isVoid() ? 1.0f : static_cast<float>(static_cast<double>(gainValue)));
     setWarpEnabled(static_cast<bool>(object->getProperty("warp")));
 
     // Absent in files written before there was a choice, and those clips were
