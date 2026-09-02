@@ -63,6 +63,16 @@ bool ExportManager::render(Mixer& mixer,
     const auto totalSamples = static_cast<juce::int64>(
         options.lengthBeats * (60.0 / options.tempoBpm) * options.sampleRate);
 
+    // A write failure leaves a truncated, unplayable file behind; better to
+    // remove it than let the user find a wav that looks done but isn't.
+    const auto failWithPartialFile = [&] (const juce::String& message)
+    {
+        writer.reset();
+        outputFile.deleteFile();
+        errorOut = message;
+        return false;
+    };
+
     juce::AudioBuffer<float> block(channels, options.blockSize);
     auto beat = options.startBeat;
     juce::int64 written = 0;
@@ -86,10 +96,7 @@ bool ExportManager::render(Mixer& mixer,
         mixer.process(view, context);
 
         if (! writer->writeFromAudioSampleBuffer(view, 0, samplesThisBlock))
-        {
-            errorOut = TRANS("Writing the file failed part way through the render.");
-            return false;
-        }
+            return failWithPartialFile(TRANS("Writing the file failed part way through the render."));
 
         written += samplesThisBlock;
         beat = context.endBeat;
@@ -125,9 +132,10 @@ bool ExportManager::render(Mixer& mixer,
             peak = juce::jmax(peak, view.getMagnitude(channel, 0, samplesThisBlock));
 
         if (! writer->writeFromAudioSampleBuffer(view, 0, samplesThisBlock))
-            break;
+            return failWithPartialFile(TRANS("Writing the file failed while rendering the tail."));
 
         tailWritten += samplesThisBlock;
+        beat = context.endBeat;
 
         if (peak <= 1.0e-5f)
             break;

@@ -1131,6 +1131,139 @@ int main()
         }
     }
 
+    // --- The export tail keeps advancing, not stuck replaying one block -----
+    // The bug: the render loop lost `beat = context.endBeat` in its tail
+    // phase, so every tail block re-read the exact same source position. A
+    // frozen track reads straight from its render at `context.startBeat`, so
+    // freezing a source whose loudness ramps up over time makes a frozen
+    // beat directly audible: the whole tail would stay as quiet as its very
+    // first instant instead of following the ramp.
+    {
+        djr::Mixer tailMixer;
+        tailMixer.prepare(sampleRate, blockSize);
+
+        auto* track = findFirstMidiTrack(tailMixer);
+        check(track != nullptr, "there is a track to freeze for the tail check");
+
+        if (track != nullptr)
+        {
+            const auto sourceFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                        .getChildFile("djr_engine_test_tail_source.wav");
+            sourceFile.deleteFile();
+
+            // Quiet for the first two seconds - what the main render plays -
+            // then a steady amplitude ramp for two more, long enough to cover
+            // the export's 1.5 second tail with room to spare.
+            {
+                juce::WavAudioFormat wavFormat;
+                std::unique_ptr<juce::FileOutputStream> stream(sourceFile.createOutputStream());
+                std::unique_ptr<juce::AudioFormatWriter> writer(
+                    wavFormat.createWriterFor(stream.get(), sampleRate, 2, 16, {}, 0));
+
+                check(writer != nullptr, "tail source writer opens");
+
+                if (writer != nullptr)
+                {
+                    stream.release();
+
+                    const auto totalSamples = static_cast<int>(sampleRate * 4.0);
+                    juce::AudioBuffer<float> source(2, totalSamples);
+                    double phase = 0.0;
+
+                    for (int sample = 0; sample < totalSamples; ++sample)
+                    {
+                        const auto seconds = sample / sampleRate;
+                        const auto amplitude = seconds < 2.0 ? 0.4 : 0.05 + (seconds - 2.0) / 2.0 * 0.85;
+                        const auto value = static_cast<float>(std::sin(phase) * amplitude);
+                        phase += juce::MathConstants<double>::twoPi * 220.0 / sampleRate;
+
+                        for (int channel = 0; channel < 2; ++channel)
+                            source.setSample(channel, sample, value);
+                    }
+
+                    writer->writeFromAudioSampleBuffer(source, 0, totalSamples);
+                    writer.reset();
+                }
+            }
+
+            juce::AudioFormatManager formats;
+            formats.registerBasicFormats();
+            juce::String loadError;
+            auto tailClip = djr::AudioClip::createFromFile(sourceFile, sampleRate, formats, loadError);
+            check(tailClip != nullptr, "the tail source loads back as a clip: " + loadError);
+
+            if (tailClip != nullptr)
+            {
+                tailClip->setWarpEnabled(false);
+                track->setFrozenAudio(std::move(tailClip));
+
+                const auto renderFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                            .getChildFile("djr_engine_test_tail_export.wav");
+                renderFile.deleteFile();
+
+                djr::ExportManager tailExporter;
+                djr::ExportManager::Options tailOptions;
+                tailOptions.sampleRate = sampleRate;
+                tailOptions.blockSize = blockSize;
+                tailOptions.tempoBpm = tempoBpm;
+                tailOptions.lengthBeats = 4.0; // two seconds at 120 BPM
+                tailOptions.songMode = false;
+
+                juce::String tailError;
+                const auto tailRendered = tailExporter.render(tailMixer, renderFile, tailOptions, tailError);
+                check(tailRendered, "the tail export renders: " + tailError);
+
+                if (tailRendered)
+                {
+                    juce::AudioFormatManager readFormats;
+                    readFormats.registerBasicFormats();
+                    std::unique_ptr<juce::AudioFormatReader> tailReader(readFormats.createReaderFor(renderFile));
+                    check(tailReader != nullptr, "the tail export can be read back");
+
+                    if (tailReader != nullptr)
+                    {
+                        const auto mainSamples = static_cast<juce::int64>(sampleRate * 2.0);
+                        check(tailReader->lengthInSamples > mainSamples,
+                              "the export has a tail past the main render");
+
+                        const auto tailLength = tailReader->lengthInSamples - mainSamples;
+                        const auto probeLength = static_cast<int>(juce::jmin<juce::int64>(
+                            tailLength / 4, static_cast<juce::int64>(sampleRate * 0.2)));
+
+                        if (probeLength > 0)
+                        {
+                            juce::AudioBuffer<float> earlyTail(static_cast<int>(tailReader->numChannels), probeLength);
+                            tailReader->read(&earlyTail, 0, probeLength, mainSamples, true, true);
+
+                            juce::AudioBuffer<float> lateTail(static_cast<int>(tailReader->numChannels), probeLength);
+                            tailReader->read(&lateTail, 0, probeLength,
+                                             tailReader->lengthInSamples - probeLength, true, true);
+
+                            auto earlyPeak = 0.0f;
+                            auto latePeak = 0.0f;
+
+                            for (int channel = 0; channel < earlyTail.getNumChannels(); ++channel)
+                            {
+                                earlyPeak = std::max(earlyPeak, earlyTail.getMagnitude(channel, 0, probeLength));
+                                latePeak = std::max(latePeak, lateTail.getMagnitude(channel, 0, probeLength));
+                            }
+
+                            check(latePeak > earlyPeak * 1.3f,
+                                  "the tail keeps advancing through the frozen source instead of "
+                                  "repeating its first block");
+                        }
+                    }
+
+                    tailReader.reset();
+                }
+
+                renderFile.deleteFile();
+            }
+
+            sourceFile.deleteFile();
+        }
+    }
+
     // --- Recording writes a real file ---------------------------------------
     {
         const auto wav = juce::File::getSpecialLocation(juce::File::tempDirectory)
