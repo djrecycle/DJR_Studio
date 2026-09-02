@@ -2433,6 +2433,10 @@ int main()
                     // the fader down still silences the track.
                     const auto stored = track->getVolume();
                     track->setVolume(0.0f);
+                    // The first block ramps down to the new gain rather than
+                    // snapping to it - that ramp is itself audio, and would
+                    // otherwise read as the fader not having taken effect.
+                    renderPeak(freezeMixer, true, 1);
                     check(isSilent(renderPeak(freezeMixer, true, 8)),
                           "the fader still works on a frozen track");
                     track->setVolume(stored);

@@ -841,16 +841,34 @@ void Track::applyLevels(juce::AudioBuffer<float>& buffer) const noexcept
         return juce::jlimit(0.0f, 1.0f, 1.0f + juce::jmin(0.0f, panValue));
     };
 
-    // Nothing being automated is by far the common case, and it costs one gain
-    // call for the whole buffer.
+    // Nothing being automated is by far the common case, and it still ramps
+    // from wherever the last block left off rather than snapping straight to
+    // the fader's new position: a flat gain per buffer clicks at every block
+    // boundary the moment the fader moves during playback, same as a plain
+    // step would on the automated path below.
     if (! blockVolumeAutomated && ! blockPanAutomated)
     {
-        buffer.applyGain(storedVolume);
+        if (std::abs(storedVolume - lastManualVolume) < gainEpsilon)
+            buffer.applyGain(storedVolume);
+        else
+            buffer.applyGainRamp(0, numSamples, lastManualVolume, storedVolume);
+
+        lastManualVolume = storedVolume;
 
         if (stereo)
         {
-            buffer.applyGain(0, 0, numSamples, leftGain(storedPan));
-            buffer.applyGain(1, 0, numSamples, rightGain(storedPan));
+            if (std::abs(storedPan - lastManualPan) < gainEpsilon)
+            {
+                buffer.applyGain(0, 0, numSamples, leftGain(storedPan));
+                buffer.applyGain(1, 0, numSamples, rightGain(storedPan));
+            }
+            else
+            {
+                buffer.applyGainRamp(0, 0, numSamples, leftGain(lastManualPan), leftGain(storedPan));
+                buffer.applyGainRamp(1, 0, numSamples, rightGain(lastManualPan), rightGain(storedPan));
+            }
+
+            lastManualPan = storedPan;
         }
 
         return;
@@ -892,6 +910,15 @@ void Track::applyLevels(juce::AudioBuffer<float>& buffer) const noexcept
         buffer.applyGainRamp(0, begin, length, leftGain(panStart), leftGain(panEnd));
         buffer.applyGainRamp(1, begin, length, rightGain(panStart), rightGain(panEnd));
     }
+
+    // Keeps the non-automated path above starting from here, in case the
+    // automation lane stops feeding one or both parameters next block.
+    lastManualVolume = blockVolumeAutomated
+        ? blockVolumeCurve[static_cast<size_t>(blockAutomationChunks)]
+        : storedVolume;
+    lastManualPan = blockPanAutomated
+        ? blockPanCurve[static_cast<size_t>(blockAutomationChunks)]
+        : storedPan;
 }
 
 } // namespace djr

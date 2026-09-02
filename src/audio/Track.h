@@ -287,6 +287,15 @@ private:
     bool blockVolumeAutomated = false;
     bool blockPanAutomated = false;
 
+    /** Where the last block's gain actually ended up, automated or not, so the
+        non-automated path in applyLevels() can ramp from there instead of
+        snapping straight to the fader's new position. Mutable because
+        applyLevels() is const: it changes what the buffer is scaled by, not
+        the track's settings.
+    */
+    mutable float lastManualVolume = 0.8f;
+    mutable float lastManualPan = 0.0f;
+
     // Published for the mixer faders.
     std::atomic<float> automatedVolume { 0.8f };
     std::atomic<float> automatedPan { 0.0f };

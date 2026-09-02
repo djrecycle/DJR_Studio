@@ -22,6 +22,11 @@ private:
     std::atomic<float> peakLevel { 0.0f };
     std::atomic<float> peakLevelLeft { 0.0f };
     std::atomic<float> peakLevelRight { 0.0f };
+
+    /** Where the last block's gain actually ended up. Only process() (audio
+        thread only) touches this, so it needs no atomic.
+    */
+    float lastGain = 0.85f;
 };
 
 } // namespace djr
