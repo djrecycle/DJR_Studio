@@ -120,14 +120,12 @@ MainComponent::MainComponent()
     });
     transportBar.setPatternModeChangeCallback([this] (bool patternMode)
     {
-        // The piano roll is an editor for one pattern. Letting Song mode through
-        // here would make the playlist sound while the user is auditioning its
-        // notes, so immediately keep the transport in Pattern mode.
-        if (editorPanel.isPianoRollVisible() && ! patternMode)
-        {
-            setPatternPlaybackMode(true);
-            return;
-        }
+        // Pattern mode auditions one track in isolation; Song mode hands
+        // back whatever solo state the user had set by hand before that.
+        if (patternMode)
+            beginPatternAuditionSolo(sessionState.getSelectedTrack());
+        else
+            endPatternAuditionSolo();
 
         sessionState.setSongMode(! patternMode);
         setStatusMessage(patternMode
@@ -195,6 +193,13 @@ MainComponent::MainComponent()
         }
 
         editorPanel.showPianoRoll();
+
+        // Opening a clip to audition its notes should loop that pattern alone,
+        // not play the whole playlist underneath it, and only that track
+        // should be heard while it does.
+        setPatternPlaybackMode(true);
+        beginPatternAuditionSolo(trackIndex);
+
         refreshMenuState();
         setStatusMessage("Piano roll: " + juce::String(getTrack(trackIndex) != nullptr
                                                            ? getTrack(trackIndex)->getName()
@@ -850,27 +855,19 @@ void MainComponent::handleEditorViewChanged()
     if (editorPanel.isPianoRollVisible())
     {
         // refreshTabs also runs when the velocity lane changes. Capture the
-        // previous mode only when actually entering the piano roll, otherwise
+        // previous value only when actually entering the piano roll, otherwise
         // toggling that lane would make us forget what has to be restored.
-        if (! pianoRollPlaybackOverrideActive)
+        if (! pianoRollFollowOverrideActive)
         {
-            pianoRollPlaybackOverrideActive = true;
+            pianoRollFollowOverrideActive = true;
             wasFollowingPlayhead = arrangementView.isFollowingPlayhead();
-            wasSongModeBeforePianoRoll = sessionState.isSongMode();
-
             arrangementView.setFollowPlayhead(false);
-            setPatternPlaybackMode(true);
         }
     }
-    else if (pianoRollPlaybackOverrideActive)
+    else if (pianoRollFollowOverrideActive)
     {
-        pianoRollPlaybackOverrideActive = false;
+        pianoRollFollowOverrideActive = false;
         arrangementView.setFollowPlayhead(wasFollowingPlayhead);
-
-        // Do not force Song on people who were already in Pattern mode before
-        // opening the roll. Only restore the mode the piano roll replaced.
-        if (wasSongModeBeforePianoRoll)
-            setPatternPlaybackMode(false);
     }
 
     refreshMenuState();
@@ -890,6 +887,46 @@ void MainComponent::setPatternPlaybackMode(bool shouldUsePatternMode)
     sessionState.setSongMode(! shouldUsePatternMode);
     audioEngine.getTransport().setSongMode(! shouldUsePatternMode);
     audioEngine.getTransport().setLoopEnabled(shouldUsePatternMode);
+}
+
+void MainComponent::soloTrackExclusively(int trackIndex)
+{
+    auto& mixer = audioEngine.getMixer();
+
+    for (int i = 0; i < mixer.getNumTracks(); ++i)
+        if (auto* track = mixer.getTrack(i))
+            track->setSoloed(i == trackIndex);
+}
+
+void MainComponent::beginPatternAuditionSolo(int trackIndex)
+{
+    if (! patternAuditionSoloActive)
+    {
+        patternAuditionSoloActive = true;
+
+        auto& mixer = audioEngine.getMixer();
+        soloStateBeforeAudition.clearQuick();
+        for (int i = 0; i < mixer.getNumTracks(); ++i)
+        {
+            auto* track = mixer.getTrack(i);
+            soloStateBeforeAudition.add(track != nullptr && track->isSoloed());
+        }
+    }
+
+    soloTrackExclusively(trackIndex);
+}
+
+void MainComponent::endPatternAuditionSolo()
+{
+    if (! patternAuditionSoloActive)
+        return;
+
+    patternAuditionSoloActive = false;
+
+    auto& mixer = audioEngine.getMixer();
+    for (int i = 0; i < mixer.getNumTracks() && i < soloStateBeforeAudition.size(); ++i)
+        if (auto* track = mixer.getTrack(i))
+            track->setSoloed(soloStateBeforeAudition[i]);
 }
 
 void MainComponent::timerCallback()

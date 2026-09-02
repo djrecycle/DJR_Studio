@@ -144,15 +144,23 @@ private:
     void closeWindowsForMissingTracks();
     /** Rebuilds the pitch-preserved copies when the tempo has moved. */
     void prepareWarpedClips();
-    /** Piano roll always auditions the active pattern, never the playlist.
-        Leaving it restores Song mode only when that was the mode before it
-        was opened.
+    /** Stops the arrangement view auto-scrolling while the piano roll has
+        the room; restores it once the step sequencer takes over.
     */
     void handleEditorViewChanged();
     /** Keeps session, transport and the mode buttons in sync even when the
         requested mode is already selected in the transport bar.
     */
     void setPatternPlaybackMode(bool shouldUsePatternMode);
+    /** Auditioning one pattern should only sound its own track. Captures
+        whatever solo state the user had set by hand the first time it kicks
+        in, and leaves it alone on every track switch after that, so
+        endPatternAuditionSolo() has the pre-audition mix to hand back.
+    */
+    void beginPatternAuditionSolo(int trackIndex);
+    /** Hands the manual solo state back once Song mode takes back over. */
+    void endPatternAuditionSolo();
+    void soloTrackExclusively(int trackIndex);
     void selectTrack(int trackIndex);
     /** Pushes the current selection into every panel and the audio engine. */
     void applySelectionToPanels();
@@ -258,11 +266,17 @@ private:
     bool autoOpenPluginEditor = true;
     bool projectDirty = false;
     /** Captured once per piano-roll visit; the velocity-lane toggle also
-        refreshes the editor, so it must not overwrite the original values.
+        refreshes the editor, so it must not overwrite the original value.
     */
-    bool pianoRollPlaybackOverrideActive = false;
+    bool pianoRollFollowOverrideActive = false;
     bool wasFollowingPlayhead = true;
-    bool wasSongModeBeforePianoRoll = false;
+
+    /** Set once when pattern-audition solo first kicks in, so a later track
+        switch while still auditioning does not overwrite it with the
+        exclusive-solo state audition itself put in place.
+    */
+    bool patternAuditionSoloActive = false;
+    juce::Array<bool> soloStateBeforeAudition;
 
     /** Tempo the warped clips were last stretched for. */
     double lastWarpTempo = 0.0;
