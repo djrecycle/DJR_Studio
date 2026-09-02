@@ -43,6 +43,11 @@ EditorPanel::EditorPanel(PianoRollModel& modelToUse, Transport& transport)
     velocityToggle.setTooltip("Tampilkan / sembunyikan velocity lane");
     addAndMakeVisible(velocityToggle);
 
+    followButton.setIconInset(4.0f);
+    followButton.addListener(this);
+    followButton.setTooltip(TRANS("Follow playhead during playback"));
+    addAndMakeVisible(followButton);
+
     addAndMakeVisible(pianoRoll);
     addAndMakeVisible(velocityLane);
     addChildComponent(stepSequencer);
@@ -68,6 +73,7 @@ EditorPanel::EditorPanel(PianoRollModel& modelToUse, Transport& transport)
     addAndMakeVisible(keyboard);
 
     buildToolButtons();
+    refreshFollowButton();
 
     model.addChangeListener(this);
     refreshTabs();
@@ -115,6 +121,13 @@ void EditorPanel::refreshToolButtons()
         }
 }
 
+void EditorPanel::refreshFollowButton()
+{
+    followButton.setIcon(pianoRoll.isFollowingPlayhead() ? Icon::chevronRight : Icon::minimise);
+    // Following only means anything while the roll itself is on screen.
+    followButton.setVisible(pianoRollVisible);
+}
+
 EditorPanel::~EditorPanel()
 {
     keyboardState.removeListener(&keyboardBridge);
@@ -125,6 +138,7 @@ EditorPanel::~EditorPanel()
     pianoRollTab.removeListener(this);
     stepSequencerTab.removeListener(this);
     velocityToggle.removeListener(this);
+    followButton.removeListener(this);
 }
 
 void EditorPanel::paint(juce::Graphics& g)
@@ -154,7 +168,9 @@ void EditorPanel::paint(juce::Graphics& g)
     g.setFont(Theme::ui(11.0f));
     g.drawText("Velocity", toggleArea, juce::Justification::centred, false);
 
-    info = info.withRight(toggleArea.getX());
+    // Stop short of the follow button too, whether or not it is shown for the
+    // current tab - its slot in the strip is reserved either way.
+    info = info.withRight(followButton.getBounds().getX());
     drawDivider(info.removeFromRight(11));
 
     const auto notesText = juce::String(noteCount) + " notes";
@@ -415,6 +431,8 @@ void EditorPanel::resized()
     stepSequencerTab.setBounds(strip.removeFromLeft(stepSequencerTab.getPreferredWidth()));
 
     velocityToggle.setBounds(strip.removeFromRight(58).withSizeKeepingCentre(58, 16));
+    followButton.setBounds(strip.removeFromRight(19).withSizeKeepingCentre(18, 18));
+    strip.removeFromRight(4);
 
     // Tools sit after the pattern controls, in the gap before the note count.
     auto tools = strip.withX(getPatternLengthBounds().getRight() + 10)
@@ -525,6 +543,11 @@ void EditorPanel::buttonClicked(juce::Button* button)
     {
         setVelocityLaneVisible(! velocityLaneVisible);
     }
+    else if (button == &followButton)
+    {
+        pianoRoll.setFollowPlayhead(! pianoRoll.isFollowingPlayhead());
+        refreshFollowButton();
+    }
     else
     {
         static const PianoRollView::Tool order[] = {
@@ -554,6 +577,7 @@ void EditorPanel::changeListenerCallback(juce::ChangeBroadcaster* source)
 void EditorPanel::refreshTabs()
 {
     refreshToolButtons();
+    refreshFollowButton();
 
     pianoRollTab.setToggleState(pianoRollVisible, juce::dontSendNotification);
     stepSequencerTab.setToggleState(! pianoRollVisible, juce::dontSendNotification);

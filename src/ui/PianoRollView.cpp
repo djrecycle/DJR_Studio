@@ -904,18 +904,23 @@ void PianoRollView::timerCallback()
     {
         // Follow the playhead, so it does not simply run off the right edge.
         // Only once it actually leaves the visible range, and it lands a little
-        // in from the left so the next bar is already on screen.
-        const auto visibleWidth = getContentBounds().getWidth() - keyboardWidth;
-
-        if (visibleWidth > 0)
+        // in from the left so the next bar is already on screen. Gated on
+        // followPlayhead so scrolling to look elsewhere during playback sticks
+        // instead of snapping back thirty times a second.
+        if (followPlayhead)
         {
-            const auto visibleBeats = visibleWidth / pixelsPerBeat;
-            const auto position = transport.getPositionBeats();
+            const auto visibleWidth = getContentBounds().getWidth() - keyboardWidth;
 
-            if (position < scrollBeats || position > scrollBeats + visibleBeats * 0.85)
+            if (visibleWidth > 0)
             {
-                scrollBeats = juce::jmax(0.0, position - visibleBeats * 0.15);
-                refreshScrollBars();
+                const auto visibleBeats = visibleWidth / pixelsPerBeat;
+                const auto position = transport.getPositionBeats();
+
+                if (position < scrollBeats || position > scrollBeats + visibleBeats * 0.85)
+                {
+                    scrollBeats = juce::jmax(0.0, position - visibleBeats * 0.15);
+                    refreshScrollBars();
+                }
             }
         }
 
@@ -1022,6 +1027,16 @@ double PianoRollView::getBeatsPerBar() const noexcept
 double PianoRollView::getScrollBeats() const noexcept
 {
     return scrollBeats;
+}
+
+void PianoRollView::setFollowPlayhead(bool shouldFollow)
+{
+    followPlayhead = shouldFollow;
+}
+
+bool PianoRollView::isFollowingPlayhead() const noexcept
+{
+    return followPlayhead;
 }
 
 } // namespace djr

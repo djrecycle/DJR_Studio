@@ -70,6 +70,12 @@ public:
     /** Colour used for a note of the given velocity, shared with the velocity lane. */
     static juce::Colour velocityColour(float velocity);
 
+    /** Keep the roll scrolled to the playhead while it plays, like the
+        playlist's own follow toggle. On by default.
+    */
+    void setFollowPlayhead(bool shouldFollow);
+    bool isFollowingPlayhead() const noexcept;
+
 private:
     void changeListenerCallback(juce::ChangeBroadcaster* source) override;
     void timerCallback() override;
@@ -147,6 +153,7 @@ private:
     SnapUnit snapUnit = SnapUnit::step;
     double pixelsPerBeat = 14.0;
     double scrollBeats = 0.0;
+    bool followPlayhead = true;
     int topPitch = 84;
     /** A drag that started on the ruler keeps moving the playhead, even once
         the pointer has wandered down into the notes.

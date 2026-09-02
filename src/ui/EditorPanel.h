@@ -99,12 +99,17 @@ private:
 
     void buildToolButtons();
     void refreshToolButtons();
+    void refreshFollowButton();
 
     juce::OwnedArray<IconChipButton> toolButtons;
 
     UnderlineTab pianoRollTab { "Piano Roll", Icon::notes };
     UnderlineTab stepSequencerTab { "Step Sequencer", Icon::steps };
     HitAreaButton velocityToggle { "Velocity lane" };
+    /** Toggles the roll's own follow-the-playhead autoscroll, same idea as the
+        playlist's follow button.
+    */
+    IconChipButton followButton { "Ikuti playhead", Icon::chevronRight };
 
     PianoRollView pianoRoll;
     VelocityLane velocityLane;
