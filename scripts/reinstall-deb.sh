@@ -7,8 +7,6 @@ BUILD_TYPE="${BUILD_TYPE:-Release}"
 JOBS="${JOBS:-$(nproc)}"
 CONFIG_DIR_LOWER="$(printf '%s' "${BUILD_TYPE}" | tr '[:upper:]' '[:lower:]')"
 BUILD_DIR="${REPO_ROOT}/build-${CONFIG_DIR_LOWER}"
-PACKAGE_NAME="djr-studio-0.1.0-Linux.deb"
-PACKAGE_PATH="${BUILD_DIR}/${PACKAGE_NAME}"
 JUCE_SOURCE_DIR=""
 for candidate in \
     "${BUILD_DIR}/_deps/juce-src" \
@@ -35,6 +33,25 @@ if [[ -n "${JUCE_SOURCE_DIR}" ]]; then
 fi
 
 cmake "${cmake_args[@]}"
+
+# CPack expands the version declared in CMakeLists.txt into this generated
+# configuration. Reading it here keeps the installer aligned with future
+# version bumps instead of duplicating a package name in this script.
+CPACK_CONFIG="${BUILD_DIR}/CPackConfig.cmake"
+
+if [[ ! -f "${CPACK_CONFIG}" ]]; then
+    echo "[DJR_Studio] Konfigurasi CPack tidak ditemukan: ${CPACK_CONFIG}" >&2
+    exit 1
+fi
+
+PACKAGE_BASENAME="$(sed -nE 's/^set\(CPACK_PACKAGE_FILE_NAME "([^"]+)"\)$/\1/p' "${CPACK_CONFIG}" | head -n 1)"
+
+if [[ -z "${PACKAGE_BASENAME}" ]]; then
+    echo "[DJR_Studio] Nama paket tidak ditemukan di: ${CPACK_CONFIG}" >&2
+    exit 1
+fi
+
+PACKAGE_PATH="${BUILD_DIR}/${PACKAGE_BASENAME}.deb"
 
 echo "[DJR_Studio] Build app..."
 cmake --build "${BUILD_DIR}" -j"${JOBS}"

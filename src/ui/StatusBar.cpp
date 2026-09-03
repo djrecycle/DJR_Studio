@@ -39,7 +39,7 @@ void StatusBar::paint(juce::Graphics& g)
 
     const auto deviceText = device != nullptr
         ? juce::String::fromUTF8("\xe2\x97\x8f ") + deviceManager.getCurrentAudioDeviceType() + " - " + device->getName()
-        : juce::String::fromUTF8("\xe2\x97\x8f ") + "Tidak ada audio device";
+        : juce::String::fromUTF8("\xe2\x97\x8f ") + TRANS("No audio device");
 
     g.setColour(device != nullptr ? Theme::green() : Theme::pink());
     g.drawText(deviceText, area.removeFromLeft(measure(deviceText)), juce::Justification::centredLeft, false);
@@ -48,15 +48,21 @@ void StatusBar::paint(juce::Graphics& g)
     const auto sampleRate = engine.getCurrentSampleRate();
     const auto bufferSize = engine.getCurrentBufferSize();
     const auto latencyMs = sampleRate > 0.0 ? bufferSize / sampleRate * 1000.0 : 0.0;
-    const auto formatText = juce::String(sampleRate, 0) + " Hz - "
-                          + juce::String(bufferSize) + " smp - "
-                          + juce::String(latencyMs, 1) + " ms";
+    auto formatText = juce::String(sampleRate, 0) + " Hz - "
+                    + juce::String(bufferSize) + " smp - "
+                    + juce::String(latencyMs, 1) + " ms";
+
+    // Only when there is some. Plugin latency is invisible otherwise, and the
+    // usual first symptom is a mix that feels loose without anyone knowing why.
+    if (const auto compensated = engine.getMixer().getReportedLatencySamples(); compensated > 0)
+        formatText += " (+" + juce::String(sampleRate > 0.0 ? compensated / sampleRate * 1000.0 : 0.0, 1)
+                    + " ms PDC)";
 
     g.setColour(Theme::mutedText());
     g.drawText(formatText, area.removeFromLeft(measure(formatText)), juce::Justification::centredLeft, false);
     area.removeFromLeft(11);
 
-    const auto pluginText = "VST3: " + juce::String(pluginCount) + " scanned";
+    const auto pluginText = "Plugin: " + juce::String(pluginCount) + " scanned";
     g.drawText(pluginText, area.removeFromLeft(measure(pluginText)), juce::Justification::centredLeft, false);
     area.removeFromLeft(11);
 
@@ -64,7 +70,7 @@ void StatusBar::paint(juce::Graphics& g)
     auto right = area;
     const auto hintText = message.isNotEmpty()
         ? message
-        : juce::String("Space play - R rec - Ctrl+S save");
+        : juce::String("Space play - Ctrl+R rec - Ctrl+S save");
 
     const auto percentText = juce::String(juce::roundToInt(cpuUsage * 100.0f)) + "%";
 

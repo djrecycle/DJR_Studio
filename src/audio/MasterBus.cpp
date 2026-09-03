@@ -1,7 +1,14 @@
 #include "MasterBus.h"
 
+#include <cmath>
+
 namespace djr
 {
+
+namespace
+{
+    constexpr float gainEpsilon = 1.0e-7f;
+}
 
 void MasterBus::setGain(float newGain) noexcept
 {
@@ -32,7 +39,15 @@ float MasterBus::getPeakLevel(int channel) const noexcept
 void MasterBus::process(juce::AudioBuffer<float>& buffer) noexcept
 {
     const auto currentGain = getGain();
-    buffer.applyGain(currentGain);
+
+    // Ramped rather than a flat gain per buffer, or riding the master fader
+    // during playback clicks at every block boundary.
+    if (std::abs(currentGain - lastGain) < gainEpsilon)
+        buffer.applyGain(currentGain);
+    else
+        buffer.applyGainRamp(0, buffer.getNumSamples(), lastGain, currentGain);
+
+    lastGain = currentGain;
 
     float peak = 0.0f;
     for (int channel = 0; channel < buffer.getNumChannels(); ++channel)

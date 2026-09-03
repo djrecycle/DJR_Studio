@@ -25,6 +25,33 @@ struct ProjectTrackState
     juce::Array<juce::var> pluginStates;
     /** Audio clips laid out on this track. */
     juce::Array<juce::var> audioClips;
+    /** Automation lanes: their target, their curve and whether they are live. */
+    juce::Array<juce::var> automation;
+    /** Where the main output goes: -1 for master, otherwise a bus track index. */
+    int outputDestination = -1;
+    /** Which device input feeds this track: -1 for none. Channel 0 as a stereo
+        pair is what every track did before this was selectable, so a project
+        saved without it opens sounding the same.
+    */
+    int inputChannel = 0;
+    bool inputStereo = true;
+    /** Send slots, each with its destination, level and pre/post fader flag. */
+    juce::Array<juce::var> sends;
+    /** The render a frozen track plays instead of its own content. Empty means
+        the track is not frozen; the clips and plugins are saved either way, so
+        unfreezing after reopening still gets everything back.
+    */
+    juce::String frozenFile;
+    /** The channel's own envelope, LFO, filter and arpeggiator settings.
+        Void on a track that was saved before they existed, which reads back as
+        the defaults - everything off, so an old project sounds unchanged.
+    */
+    juce::var channelSettings;
+    /** How the preview instrument is shaped - waveform and ADSR. Void on a
+        track that has a real instrument, and on anything saved before the
+        Generator page had controls, which reads back as the old fixed sine.
+    */
+    juce::var previewSynth;
     /** Playlist lane height in pixels. Zero means the default height. */
     int laneHeight = 0;
 };

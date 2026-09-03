@@ -1,5 +1,6 @@
 #include "DJRStudioApplication.h"
 
+#include "Localisation.h"
 #include "MainWindow.h"
 #include "utils/Logger.h"
 
@@ -29,6 +30,12 @@ void DJRStudioApplication::initialise(const juce::String& commandLine)
 {
     juce::ignoreUnused(commandLine);
     Logger::write("Starting DJR_Studio " + getApplicationVersion());
+
+    // Before the window exists. The panels are members of MainComponent, so
+    // their constructors - which is where chip labels and placeholders are set
+    // - run before MainComponent's own constructor body ever would.
+    Localisation::setLanguage(Localisation::loadSavedChoice());
+
     mainWindow = std::make_unique<MainWindow>(getApplicationName());
 }
 

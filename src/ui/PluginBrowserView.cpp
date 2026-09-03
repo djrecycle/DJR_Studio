@@ -9,6 +9,7 @@ namespace
 {
     constexpr int headerHeight = Metrics::panelToolbarHeight;
     constexpr int rowHeight = 32;
+    constexpr int filterRowHeight = 22;
 }
 
 //==============================================================================
@@ -19,25 +20,31 @@ PluginBrowserView::Model::Model(PluginBrowserView& ownerToUse)
 
 int PluginBrowserView::Model::getNumRows()
 {
-    return juce::jmax(1, owner.plugins.size());
+    return juce::jmax(1, owner.visibleIndices.size());
 }
 
 void PluginBrowserView::Model::paintListBoxItem(int row, juce::Graphics& g, int width, int height, bool rowIsSelected)
 {
     auto bounds = juce::Rectangle<int>(0, 0, width, height).reduced(0, 1);
 
-    if (owner.plugins.isEmpty())
+    if (owner.visibleIndices.isEmpty())
     {
+        // Two different empties: nothing scanned yet, or nothing left after the
+        // filter. Saying "press Scan" to someone who just filtered is a lie.
         g.setColour(Theme::faintText());
         g.setFont(Theme::ui(12.0f));
-        g.drawText("Belum ada VST3 - tekan Scan", bounds.reduced(8, 0), juce::Justification::centredLeft, true);
+        g.drawText(owner.getNumScannedPlugins() == 0 ? TRANS("No plugins scanned yet - press Scan")
+                                                     : TRANS("No plugins match this filter"),
+                   bounds.reduced(8, 0), juce::Justification::centredLeft, true);
         return;
     }
 
-    if (! juce::isPositiveAndBelow(row, owner.plugins.size()))
+    const auto libraryIndex = owner.libraryIndexForRow(row);
+
+    if (libraryIndex < 0)
         return;
 
-    const auto& plugin = owner.plugins.getReference(row);
+    const auto& plugin = owner.plugins.getReference(libraryIndex);
     const auto isInstrument = plugin.isInstrument;
     const auto accent = isInstrument ? Theme::purple() : Theme::cyan();
 
@@ -76,13 +83,17 @@ void PluginBrowserView::Model::paintListBoxItem(int row, juce::Graphics& g, int 
 
 void PluginBrowserView::Model::listBoxItemDoubleClicked(int row, const juce::MouseEvent&)
 {
-    if (! juce::isPositiveAndBelow(row, owner.plugins.size()))
+    const auto libraryIndex = owner.libraryIndexForRow(row);
+
+    if (libraryIndex < 0)
         return;
 
     owner.listBox.selectRow(row);
 
+    // The library index, never the row: the filter makes those two different
+    // things, and everything downstream loads by library index.
     if (owner.loadPluginCallback)
-        owner.loadPluginCallback(row, owner.getSelectedTrackIndex());
+        owner.loadPluginCallback(libraryIndex, owner.getSelectedTrackIndex());
 }
 
 //==============================================================================
@@ -92,6 +103,19 @@ PluginBrowserView::PluginBrowserView(PluginManager& manager, Mixer& mixerToUse)
     scanButton.setFillColour(Theme::purple());
     scanButton.addListener(this);
     addAndMakeVisible(scanButton);
+
+    for (auto* chip : { &allChip, &generatorChip, &effectChip })
+    {
+        chip->setClickingTogglesState(true);
+        chip->setRadioGroupId(0xF11);
+        chip->addListener(this);
+        addAndMakeVisible(chip);
+    }
+
+    allChip.setToggleState(true, juce::dontSendNotification);
+
+    categoryButton.addListener(this);
+    addAndMakeVisible(categoryButton);
 
     listBox.setModel(&listModel);
     listBox.setRowHeight(rowHeight);
@@ -106,6 +130,11 @@ PluginBrowserView::PluginBrowserView(PluginManager& manager, Mixer& mixerToUse)
 PluginBrowserView::~PluginBrowserView()
 {
     scanButton.removeListener(this);
+    categoryButton.removeListener(this);
+
+    for (auto* chip : { &allChip, &generatorChip, &effectChip })
+        chip->removeListener(this);
+
     pluginManager.removeChangeListener(this);
 }
 
@@ -120,12 +149,31 @@ void PluginBrowserView::paint(juce::Graphics& g)
     g.setColour(Theme::outline());
     g.fillRect(header.removeFromBottom(1));
 
+    // Both numbers when a filter is on, so it is obvious the list is a subset
+    // rather than the whole library having shrunk.
+    const auto filtered = visibleIndices.size() != plugins.size();
+
+    // The built-ins are always here, so a full list is no longer proof that a
+    // scan has happened. Someone opening the app for the first time needs to be
+    // told to scan, and the count alone would never tell them.
+    const auto scanned = getNumScannedPlugins();
+
     g.setColour(Theme::faintText());
     g.setFont(Theme::mono(10.0f));
-    g.drawText(juce::String(plugins.size()) + " VST3",
+    g.drawText(filtered ? juce::String(visibleIndices.size()) + " / " + juce::String(plugins.size()) + " plugin"
+                        : juce::String(plugins.size()) + " plugin",
                header.reduced(7, 0),
                juce::Justification::centredLeft,
                false);
+
+    if (scanned == 0 && ! pluginManager.isScanning())
+    {
+        g.setColour(Theme::amber());
+        g.drawText(TRANS("press Scan for your VST3 / LV2"),
+                   header.reduced(7, 0).withTrimmedLeft(70).withTrimmedRight(60),
+                   juce::Justification::centredLeft,
+                   true);
+    }
 }
 
 void PluginBrowserView::resized()
@@ -134,18 +182,58 @@ void PluginBrowserView::resized()
     auto header = area.removeFromTop(headerHeight).reduced(5, 0);
     scanButton.setBounds(header.removeFromRight(scanButton.getPreferredWidth()).withSizeKeepingCentre(scanButton.getPreferredWidth(), 17));
 
-    listBox.setBounds(area.reduced(5));
+    auto filterRow = area.removeFromTop(filterRowHeight).reduced(5, 0);
+
+    for (auto* chip : { &allChip, &generatorChip, &effectChip })
+    {
+        chip->setBounds(filterRow.removeFromLeft(chip->getPreferredWidth())
+                            .withSizeKeepingCentre(chip->getPreferredWidth(), 16));
+        filterRow.removeFromLeft(3);
+    }
+
+    // The category button takes whatever is left, so a long name is truncated
+    // rather than pushing the chips off the panel.
+    if (filterRow.getWidth() > 40)
+        categoryButton.setBounds(filterRow.withSizeKeepingCentre(filterRow.getWidth(), 16));
+    else
+        categoryButton.setBounds({});
+
+    listBox.setBounds(area.reduced(5).withTrimmedTop(0));
 }
 
 void PluginBrowserView::buttonClicked(juce::Button* button)
 {
+    if (button == &categoryButton)
+    {
+        showCategoryMenu();
+        return;
+    }
+
+    if (button == &allChip || button == &generatorChip || button == &effectChip)
+    {
+        // Read the chips' resulting state rather than which one was clicked: a
+        // radio group also notifies the chip it switched off, and the order the
+        // two arrive in is JUCE's business, not ours.
+        group = generatorChip.getToggleState() ? Group::generators
+              : effectChip.getToggleState()    ? Group::effects
+                                               : Group::all;
+
+        // The category may not exist inside the new group, and leaving it would
+        // show an empty list with a filter nobody chose.
+        if (categoryFilter.isNotEmpty() && ! getAvailableCategories().contains(categoryFilter))
+            categoryFilter = {};
+
+        applyFilter();
+        return;
+    }
+
     if (button != &scanButton)
         return;
 
     scanButton.setButtonText("Scanning");
     scanButton.setEnabled(false);
-    setStatusText("Scanning folder VST3...");
-    pluginManager.scanVst3Async();
+    setStatusText(TRANS("Scanning plugin folders..."));
+    pluginManager.scanPluginsAsync();
 }
 
 void PluginBrowserView::changeListenerCallback(juce::ChangeBroadcaster* source)
@@ -154,19 +242,129 @@ void PluginBrowserView::changeListenerCallback(juce::ChangeBroadcaster* source)
     refreshList();
 }
 
+juce::String PluginBrowserView::describeCategory(const juce::PluginDescription& description)
+{
+    // VST3 reports a path like "Fx|Reverb"; the last part is the useful one.
+    // LV2 hands back its class name already. Anything blank is grouped together
+    // rather than shown as an empty entry nobody can read.
+    const auto raw = description.category.trim();
+
+    if (raw.isEmpty())
+        return description.isInstrument ? juce::String("Instrument") : juce::String("Lainnya");
+
+    return raw.fromLastOccurrenceOf("|", false, false).trim();
+}
+
+int PluginBrowserView::getNumScannedPlugins() const
+{
+    auto scanned = 0;
+
+    for (const auto& plugin : plugins)
+        if (! PluginManager::isBuiltIn(plugin))
+            ++scanned;
+
+    return scanned;
+}
+
+void PluginBrowserView::applyFilter()
+{
+    visibleIndices.clearQuick();
+
+    for (int i = 0; i < plugins.size(); ++i)
+    {
+        const auto& plugin = plugins.getReference(i);
+
+        if (group == Group::generators && ! plugin.isInstrument)
+            continue;
+
+        if (group == Group::effects && plugin.isInstrument)
+            continue;
+
+        if (categoryFilter.isNotEmpty() && describeCategory(plugin) != categoryFilter)
+            continue;
+
+        visibleIndices.add(i);
+    }
+
+    // The chips' own radio group owns which one looks active. Writing their
+    // toggle state from here re-entered the notification that called us and the
+    // two fought: the pressed chip filtered the list while the old one stayed lit.
+    categoryButton.setButtonText(categoryFilter.isEmpty() ? TRANS("All types") : categoryFilter);
+
+    listBox.deselectAllRows();
+    listBox.updateContent();
+    listBox.repaint();
+    resized();
+    repaint();
+}
+
+juce::StringArray PluginBrowserView::getAvailableCategories() const
+{
+    juce::StringArray categories;
+
+    for (const auto& plugin : plugins)
+    {
+        // Only what the current group can show, so the menu never offers a
+        // category that would come back empty.
+        if (group == Group::generators && ! plugin.isInstrument)
+            continue;
+
+        if (group == Group::effects && plugin.isInstrument)
+            continue;
+
+        categories.addIfNotAlreadyThere(describeCategory(plugin));
+    }
+
+    categories.sortNatural();
+    return categories;
+}
+
+void PluginBrowserView::showCategoryMenu()
+{
+    const auto categories = getAvailableCategories();
+
+    juce::PopupMenu menu;
+    menu.addItem(1, TRANS("All types"), true, categoryFilter.isEmpty());
+
+    if (! categories.isEmpty())
+        menu.addSeparator();
+
+    for (int i = 0; i < categories.size(); ++i)
+        menu.addItem(2 + i, categories[i], true, categoryFilter == categories[i]);
+
+    menu.showMenuAsync(juce::PopupMenu::Options()
+                           .withTargetComponent(&categoryButton)
+                           .withMinimumWidth(160)
+                           .withStandardItemHeight(21),
+        [this, categories] (int result)
+        {
+            if (result == 0)
+                return;
+
+            categoryFilter = result == 1 ? juce::String()
+                                         : categories[juce::jlimit(0, categories.size() - 1, result - 2)];
+            applyFilter();
+        });
+}
+
 void PluginBrowserView::refreshList()
 {
     plugins = pluginManager.getKnownPlugins();
 
+    // A category that no longer exists after a rescan would hide everything
+    // with nothing on screen explaining why.
+    if (categoryFilter.isNotEmpty() && ! getAvailableCategories().contains(categoryFilter))
+        categoryFilter = {};
+
     scanButton.setButtonText("Scan");
     scanButton.setEnabled(! pluginManager.isScanning());
-    listBox.updateContent();
-    listBox.repaint();
+    applyFilter();
 
     setStatusText(pluginManager.isScanning()
-                      ? juce::String("Scanning VST3...")
-                      : juce::String(plugins.size()) + " plugin VST3 terdeteksi.");
-    repaint();
+                      ? juce::String(TRANS("Scanning plugins..."))
+                  : getNumScannedPlugins() == 0
+                      ? juce::String(TRANS("No plugins scanned yet - press Scan to find your VST3 and LV2."))
+                      : juce::String(getNumScannedPlugins()) + TRANS(" plugins found."));
 }
 
 void PluginBrowserView::setLoadPluginCallback(std::function<void(int, int)> callback)
@@ -191,7 +389,12 @@ void PluginBrowserView::setTargetTrack(int trackIndex)
 
 int PluginBrowserView::getSelectedPluginIndex() const noexcept
 {
-    return listBox.getSelectedRow();
+    return libraryIndexForRow(listBox.getSelectedRow());
+}
+
+int PluginBrowserView::libraryIndexForRow(int row) const
+{
+    return juce::isPositiveAndBelow(row, visibleIndices.size()) ? visibleIndices[row] : -1;
 }
 
 int PluginBrowserView::getSelectedTrackIndex() const noexcept
@@ -201,8 +404,8 @@ int PluginBrowserView::getSelectedTrackIndex() const noexcept
 
 juce::String PluginBrowserView::getSelectedPluginDisplayName() const
 {
-    const auto row = getSelectedPluginIndex();
-    return juce::isPositiveAndBelow(row, plugins.size()) ? plugins.getReference(row).name : juce::String();
+    const auto index = getSelectedPluginIndex();
+    return juce::isPositiveAndBelow(index, plugins.size()) ? plugins.getReference(index).name : juce::String();
 }
 
 void PluginBrowserView::setStatusText(const juce::String& text)

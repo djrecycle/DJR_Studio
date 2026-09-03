@@ -79,7 +79,12 @@ float MidiEngine::getLastVelocity() const noexcept
 
 void MidiEngine::postLiveMessage(const juce::MidiMessage& message)
 {
-    handleMessage(message);
+    // Messages built by the keyboards carry no timestamp, but the collector
+    // measures them against the same clock JUCE stamps hardware input with, so
+    // an unstamped one would land far in the past. Note played now means now.
+    auto stamped = message;
+    stamped.setTimeStamp(juce::Time::getMillisecondCounterHiRes() * 0.001);
+    handleMessage(stamped);
 }
 
 void MidiEngine::prepareLiveMidi(double sampleRate)

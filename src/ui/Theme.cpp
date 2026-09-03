@@ -197,16 +197,32 @@ void Theme::drawPanelTitle(juce::Graphics& g, juce::Rectangle<int> bounds, const
     g.drawText(title.toUpperCase(), bounds, juce::Justification::centredLeft, false);
 }
 
+float Theme::meterPosition(float amplitude) noexcept
+{
+    // -60 dBFS at the bottom, 0 at the top. A note played through the preview
+    // synth peaks around -17 dBFS, which is a normal level and a fifth of the
+    // bar drawn linearly - so the meter looked broken while the sound was fine.
+    constexpr auto floorDb = -60.0f;
+
+    if (amplitude <= 0.0f)
+        return 0.0f;
+
+    // By hand rather than through juce::Decibels: that lives in the audio
+    // module, and this file is the one place the look of things is decided.
+    const auto db = 20.0f * std::log10(amplitude);
+    return juce::jlimit(0.0f, 1.0f, (db - floorDb) / -floorDb);
+}
+
 void Theme::drawLevelMeter(juce::Graphics& g,
                            juce::Rectangle<float> bounds,
-                           float level,
+                           float fill,
                            bool vertical,
                            float cornerSize)
 {
     g.setColour(meterTrack());
     g.fillRoundedRectangle(bounds, cornerSize);
 
-    const auto clamped = juce::jlimit(0.0f, 1.0f, level);
+    const auto clamped = juce::jlimit(0.0f, 1.0f, fill);
     if (clamped <= 0.001f)
         return;
 
@@ -221,17 +237,17 @@ void Theme::drawLevelMeter(juce::Graphics& g,
     gradient.addColour(0.72, cyan());
     gradient.addColour(0.92, amber());
 
-    juce::Path fill;
+    juce::Path bar;
     auto filled = bounds;
     if (vertical)
         filled = filled.withTop(bounds.getBottom() - bounds.getHeight() * clamped);
     else
         filled = filled.withWidth(bounds.getWidth() * clamped);
 
-    fill.addRoundedRectangle(filled, cornerSize);
+    bar.addRoundedRectangle(filled, cornerSize);
 
     juce::Graphics::ScopedSaveState state(g);
-    g.reduceClipRegion(fill);
+    g.reduceClipRegion(bar);
     g.setGradientFill(gradient);
     g.fillRect(bounds);
 }

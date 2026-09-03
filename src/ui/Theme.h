@@ -106,7 +106,17 @@ public:
     static void drawPanelTitle(juce::Graphics& g,
                                juce::Rectangle<int> bounds,
                                const juce::String& title);
-    /** Green -> cyan -> amber -> red level meter. */
+    /** Where an audio level sits on the meter, 0 to 1.
+
+        Meters are read in decibels, not in amplitude: half the amplitude is
+        one sixth of the way down a dB scale but half way down a linear one.
+        Drawn linearly, every normal signal sat in the bottom of the bar and
+        riding a fader barely moved it.
+    */
+    static float meterPosition(float amplitude) noexcept;
+    /** Green -> cyan -> amber -> red level meter. `fill` is a position from
+        meterPosition, already smoothed by the caller - not a raw amplitude.
+    */
     static void drawLevelMeter(juce::Graphics& g,
                                juce::Rectangle<float> bounds,
                                float level,

@@ -8,7 +8,11 @@ juce_add_console_app(djr_studio_engine_tests
 
 target_sources(djr_studio_engine_tests PRIVATE
     engine_tests.cpp
-    ${DJR_ENGINE_SOURCES})
+    ${DJR_ENGINE_SOURCES}
+    # The one piece of the UI worth checking offline: how a level becomes a
+    # meter reading is arithmetic, and getting it wrong is not visible in a
+    # screenshot until someone plays something at a normal level.
+    ${CMAKE_SOURCE_DIR}/src/ui/Theme.cpp)
 
 target_include_directories(djr_studio_engine_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
@@ -20,6 +24,7 @@ target_compile_definitions(djr_studio_engine_tests
         JUCE_STRICT_REFCOUNTEDPOINTER=1
         JUCE_PLUGINHOST_VST=0
         JUCE_PLUGINHOST_VST3=1
+        JUCE_PLUGINHOST_LV2=1
         JUCE_PLUGINHOST_AU=0
         JUCE_ALSA=1
         JUCE_JACK=0

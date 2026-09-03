@@ -1,6 +1,8 @@
 #include "BrowserPanel.h"
 
 #include "Theme.h"
+
+#include "plugins/PluginScanner.h"
 #include "utils/FileUtils.h"
 
 namespace djr
@@ -9,7 +11,10 @@ namespace djr
 namespace
 {
     constexpr int headerHeight = 24;
-    constexpr int searchHeight = 20;
+    /** The field itself, not the strip around it. It used to end up 12px tall
+        against a 12.5px font, which squashed the text against the frame.
+    */
+    constexpr int searchHeight = 26;
     constexpr int chipHeight = 18;
     constexpr int rowHeight = 20;
     constexpr int footerHeight = 44;
@@ -34,7 +39,7 @@ void BrowserPanel::RowsModel::paintListBoxItem(int row, juce::Graphics& g, int w
     {
         g.setColour(Theme::faintText());
         g.setFont(Theme::ui(12.0f));
-        g.drawText("Tidak ada item", bounds.reduced(8, 0), juce::Justification::centredLeft, true);
+        g.drawText(TRANS("Nothing here"), bounds.reduced(8, 0), juce::Justification::centredLeft, true);
         return;
     }
 
@@ -79,8 +84,37 @@ void BrowserPanel::RowsModel::listBoxItemDoubleClicked(int row, const juce::Mous
         return;
 
     const auto& item = owner.rows[static_cast<size_t>(row)];
+
+    if (item.pluginIndex >= 0)
+    {
+        if (owner.pluginActivatedCallback)
+            owner.pluginActivatedCallback(item.pluginIndex);
+
+        return;
+    }
+
     if (item.file.existsAsFile() && owner.fileActivatedCallback)
         owner.fileActivatedCallback(item.file);
+}
+
+juce::var BrowserPanel::RowsModel::getDragSourceDescription(const juce::SparseSet<int>& rows)
+{
+    if (rows.isEmpty())
+        return {};
+
+    const auto row = rows[0];
+
+    if (! juce::isPositiveAndBelow(row, static_cast<int>(owner.rows.size())))
+        return {};
+
+    const auto& item = owner.rows[static_cast<size_t>(row)];
+
+    if (! item.file.existsAsFile())
+        return {};
+
+    // Prefixed so a drop can tell this apart from anything else that might be
+    // dragged around this window later.
+    return juce::var(BrowserPanel::fileDragPrefix + item.file.getFullPathName());
 }
 
 //==============================================================================
@@ -92,7 +126,7 @@ BrowserPanel::BrowserPanel()
         addAndMakeVisible(button);
     }
 
-    searchBox.setTextToShowWhenEmpty("Cari sample, preset, plugin...", Theme::faintText());
+    searchBox.setTextToShowWhenEmpty(TRANS("Search samples, presets, plugins..."), Theme::faintText());
     searchBox.setFont(Theme::ui(12.5f));
     searchBox.setColour(juce::TextEditor::backgroundColourId, juce::Colours::transparentBlack);
     searchBox.setColour(juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
@@ -104,7 +138,7 @@ BrowserPanel::BrowserPanel()
 
     for (int i = 0; i < sections.size(); ++i)
     {
-        auto* chip = sectionChips.add(new TabChip(sections[i]));
+        auto* chip = sectionChips.add(new TabChip(juce::translate(sections[i])));
         chip->setRadioGroupId(0xD3B);
         chip->addListener(this);
         addAndMakeVisible(chip);
@@ -158,7 +192,7 @@ void BrowserPanel::paint(juce::Graphics& g)
     g.fillRect(header.removeFromBottom(1));
 
     // Search field frame -----------------------------------------------------
-    const auto searchArea = searchBox.getBounds().expanded(7, 0).withTrimmedLeft(-18);
+    const auto searchArea = searchBox.getBounds().expanded(7, 2).withTrimmedLeft(-18);
     Theme::drawCard(g, searchArea, Theme::inset(), Theme::divider(), 4.0f);
     g.setColour(Theme::mutedText());
     Icons::draw(g, Icon::search,
@@ -175,10 +209,10 @@ void BrowserPanel::paint(juce::Graphics& g)
     auto footerContent = footer.reduced(7, 6);
     auto titleRow = footerContent.removeFromTop(12);
 
-    const auto scanTitle = scanning ? juce::String("Scanning VST3...") : juce::String("VST3 library");
+    const auto scanTitle = scanning ? juce::String(TRANS("Scanning plugins...")) : juce::String(TRANS("Plugin library"));
     const auto scanCount = scanning && scanTotal > 0
         ? juce::String(scanScanned) + "/" + juce::String(scanTotal)
-        : juce::String(vst3PluginNames.size()) + " plugin";
+        : juce::String(pluginNames.size()) + " plugin";
 
     g.setColour(Theme::textSoft());
     g.setFont(Theme::ui(11.0f, true));
@@ -194,7 +228,7 @@ void BrowserPanel::paint(juce::Graphics& g)
 
     const auto ratio = scanning && scanTotal > 0
         ? juce::jlimit(0.0f, 1.0f, static_cast<float>(scanScanned) / static_cast<float>(scanTotal))
-        : (vst3PluginNames.isEmpty() ? 0.0f : 1.0f);
+        : (pluginNames.isEmpty() ? 0.0f : 1.0f);
 
     if (ratio > 0.0f)
     {
@@ -207,7 +241,10 @@ void BrowserPanel::paint(juce::Graphics& g)
     footerContent.removeFromTop(4);
     g.setColour(Theme::faintText());
     g.setFont(Theme::mono(9.5f));
-    g.drawText(scanCurrentItem.isNotEmpty() ? scanCurrentItem : FileUtils::getUserVst3Folder().getFullPathName(),
+    // Idle, the line names the formats being hosted rather than one folder:
+    // with more than one format there is no single path worth showing.
+    g.drawText(scanCurrentItem.isNotEmpty() ? scanCurrentItem
+                                            : PluginScanner::getHostedFormatNames().joinIntoString(" - "),
                footerContent,
                juce::Justification::centredLeft,
                true);
@@ -242,8 +279,8 @@ void BrowserPanel::resized()
     header.removeFromRight(3);
     dockButton.setBounds(header.removeFromRight(18).withSizeKeepingCentre(18, 18));
 
-    auto searchArea = area.removeFromTop(searchHeight + 12).reduced(7, 6);
-    searchBox.setBounds(searchArea.withTrimmedLeft(18).reduced(0, 4));
+    auto searchArea = area.removeFromTop(searchHeight + 10).reduced(7, 5);
+    searchBox.setBounds(searchArea.withTrimmedLeft(18).reduced(0, 1));
 
     // Section chips wrap onto extra rows when the panel is narrow.
     const auto chipGap = 3;
@@ -329,18 +366,27 @@ void BrowserPanel::setFileActivatedCallback(std::function<void(const juce::File&
     fileActivatedCallback = std::move(callback);
 }
 
-void BrowserPanel::setVst3Plugins(const juce::Array<juce::PluginDescription>& plugins)
+void BrowserPanel::setPluginActivatedCallback(std::function<void(int)> callback)
 {
-    vst3PluginNames.clear();
-    vst3PluginMakers.clear();
+    pluginActivatedCallback = std::move(callback);
+}
+
+void BrowserPanel::setPluginList(const juce::Array<juce::PluginDescription>& plugins)
+{
+    pluginNames.clear();
+    pluginMetas.clear();
+    pluginIsInstrument.clear();
 
     for (const auto& plugin : plugins)
     {
-        if (plugin.pluginFormatName != "VST3")
-            continue;
+        pluginNames.add(plugin.name);
+        pluginIsInstrument.add(plugin.isInstrument);
 
-        vst3PluginNames.add(plugin.name);
-        vst3PluginMakers.add(plugin.manufacturerName);
+        // The format is shown beside the maker: with LV2 and VST3 in one list,
+        // which one a plugin is decides whether its own GUI will appear.
+        pluginMetas.add(plugin.manufacturerName.isNotEmpty()
+                                 ? plugin.manufacturerName + " - " + plugin.pluginFormatName
+                                 : plugin.pluginFormatName);
     }
 
     if (selectedSectionIndex == sections.size() - 1)
@@ -427,8 +473,33 @@ void BrowserPanel::rebuildRows()
 
         default:
         {
-            for (int i = 0; i < vst3PluginNames.size(); ++i)
-                rows.push_back({ vst3PluginNames[i], vst3PluginMakers[i], false, {}, Theme::purple() });
+            // Grouped the way FL's plugin database is: generators first, then
+            // effects. A flat list of several hundred plugins is unusable, and
+            // the split is the one distinction that always matters.
+            const auto appendGroup = [this] (const juce::String& title, bool wantInstruments)
+            {
+                auto headerWritten = false;
+
+                for (int i = 0; i < pluginNames.size(); ++i)
+                {
+                    if (pluginIsInstrument[i] != wantInstruments)
+                        continue;
+
+                    // Only written once something belongs under it, so an empty
+                    // group never appears.
+                    if (! headerWritten)
+                    {
+                        rows.push_back({ title, {}, true, {}, Theme::mutedText(), -1 });
+                        headerWritten = true;
+                    }
+
+                    rows.push_back({ pluginNames[i], pluginMetas[i], false, {},
+                                     wantInstruments ? Theme::purple() : Theme::cyan(), i });
+                }
+            };
+
+            appendGroup("Generators", true);
+            appendGroup("Effects", false);
             break;
         }
     }
@@ -452,7 +523,7 @@ void BrowserPanel::appendFolder(const juce::File& folder, const juce::String& wi
 {
     if (! folder.isDirectory())
     {
-        rows.push_back({ folder.getFileName() + " belum ada", "", true, {}, Theme::accent() });
+        rows.push_back({ folder.getFileName() + TRANS(" does not exist"), "", true, {}, Theme::accent() });
         return;
     }
 
@@ -477,7 +548,7 @@ void BrowserPanel::appendFolder(const juce::File& folder, const juce::String& wi
     }
 
     if (rows.empty())
-        rows.push_back({ "Folder kosong", "", true, {}, Theme::accent() });
+        rows.push_back({ TRANS("Empty folder"), "", true, {}, Theme::accent() });
 }
 
 void BrowserPanel::refreshControls()
@@ -488,17 +559,17 @@ void BrowserPanel::refreshControls()
     minimizeButton.setTooltip(minimized ? "Restore browser" : "Minimize browser");
 
     auto dockIcon = Icon::dockLeft;
-    juce::String dockTooltip = "Browser di kiri";
+    juce::String dockTooltip = TRANS("Browser on the left");
 
     if (dockPosition == DockPosition::right)
     {
         dockIcon = Icon::dockRight;
-        dockTooltip = "Browser di kanan";
+        dockTooltip = TRANS("Browser on the right");
     }
     else if (dockPosition == DockPosition::bottom)
     {
         dockIcon = Icon::dockBottom;
-        dockTooltip = "Browser di bawah";
+        dockTooltip = TRANS("Browser at the bottom");
     }
 
     dockButton.setIcon(dockIcon);

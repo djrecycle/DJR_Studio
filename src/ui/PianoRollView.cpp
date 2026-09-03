@@ -13,6 +13,21 @@ namespace
 {
     constexpr int noteHeightInset = 1;
     constexpr int resizeHandleWidth = 5;
+
+    /** How much of a note's right edge resizes rather than moves.
+
+        A fixed five pixels is a third of a sixteenth note zoomed out, so a
+        grab meant to move it resized it instead. Never more than a third of
+        the note, so the middle is always the middle.
+    */
+    int resizeZoneFor(juce::Rectangle<int> noteBounds)
+    {
+        return juce::jlimit(2, resizeHandleWidth, noteBounds.getWidth() / 3);
+    }
+    /** The bar-number strip along the top, the same height as the playlist's so
+        the two read as one timeline seen twice.
+    */
+    constexpr int rulerHeight = 18;
 }
 
 PianoRollView::PianoRollView(PianoRollModel& modelToUse, Transport& transportToUse)
@@ -20,7 +35,86 @@ PianoRollView::PianoRollView(PianoRollModel& modelToUse, Transport& transportToU
 {
     setWantsKeyboardFocus(true);
     model.addChangeListener(this);
+
+    horizontalBar.onRangeChanged = [this] (double start, double size) { applyHorizontalRange(start, size); };
+    verticalBar.onRangeChanged = [this] (double start, double size) { applyVerticalRange(start, size); };
+    addAndMakeVisible(horizontalBar);
+    addAndMakeVisible(verticalBar);
+
     startTimerHz(30);
+}
+
+juce::Rectangle<int> PianoRollView::getRulerBounds() const
+{
+    return getContentBounds().withHeight(rulerHeight).withTrimmedLeft(keyboardWidth);
+}
+
+juce::Rectangle<int> PianoRollView::getContentBounds() const
+{
+    return getLocalBounds()
+        .withTrimmedRight(ZoomScrollBar::thickness)
+        .withTrimmedBottom(ZoomScrollBar::thickness);
+}
+
+void PianoRollView::resized()
+{
+    auto bottomStrip = getLocalBounds().removeFromBottom(ZoomScrollBar::thickness);
+    auto rightStrip = getLocalBounds().removeFromRight(ZoomScrollBar::thickness);
+
+    horizontalBar.setBounds(bottomStrip.withTrimmedLeft(keyboardWidth)
+                                       .withTrimmedRight(ZoomScrollBar::thickness));
+    verticalBar.setBounds(rightStrip.withTrimmedTop(rulerHeight)
+                                    .withTrimmedBottom(ZoomScrollBar::thickness));
+    refreshScrollBars();
+}
+
+double PianoRollView::getTimelineBeats() const
+{
+    // The pattern's own length, with room past it: a note can be written after
+    // the last one there is.
+    auto lastBeat = 16.0;
+
+    for (const auto& note : model.getNotes())
+        lastBeat = juce::jmax(lastBeat, note.startBeat + note.lengthBeats);
+
+    return lastBeat * 1.25;
+}
+
+void PianoRollView::refreshScrollBars()
+{
+    const auto grid = juce::jmax(1, getContentBounds().getWidth() - keyboardWidth);
+    const auto timeline = juce::jmax(1.0, getTimelineBeats());
+
+    horizontalBar.setMinimumSize(juce::jlimit(0.0001, 1.0, 1.0 / timeline));
+    horizontalBar.setRange(scrollBeats / timeline, (grid / pixelsPerBeat) / timeline);
+
+    // Pitch runs the other way round: the top of the bar is the top of the
+    // keyboard, which is the highest note.
+    const auto visibleKeys = juce::jmax(1, (getContentBounds().getHeight() - rulerHeight)
+                                              / juce::jmax(1, keyHeight));
+    verticalBar.setRange((127.0 - topPitch) / 128.0, visibleKeys / 128.0);
+}
+
+void PianoRollView::applyHorizontalRange(double start, double size)
+{
+    const auto grid = juce::jmax(1, getContentBounds().getWidth() - keyboardWidth);
+    const auto timeline = juce::jmax(1.0, getTimelineBeats());
+
+    pixelsPerBeat = juce::jlimit(6.0, 96.0, grid / juce::jmax(0.25, size * timeline));
+    scrollBeats = juce::jmax(0.0, start * timeline);
+    refreshScrollBars();
+    repaint();
+}
+
+void PianoRollView::applyVerticalRange(double start, double size)
+{
+    const auto height = juce::jmax(1, getContentBounds().getHeight() - rulerHeight);
+    const auto wantedKeys = juce::jlimit(4.0, 128.0, size * 128.0);
+
+    keyHeight = juce::jlimit(4, 40, juce::roundToInt(height / wantedKeys));
+    topPitch = juce::jlimit(11, 127, 127 - juce::roundToInt(start * 128.0));
+    refreshScrollBars();
+    repaint();
 }
 
 PianoRollView::~PianoRollView()
@@ -43,10 +137,10 @@ juce::Colour PianoRollView::velocityColour(float velocity)
 
 void PianoRollView::paint(juce::Graphics& g)
 {
-    const auto bounds = getLocalBounds();
+    const auto bounds = getContentBounds();
     g.fillAll(Theme::panelDeep());
 
-    const auto visibleRows = bounds.getHeight() / keyHeight + 2;
+    const auto visibleRows = (bounds.getHeight() - rulerHeight) / keyHeight + 2;
 
     // Key rows ---------------------------------------------------------------
     for (int row = 0; row < visibleRows; ++row)
@@ -55,7 +149,7 @@ void PianoRollView::paint(juce::Graphics& g)
         if (pitch < 0)
             break;
 
-        const auto y = row * keyHeight;
+        const auto y = rulerHeight + row * keyHeight;
         const auto black = juce::MidiMessage::isMidiNoteBlack(pitch);
 
         g.setColour(black ? juce::Colour::fromString("bf141922") : juce::Colour::fromString("731c232f"));
@@ -93,7 +187,7 @@ void PianoRollView::paint(juce::Graphics& g)
             g.setColour(isBar  ? juce::Colour::fromString("ff33405a")
                       : isBeat ? juce::Colour::fromString("ff242c3b")
                                : juce::Colour::fromString("ff1c2230"));
-            g.fillRect(beatToX(beat), 0, 1, bounds.getHeight());
+            g.fillRect(beatToX(beat), rulerHeight, 1, bounds.getHeight() - rulerHeight);
         }
     }
 
@@ -131,7 +225,61 @@ void PianoRollView::paint(juce::Graphics& g)
         g.reduceClipRegion(bounds.withTrimmedLeft(keyboardWidth));
 
         g.setColour(Theme::green().withAlpha(0.75f));
-        g.fillRect(beatToX(transport.getPositionBeats()), 0, 1, bounds.getHeight());
+        g.fillRect(beatToX(transport.getPositionBeats()), rulerHeight, 1, bounds.getHeight() - rulerHeight);
+    }
+
+    // Ruler --------------------------------------------------------------------
+    // Drawn after the notes: the grid scrolls under it, and a note dragged up
+    // past the top edge should disappear behind the numbers rather than over them.
+    {
+        const auto ruler = getRulerBounds();
+
+        juce::Graphics::ScopedSaveState state(g);
+        g.reduceClipRegion(ruler);
+
+        g.setColour(Theme::panelHeader());
+        g.fillRect(ruler);
+        g.setColour(Theme::outline());
+        g.fillRect(ruler.withHeight(1).withY(ruler.getBottom() - 1));
+
+        const auto beatsPerBar = transport.getBeatsPerBar();
+        const auto firstBeat = std::floor(scrollBeats);
+        const auto lastBeat = scrollBeats + ruler.getWidth() / pixelsPerBeat + 1.0;
+
+        for (auto beat = std::ceil(firstBeat); beat <= lastBeat; beat += 1.0)
+        {
+            const auto x = beatToX(beat);
+            const auto isBar = std::abs(std::fmod(beat, beatsPerBar)) < 1.0e-6;
+
+            // Beats get a short tick, bars a full one and a number - the same
+            // reading FL gives, and the same the playlist gives here.
+            g.setColour(isBar ? Theme::gridBar() : Theme::divider());
+            g.fillRect(x, isBar ? ruler.getY() : ruler.getBottom() - 5,
+                       1, isBar ? ruler.getHeight() : 4);
+
+            if (! isBar)
+                continue;
+
+            g.setColour(Theme::mutedText());
+            g.setFont(Theme::mono(10.0f));
+            g.drawText(juce::String(static_cast<int>(std::round(beat / beatsPerBar)) + 1),
+                       x + 4, ruler.getY(), 34, ruler.getHeight(),
+                       juce::Justification::centredLeft, false);
+        }
+
+        // The playhead's own marker, so where it is can be read from the ruler
+        // without hunting for the line down in the notes.
+        const auto playheadX = beatToX(transport.getPositionBeats());
+
+        if (ruler.contains(playheadX, ruler.getCentreY()))
+        {
+            juce::Path marker;
+            marker.addTriangle(static_cast<float>(playheadX - 4), static_cast<float>(ruler.getBottom() - 7),
+                               static_cast<float>(playheadX + 5), static_cast<float>(ruler.getBottom() - 7),
+                               static_cast<float>(playheadX + 0.5f), static_cast<float>(ruler.getBottom() - 1));
+            g.setColour(Theme::green());
+            g.fillPath(marker);
+        }
     }
 
     // Rubber bands ------------------------------------------------------------
@@ -155,10 +303,73 @@ void PianoRollView::paint(juce::Graphics& g)
     g.fillRect(keyboardWidth - 1, 0, 1, bounds.getHeight());
 }
 
+void PianoRollView::refreshCursor(juce::Point<int> position)
+{
+    // The keyboard and the ruler are not the grid: one plays notes, the other
+    // moves the playhead, and neither is where a tool applies.
+    if (position.x < keyboardWidth || getRulerBounds().contains(position))
+    {
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        return;
+    }
+
+    if (activeTool == Tool::select)
+    {
+        const auto noteIndex = noteAtPosition(position);
+
+        if (noteIndex >= 0)
+        {
+            const auto notes = model.getNotes();
+
+            if (juce::isPositiveAndBelow(noteIndex, notes.size()))
+            {
+                const auto bounds = noteToBounds(notes[noteIndex]);
+                const auto atEnd = position.x > bounds.getRight() - resizeZoneFor(bounds);
+
+                setMouseCursor(atEnd ? juce::MouseCursor::LeftRightResizeCursor
+                                     : juce::MouseCursor::DraggingHandCursor);
+                return;
+            }
+        }
+
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        return;
+    }
+
+    // The rest say what they are: JUCE has no eraser or knife, so the ones
+    // without a cursor of their own keep the crosshair - still a promise that
+    // this click will not be an ordinary one.
+    switch (activeTool)
+    {
+        case Tool::draw:     setMouseCursor(juce::MouseCursor::PointingHandCursor); break;
+        case Tool::erase:
+        case Tool::mute:
+        case Tool::slice:    setMouseCursor(juce::MouseCursor::CrosshairCursor); break;
+        case Tool::zoom:     setMouseCursor(juce::MouseCursor::CrosshairCursor); break;
+        case Tool::playback: setMouseCursor(juce::MouseCursor::IBeamCursor); break;
+        case Tool::select:   break;
+    }
+}
+
+void PianoRollView::mouseMove(const juce::MouseEvent& event)
+{
+    refreshCursor(event.getPosition());
+}
+
 void PianoRollView::mouseDown(const juce::MouseEvent& event)
 {
     if (event.x < keyboardWidth)
         return;
+
+    // The ruler moves the playhead and does nothing else - no note is ever
+    // written up there, whichever tool is chosen.
+    if (getRulerBounds().contains(event.getPosition()))
+    {
+        scrubbingRuler = true;
+        transport.setPositionBeats(juce::jmax(0.0, xToBeat(event.x)));
+        repaint();
+        return;
+    }
 
     grabKeyboardFocus();
 
@@ -174,7 +385,7 @@ void PianoRollView::mouseDown(const juce::MouseEvent& event)
     // Zoom and Playback act on the timeline, never on the note under the cursor.
     if (activeTool == Tool::zoom)
     {
-        zoomDrag = juce::Rectangle<int>(event.x, 0, 1, getHeight());
+        zoomDrag = juce::Rectangle<int>(event.x, 0, 1, getContentBounds().getHeight());
         return;
     }
 
@@ -228,8 +439,9 @@ void PianoRollView::mouseDown(const juce::MouseEvent& event)
         if (juce::isPositiveAndBelow(noteIndex, notes.size()))
         {
             const auto noteBounds = noteToBounds(notes[noteIndex]);
-            resizingNote = event.x > noteBounds.getRight() - resizeHandleWidth;
+            resizingNote = event.x > noteBounds.getRight() - resizeZoneFor(noteBounds);
             dragGrabBeat = beat;
+            dragGrabOffsetBeats = beat - notes[noteIndex].startBeat;
             dragGrabPitch = yToPitch(event.y);
         }
 
@@ -259,11 +471,18 @@ void PianoRollView::mouseDown(const juce::MouseEvent& event)
 
 void PianoRollView::mouseDrag(const juce::MouseEvent& event)
 {
+    if (scrubbingRuler)
+    {
+        transport.setPositionBeats(juce::jmax(0.0, xToBeat(event.x)));
+        repaint();
+        return;
+    }
+
     if (activeTool == Tool::zoom && ! zoomDrag.isEmpty())
     {
         const auto left = juce::jmin(event.getMouseDownPosition().x, event.x);
         const auto right = juce::jmax(event.getMouseDownPosition().x, event.x);
-        zoomDrag = juce::Rectangle<int>(left, 0, right - left, getHeight());
+        zoomDrag = juce::Rectangle<int>(left, 0, right - left, getContentBounds().getHeight());
         repaint();
         return;
     }
@@ -314,12 +533,20 @@ void PianoRollView::mouseDrag(const juce::MouseEvent& event)
         return;
     }
 
-    model.dragNote(draggedNote, xToBeat(event.x), yToPitch(event.y));
+    // Minus where the note was grabbed, so it moves with the pointer rather
+    // than snapping its own start underneath it.
+    model.dragNote(draggedNote, xToBeat(event.x) - dragGrabOffsetBeats, yToPitch(event.y));
 }
 
 void PianoRollView::mouseUp(const juce::MouseEvent& event)
 {
     juce::ignoreUnused(event);
+
+    if (scrubbingRuler)
+    {
+        scrubbingRuler = false;
+        return;
+    }
 
     if (activeTool == Tool::zoom && ! zoomDrag.isEmpty())
     {
@@ -328,7 +555,7 @@ void PianoRollView::mouseUp(const juce::MouseEvent& event)
             const auto fromBeat = xToBeat(zoomDrag.getX());
             const auto beats = juce::jmax(0.5, xToBeat(zoomDrag.getRight()) - fromBeat);
 
-            pixelsPerBeat = juce::jlimit(6.0, 96.0, (getWidth() - keyboardWidth) / beats);
+            pixelsPerBeat = juce::jlimit(6.0, 96.0, (getContentBounds().getWidth() - keyboardWidth) / beats);
             scrollBeats = juce::jmax(0.0, fromBeat);
         }
 
@@ -364,6 +591,7 @@ void PianoRollView::setTool(Tool tool)
         return;
 
     activeTool = tool;
+    refreshCursor(getMouseXYRelative());
     marqueeActive = false;
     marquee = {};
     zoomDrag = {};
@@ -453,6 +681,64 @@ void PianoRollView::deleteSelectedNotes()
     repaint();
 }
 
+void PianoRollView::copySelectedNotes()
+{
+    if (selectedNotes.isEmpty())
+        return;
+
+    const auto notes = model.getNotes();
+    clipboardNotes.clearQuick();
+
+    for (const auto index : selectedNotes)
+        if (juce::isPositiveAndBelow(index, notes.size()))
+            clipboardNotes.add(notes[index]);
+}
+
+void PianoRollView::pasteNotes()
+{
+    if (clipboardNotes.isEmpty())
+        return;
+
+    if (onEditGesture)
+        onEditGesture(true);
+
+    auto notes = model.getNotes();
+    juce::Array<int> pastedIndices;
+
+    for (const auto& note : clipboardNotes)
+    {
+        pastedIndices.add(notes.size());
+        notes.add(note);
+    }
+
+    model.setNotes(notes);
+
+    if (onEditGesture)
+        onEditGesture(false);
+
+    // Select the copies, not the originals, so the obvious next move -
+    // dragging them to another octave or beat - only touches what was pasted.
+    selectedNotes = std::move(pastedIndices);
+    repaint();
+}
+
+void PianoRollView::shiftSelectedNotesByOctave(int direction)
+{
+    if (selectedNotes.isEmpty())
+        return;
+
+    if (onEditGesture)
+        onEditGesture(true);
+
+    beginGroupDrag();
+    moveSelectedNotes(0.0, direction * 12);
+
+    if (onEditGesture)
+        onEditGesture(false);
+
+    repaint();
+}
+
 bool PianoRollView::applyToolToNote(int noteIndex)
 {
     auto notes = model.getNotes();
@@ -527,6 +813,36 @@ bool PianoRollView::drawNoteAt(juce::Point<int> position)
 
 bool PianoRollView::keyPressed(const juce::KeyPress& key)
 {
+    if (key.getModifiers().isCtrlDown() || key.getModifiers().isCommandDown())
+    {
+        // Not getTextCharacter(): with ctrl held, X11 reports a control code,
+        // so matching on the letter never fires on Linux. getKeyCode() gives
+        // the plain uppercase key regardless of modifiers.
+        const auto character = juce::CharacterFunctions::toLowerCase(
+            static_cast<juce::juce_wchar>(key.getKeyCode()));
+
+        if (character == 'c')
+        {
+            copySelectedNotes();
+            return true;
+        }
+
+        if (character == 'v')
+        {
+            pasteNotes();
+            return true;
+        }
+
+        // Only steals the typing keyboard's octave shortcut (MainComponent's
+        // job otherwise) when there is a note block here to move instead.
+        if (! selectedNotes.isEmpty()
+            && (key.isKeyCode(juce::KeyPress::upKey) || key.isKeyCode(juce::KeyPress::downKey)))
+        {
+            shiftSelectedNotesByOctave(key.isKeyCode(juce::KeyPress::upKey) ? 1 : -1);
+            return true;
+        }
+    }
+
     if (selectedNotes.isEmpty())
         return false;
 
@@ -558,6 +874,7 @@ void PianoRollView::mouseWheelMove(const juce::MouseEvent& event, const juce::Mo
     if (event.mods.isCtrlDown() || event.mods.isCommandDown())
     {
         pixelsPerBeat = juce::jlimit(6.0, 96.0, pixelsPerBeat * (wheel.deltaY > 0.0f ? 1.12 : 0.89));
+        refreshScrollBars();
         repaint();
         return;
     }
@@ -565,11 +882,13 @@ void PianoRollView::mouseWheelMove(const juce::MouseEvent& event, const juce::Mo
     if (event.mods.isShiftDown())
     {
         scrollBeats = juce::jmax(0.0, scrollBeats - wheel.deltaY * 6.0);
+        refreshScrollBars();
         repaint();
         return;
     }
 
     topPitch = juce::jlimit(11, 127, topPitch + juce::roundToInt(wheel.deltaY * 4.0f));
+    refreshScrollBars();
     repaint();
 }
 
@@ -582,7 +901,31 @@ void PianoRollView::changeListenerCallback(juce::ChangeBroadcaster* source)
 void PianoRollView::timerCallback()
 {
     if (transport.isPlaying())
+    {
+        // Follow the playhead, so it does not simply run off the right edge.
+        // Only once it actually leaves the visible range, and it lands a little
+        // in from the left so the next bar is already on screen. Gated on
+        // followPlayhead so scrolling to look elsewhere during playback sticks
+        // instead of snapping back thirty times a second.
+        if (followPlayhead)
+        {
+            const auto visibleWidth = getContentBounds().getWidth() - keyboardWidth;
+
+            if (visibleWidth > 0)
+            {
+                const auto visibleBeats = visibleWidth / pixelsPerBeat;
+                const auto position = transport.getPositionBeats();
+
+                if (position < scrollBeats || position > scrollBeats + visibleBeats * 0.85)
+                {
+                    scrollBeats = juce::jmax(0.0, position - visibleBeats * 0.15);
+                    refreshScrollBars();
+                }
+            }
+        }
+
         repaint();
+    }
 }
 
 int PianoRollView::noteAtPosition(juce::Point<int> position) const
@@ -621,12 +964,13 @@ int PianoRollView::beatToX(double beat) const
 
 int PianoRollView::yToPitch(int y) const
 {
-    return juce::jlimit(0, 127, topPitch - (y / keyHeight));
+    // Measured from under the ruler, so a note lands on the row it was drawn on.
+    return juce::jlimit(0, 127, topPitch - ((y - rulerHeight) / keyHeight));
 }
 
 int PianoRollView::pitchToY(int pitch) const
 {
-    return (topPitch - pitch) * keyHeight;
+    return rulerHeight + (topPitch - pitch) * keyHeight;
 }
 
 double PianoRollView::getGridStepBeats() const noexcept
@@ -683,6 +1027,16 @@ double PianoRollView::getBeatsPerBar() const noexcept
 double PianoRollView::getScrollBeats() const noexcept
 {
     return scrollBeats;
+}
+
+void PianoRollView::setFollowPlayhead(bool shouldFollow)
+{
+    followPlayhead = shouldFollow;
+}
+
+bool PianoRollView::isFollowingPlayhead() const noexcept
+{
+    return followPlayhead;
 }
 
 } // namespace djr

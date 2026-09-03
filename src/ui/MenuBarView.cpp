@@ -190,6 +190,7 @@ void MenuBarView::showMenuFor(int menuIndex, juce::Button& source)
             menu.addItem(27, "Mixer", true, viewState.mixerVisible);
             menu.addItem(28, "Plugins", true, viewState.pluginsVisible);
             menu.addItem(29, "Insert Chain", true, viewState.insertChainVisible);
+            menu.addItem(31, "Sample Editor", true, viewState.sampleEditorVisible);
             menu.addSeparator();
             menu.addItem(30, "Reset Panel Layout");
             menu.addSeparator();
@@ -205,8 +206,8 @@ void MenuBarView::showMenuFor(int menuIndex, juce::Button& source)
         case 3: // Tools
             menu.addItem(42, "Metronome", true, viewState.metronomeOn);
             menu.addSeparator();
-            menu.addSectionHeader("Count-in sebelum record");
-            menu.addItem(43, "Mati", true, viewState.countInBars == 0);
+            menu.addSectionHeader(TRANS("Count-in before recording"));
+            menu.addItem(43, TRANS("Off"), true, viewState.countInBars == 0);
             menu.addItem(44, "1 bar", true, viewState.countInBars == 1);
             menu.addItem(45, "2 bar", true, viewState.countInBars == 2);
             menu.addSeparator();
@@ -254,6 +255,7 @@ void MenuBarView::showMenuFor(int menuIndex, juce::Button& source)
                 case 28: invoke(AppCommand::togglePlugins); break;
                 case 29: invoke(AppCommand::toggleInsertChain); break;
                 case 30: invoke(AppCommand::resetPanelLayout); break;
+                case 31: invoke(AppCommand::toggleSampleEditor); break;
                 case 40: invoke(AppCommand::scanPlugins); break;
                 case 41: invoke(AppCommand::audioSettings); break;
                 case 50: invoke(AppCommand::about); break;

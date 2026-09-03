@@ -154,6 +154,13 @@ void AudioTrack::renderAudio(juce::AudioBuffer<float>& buffer,
     if (! context.isPlaying)
         return;
 
+    // Clips live on the timeline, and the timeline is what Song mode plays.
+    // In Pattern mode the MIDI tracks already play their pattern instead of
+    // their placements; audio kept playing anyway, which made Pattern mode
+    // mean two different things on one transport.
+    if (! context.songMode)
+        return;
+
     // Skipping a block beats blocking the device while a clip is being added.
     const juce::SpinLock::ScopedTryLockType scoped(clipLock);
 

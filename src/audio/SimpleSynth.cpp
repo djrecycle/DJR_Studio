@@ -69,11 +69,59 @@ namespace
         }
     }
 
-    /** Sine plus a soft second harmonic, so held notes are audible but not harsh. */
+    /** One period of a discontinuous wave lands between two samples, and the
+        step it leaves behind is what aliases. PolyBLEP subtracts a small
+        polynomial around the jump, which is the cheapest correction that keeps
+        a saw playable at the top of the keyboard.
+    */
+    float polyBlep(double phase, double increment) noexcept
+    {
+        const auto t = phase / juce::MathConstants<double>::twoPi;
+        const auto dt = increment / juce::MathConstants<double>::twoPi;
+
+        if (dt <= 0.0)
+            return 0.0f;
+
+        if (t < dt)
+        {
+            const auto x = t / dt;
+            return static_cast<float>(x + x - x * x - 1.0);
+        }
+
+        if (t > 1.0 - dt)
+        {
+            const auto x = (t - 1.0) / dt;
+            return static_cast<float>(x * x + x + x + 1.0);
+        }
+
+        return 0.0f;
+    }
+
+    /** How loud each shape has to be to sit at the level the sine always had.
+        A saw at the same peak is a good deal louder to the ear, and switching
+        waveform should change the colour, not the volume.
+    */
+    float levelFor(SimpleSynth::Waveform waveform) noexcept
+    {
+        switch (waveform)
+        {
+            case SimpleSynth::Waveform::triangle: return 1.0f;
+            case SimpleSynth::Waveform::saw:      return 0.55f;
+            case SimpleSynth::Waveform::square:   return 0.45f;
+            case SimpleSynth::Waveform::noise:    return 0.40f;
+
+            case SimpleSynth::Waveform::sine:
+            case SimpleSynth::Waveform::numWaveforms:
+            default:                              return 1.0f;
+        }
+    }
+
+    /** Sine plus a soft second harmonic, or one of the plainer shapes. */
     class PreviewVoice final : public juce::SynthesiserVoice
     {
     public:
-        PreviewVoice()
+        explicit PreviewVoice(const SimpleSynth& owner)
+            : synth(owner)
         {
             envelope.setParameters({ 0.005f, 0.12f, 0.75f, 0.18f });
         }
@@ -113,6 +161,16 @@ namespace
             }
 
             playingDrum = false;
+
+            // Read once, at the start: a note keeps the envelope it began with,
+            // the way a generator's own envelope does. The waveform is read per
+            // block instead, so turning that knob is heard while a note holds.
+            const auto shaping = synth.getEnvelope();
+            envelope.setParameters({ juce::jmax(0.001f, shaping.attack),
+                                     juce::jmax(0.001f, shaping.decay),
+                                     juce::jlimit(0.0f, 1.0f, shaping.sustain),
+                                     juce::jmax(0.001f, shaping.release) });
+
             phaseIncrement = sampleRate > 0.0
                 ? juce::MathConstants<double>::twoPi * juce::MidiMessage::getMidiNoteInHertz(midiNoteNumber) / sampleRate
                 : 0.0;
@@ -151,11 +209,13 @@ namespace
             if (! envelope.isActive())
                 return;
 
+            const auto waveform = synth.getWaveform();
+            const auto shapeLevel = levelFor(waveform);
+
             for (int sample = 0; sample < numSamples; ++sample)
             {
                 const auto gain = envelope.getNextSample();
-                const auto value = static_cast<float>(std::sin(phase) + 0.25 * std::sin(phase * 2.0))
-                                 * level * gain;
+                const auto value = waveValue(waveform) * level * shapeLevel * gain;
 
                 for (int channel = 0; channel < outputBuffer.getNumChannels(); ++channel)
                     outputBuffer.addSample(channel, startSample + sample, value);
@@ -170,6 +230,54 @@ namespace
         }
 
     private:
+        /** One sample of the chosen shape at the phase the voice is at. */
+        float waveValue(SimpleSynth::Waveform waveform) noexcept
+        {
+            const auto twoPi = juce::MathConstants<double>::twoPi;
+
+            switch (waveform)
+            {
+                case SimpleSynth::Waveform::triangle:
+                {
+                    // Straight from the phase: a triangle's corners are gentle
+                    // enough that it needs no band limiting to stay usable.
+                    const auto t = phase / twoPi;
+                    return static_cast<float>(4.0 * std::abs(t - 0.5) - 1.0);
+                }
+
+                case SimpleSynth::Waveform::saw:
+                {
+                    const auto t = phase / twoPi;
+                    return static_cast<float>(2.0 * t - 1.0) - polyBlep(phase, phaseIncrement);
+                }
+
+                case SimpleSynth::Waveform::square:
+                {
+                    const auto t = phase / twoPi;
+                    auto value = t < 0.5 ? 1.0f : -1.0f;
+
+                    // Two edges per period, and they jump opposite ways: the
+                    // correction is added at the one going up and subtracted at
+                    // the one going down, half a period later.
+                    value += polyBlep(phase, phaseIncrement);
+                    value -= polyBlep(std::fmod(phase + juce::MathConstants<double>::pi, twoPi),
+                                      phaseIncrement);
+                    return value;
+                }
+
+                case SimpleSynth::Waveform::noise:
+                    return random.nextFloat() * 2.0f - 1.0f;
+
+                case SimpleSynth::Waveform::sine:
+                case SimpleSynth::Waveform::numWaveforms:
+                default:
+                    // The second harmonic is what this synth has always sounded
+                    // like, so it stays part of the sine rather than a shape of
+                    // its own: an old project has to reopen sounding the same.
+                    return static_cast<float>(std::sin(phase) + 0.25 * std::sin(phase * 2.0));
+            }
+        }
+
         void renderDrum(juce::AudioBuffer<float>& outputBuffer, int startSample, int numSamples)
         {
             const auto sampleRate = getSampleRate();
@@ -217,6 +325,7 @@ namespace
             }
         }
 
+        const SimpleSynth& synth;
         juce::ADSR envelope;
         juce::Random random;
         DrumShape shape {};
@@ -235,7 +344,7 @@ SimpleSynth::SimpleSynth()
     synth.addSound(new PreviewSound());
 
     for (int i = 0; i < numVoices; ++i)
-        synth.addVoice(new PreviewVoice());
+        synth.addVoice(new PreviewVoice(*this));
 }
 
 void SimpleSynth::prepare(double sampleRate)
@@ -244,7 +353,7 @@ void SimpleSynth::prepare(double sampleRate)
         synth.setCurrentPlaybackSampleRate(sampleRate);
 }
 
-void SimpleSynth::render(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+void SimpleSynth::render(juce::AudioBuffer<float>& buffer, const juce::MidiBuffer& midi)
 {
     synth.renderNextBlock(buffer, midi, 0, buffer.getNumSamples());
 }
@@ -266,6 +375,91 @@ void SimpleSynth::setDrumMode(bool shouldUseDrums)
 bool SimpleSynth::isDrumMode() const noexcept
 {
     return drumMode;
+}
+
+void SimpleSynth::setWaveform(Waveform newWaveform) noexcept
+{
+    const auto index = static_cast<int>(newWaveform);
+
+    if (index < 0 || index >= static_cast<int>(Waveform::numWaveforms))
+        return;
+
+    waveform.store(index, std::memory_order_relaxed);
+}
+
+SimpleSynth::Waveform SimpleSynth::getWaveform() const noexcept
+{
+    return static_cast<Waveform>(waveform.load(std::memory_order_relaxed));
+}
+
+void SimpleSynth::setEnvelope(const Envelope& newEnvelope) noexcept
+{
+    // Clamped here rather than at every caller: the window, a project file and
+    // a test all reach this, and a zero-length attack is a click.
+    attack.store(juce::jlimit(0.001f, 10.0f, newEnvelope.attack), std::memory_order_relaxed);
+    decay.store(juce::jlimit(0.001f, 10.0f, newEnvelope.decay), std::memory_order_relaxed);
+    sustain.store(juce::jlimit(0.0f, 1.0f, newEnvelope.sustain), std::memory_order_relaxed);
+    release.store(juce::jlimit(0.001f, 10.0f, newEnvelope.release), std::memory_order_relaxed);
+}
+
+SimpleSynth::Envelope SimpleSynth::getEnvelope() const noexcept
+{
+    Envelope shaping;
+    shaping.attack = attack.load(std::memory_order_relaxed);
+    shaping.decay = decay.load(std::memory_order_relaxed);
+    shaping.sustain = sustain.load(std::memory_order_relaxed);
+    shaping.release = release.load(std::memory_order_relaxed);
+    return shaping;
+}
+
+bool SimpleSynth::isDefault() const noexcept
+{
+    const Envelope defaults;
+    const auto shaping = getEnvelope();
+
+    const auto same = [] (float a, float b) { return std::abs(a - b) < 1.0e-6f; };
+
+    return getWaveform() == Waveform::sine
+        && same(shaping.attack, defaults.attack)
+        && same(shaping.decay, defaults.decay)
+        && same(shaping.sustain, defaults.sustain)
+        && same(shaping.release, defaults.release);
+}
+
+juce::var SimpleSynth::toVar() const
+{
+    auto* object = new juce::DynamicObject();
+    const auto shaping = getEnvelope();
+
+    object->setProperty("waveform", static_cast<int>(getWaveform()));
+    object->setProperty("attack", shaping.attack);
+    object->setProperty("decay", shaping.decay);
+    object->setProperty("sustain", shaping.sustain);
+    object->setProperty("release", shaping.release);
+
+    return juce::var(object);
+}
+
+void SimpleSynth::fromVar(const juce::var& value)
+{
+    auto* object = value.getDynamicObject();
+
+    if (object == nullptr)
+        return;
+
+    const Envelope defaults;
+
+    const auto number = [object] (const char* name, float fallback)
+    {
+        const auto stored = object->getProperty(name);
+        return stored.isVoid() ? fallback : static_cast<float>(static_cast<double>(stored));
+    };
+
+    setWaveform(static_cast<Waveform>(static_cast<int>(object->getProperty("waveform"))));
+    setEnvelope({ number("attack", defaults.attack),
+                  number("decay", defaults.decay),
+                  number("sustain", defaults.sustain),
+                  number("release", defaults.release) });
 }
 
 } // namespace djr

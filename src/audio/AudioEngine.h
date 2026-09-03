@@ -31,13 +31,19 @@ public:
     int getCurrentBufferSize() const noexcept;
     int getInputChannelCount() const noexcept;
     float getMasterPeak() const noexcept;
+    float getInputPeak() const noexcept;
     juce::String getAudioStatus() const;
 
     /** Live MIDI merged into every block; pass nullptr to detach. */
     void setLiveMidiSource(LiveMidiSource* source);
 
-    /** Starts writing the device input to `file`. Message thread only. */
-    bool startAudioRecording(const juce::File& file);
+    /** Starts writing the device input to `file`. Message thread only.
+
+        `firstChannel` and `numChannels` say which of the device's inputs to
+        capture, so an armed track records its own socket rather than whatever
+        is wired into the first one.
+    */
+    bool startAudioRecording(const juce::File& file, int firstChannel = 0, int numChannels = 0);
     void stopAudioRecording();
     bool isAudioRecording() const noexcept;
     juce::File getCurrentRecordingFile() const;
@@ -69,7 +75,11 @@ private:
     std::atomic<double> sampleRate { 44100.0 };
     std::atomic<int> bufferSize { 512 };
     std::atomic<int> inputChannelCount { 0 };
+    // What the mixer was last prepared for, so renderOffline can put it back
+    // at the device's own channel count rather than assuming stereo.
+    std::atomic<int> outputChannelCount { 2 };
     std::atomic<float> masterPeak { 0.0f };
+    std::atomic<float> inputPeak { 0.0f };
 };
 
 } // namespace djr

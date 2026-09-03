@@ -7,7 +7,10 @@ namespace djr
 
 namespace
 {
-    constexpr float pillIconSize = 11.0f;
+    // Big enough to read at a glance rather than to be identified on inspection.
+    // FL's are chunkier than this was, and an icon nobody can make out is a
+    // decoration with a tooltip.
+    constexpr float pillIconSize = 14.0f;
     constexpr int pillIconGap = 5;
     constexpr int pillPadding = 8;
 
@@ -127,7 +130,7 @@ void PillButton::paintButton(juce::Graphics& g, bool highlighted, bool down)
         const auto iconArea = content.removeFromLeft(pillIconSize)
                                      .withSizeKeepingCentre(pillIconSize, pillIconSize);
         g.setColour(buttonStyle == Style::filled ? foreground : Theme::accent());
-        Icons::draw(g, *iconKind, iconArea, 1.4f);
+        Icons::draw(g, *iconKind, iconArea, 1.7f);
         content.removeFromLeft(static_cast<float>(pillIconGap));
     }
 
@@ -197,7 +200,7 @@ void IconChipButton::paintButton(juce::Graphics& g, bool mouseOver, bool down)
                                                  : Theme::textSoft();
 
     g.setColour(isEnabled() ? tint : tint.withMultipliedAlpha(0.4f));
-    Icons::draw(g, iconKind, bounds.reduced(iconInset), 1.4f);
+    Icons::draw(g, iconKind, bounds.reduced(iconInset), 1.7f);
 }
 
 //==============================================================================
@@ -254,11 +257,11 @@ void UnderlineTab::paintButton(juce::Graphics& g, bool highlighted, bool down)
     const auto foreground = active ? Theme::text() : highlighted ? Theme::textSoft() : Theme::mutedText();
 
     auto content = bounds.reduced(9.0f, 0.0f);
-    const auto iconArea = content.removeFromLeft(11.0f).withSizeKeepingCentre(11.0f, 11.0f);
+    const auto iconArea = content.removeFromLeft(13.0f).withSizeKeepingCentre(13.0f, 13.0f);
     content.removeFromLeft(5.0f);
 
     g.setColour(active ? Theme::accent() : foreground);
-    Icons::draw(g, iconKind, iconArea, 1.4f);
+    Icons::draw(g, iconKind, iconArea, 1.7f);
 
     g.setColour(foreground);
     g.setFont(Theme::ui(12.0f, true));

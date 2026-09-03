@@ -132,4 +132,12 @@ juce::StringArray PluginChain::getPluginNames() const
     return names;
 }
 
+juce::StringArray PluginChain::getPluginFormatNames() const
+{
+    juce::StringArray formats;
+    for (const auto& plugin : plugins)
+        formats.add(plugin->getPluginDescription().pluginFormatName);
+    return formats;
+}
+
 } // namespace djr

@@ -11,19 +11,19 @@ bool ExportManager::render(Mixer& mixer,
 {
     if (options.sampleRate <= 0.0 || options.blockSize <= 0 || options.tempoBpm <= 0.0)
     {
-        errorOut = "Pengaturan export tidak valid.";
+        errorOut = TRANS("The export settings are not valid.");
         return false;
     }
 
     if (options.lengthBeats <= 0.0)
     {
-        errorOut = "Panjang export nol - tidak ada yang bisa dirender.";
+        errorOut = TRANS("Export length is zero - there is nothing to render.");
         return false;
     }
 
     if (! outputFile.getParentDirectory().createDirectory())
     {
-        errorOut = "Folder tujuan tidak bisa dibuat: " + outputFile.getParentDirectory().getFullPathName();
+        errorOut = TRANS("The destination folder could not be created: ") + outputFile.getParentDirectory().getFullPathName();
         return false;
     }
 
@@ -34,7 +34,7 @@ bool ExportManager::render(Mixer& mixer,
 
     if (stream == nullptr)
     {
-        errorOut = "File tidak bisa ditulis: " + outputFile.getFullPathName();
+        errorOut = TRANS("The file could not be written: ") + outputFile.getFullPathName();
         return false;
     }
 
@@ -50,18 +50,28 @@ bool ExportManager::render(Mixer& mixer,
 
     if (writer == nullptr)
     {
-        errorOut = "Writer wav gagal dibuat.";
+        errorOut = TRANS("The wav writer could not be created.");
         return false;
     }
 
     stream.release();
 
-    mixer.prepare(options.sampleRate, options.blockSize);
+    mixer.prepare(options.sampleRate, options.blockSize, channels);
 
     const auto beatsPerBlock = (static_cast<double>(options.blockSize) / options.sampleRate)
                              * (options.tempoBpm / 60.0);
     const auto totalSamples = static_cast<juce::int64>(
         options.lengthBeats * (60.0 / options.tempoBpm) * options.sampleRate);
+
+    // A write failure leaves a truncated, unplayable file behind; better to
+    // remove it than let the user find a wav that looks done but isn't.
+    const auto failWithPartialFile = [&] (const juce::String& message)
+    {
+        writer.reset();
+        outputFile.deleteFile();
+        errorOut = message;
+        return false;
+    };
 
     juce::AudioBuffer<float> block(channels, options.blockSize);
     auto beat = options.startBeat;
@@ -86,10 +96,7 @@ bool ExportManager::render(Mixer& mixer,
         mixer.process(view, context);
 
         if (! writer->writeFromAudioSampleBuffer(view, 0, samplesThisBlock))
-        {
-            errorOut = "Penulisan file gagal di tengah render.";
-            return false;
-        }
+            return failWithPartialFile(TRANS("Writing the file failed part way through the render."));
 
         written += samplesThisBlock;
         beat = context.endBeat;
@@ -125,9 +132,10 @@ bool ExportManager::render(Mixer& mixer,
             peak = juce::jmax(peak, view.getMagnitude(channel, 0, samplesThisBlock));
 
         if (! writer->writeFromAudioSampleBuffer(view, 0, samplesThisBlock))
-            break;
+            return failWithPartialFile(TRANS("Writing the file failed while rendering the tail."));
 
         tailWritten += samplesThisBlock;
+        beat = context.endBeat;
 
         if (peak <= 1.0e-5f)
             break;

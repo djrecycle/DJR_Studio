@@ -23,6 +23,18 @@ EditHistory::Snapshot EditHistory::capture(const juce::String& actionName) const
     {
         TrackState state;
 
+        // The name and the automation hang off the base track, so they are
+        // captured before the kind-specific branches rather than inside one.
+        if (const auto* track = mixer.getTrack(i))
+        {
+            state.name = track->getName();
+            state.automation = track->captureAutomation();
+            state.outputDestination = track->getOutputDestination();
+
+            for (int slot = 0; slot < Track::maxSends; ++slot)
+                state.sends[static_cast<size_t>(slot)] = track->getSend(slot);
+        }
+
         if (auto* midiTrack = dynamic_cast<MidiTrack*>(mixer.getTrack(i)))
         {
             state.placements = midiTrack->getPlacements();
@@ -65,6 +77,19 @@ void EditHistory::restore(const Snapshot& snapshot)
             break;
 
         const auto& state = snapshot.tracks[static_cast<size_t>(i)];
+
+        if (auto* track = mixer.getTrack(i))
+        {
+            track->setName(state.name);
+            track->restoreAutomation(state.automation);
+
+            // Put back through the mixer, so undo cannot reinstate a route the
+            // graph would refuse - and so the process order is rebuilt with it.
+            mixer.setTrackOutput(i, state.outputDestination);
+
+            for (int slot = 0; slot < Track::maxSends; ++slot)
+                mixer.setTrackSend(i, slot, state.sends[static_cast<size_t>(slot)]);
+        }
 
         if (auto* midiTrack = dynamic_cast<MidiTrack*>(mixer.getTrack(i)))
         {
@@ -118,14 +143,14 @@ void EditHistory::endGesture()
     gestureCaptured = false;
 }
 
-void EditHistory::pushSnapshot(const juce::String& actionName)
+bool EditHistory::pushSnapshot(const juce::String& actionName)
 {
     // Inside a gesture only the first push counts, so a drag that fires on every
     // mouse move still collapses to a single step.
     if (gestureOpen)
     {
         if (gestureCaptured)
-            return;
+            return false;
 
         gestureCaptured = true;
     }
@@ -137,6 +162,7 @@ void EditHistory::pushSnapshot(const juce::String& actionName)
 
     // A fresh edit makes any redo branch unreachable.
     redoStack.clear();
+    return true;
 }
 
 void EditHistory::abandonSnapshot()

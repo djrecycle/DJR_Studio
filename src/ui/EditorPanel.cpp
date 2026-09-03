@@ -43,6 +43,11 @@ EditorPanel::EditorPanel(PianoRollModel& modelToUse, Transport& transport)
     velocityToggle.setTooltip("Tampilkan / sembunyikan velocity lane");
     addAndMakeVisible(velocityToggle);
 
+    followButton.setIconInset(4.0f);
+    followButton.addListener(this);
+    followButton.setTooltip(TRANS("Follow playhead during playback"));
+    addAndMakeVisible(followButton);
+
     addAndMakeVisible(pianoRoll);
     addAndMakeVisible(velocityLane);
     addChildComponent(stepSequencer);
@@ -54,10 +59,21 @@ EditorPanel::EditorPanel(PianoRollModel& modelToUse, Transport& transport)
     keyboard.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, Theme::outline());
     keyboard.setColour(juce::MidiKeyboardComponent::keyDownOverlayColourId, Theme::accent());
     keyboard.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, Theme::accent().withAlpha(0.35f));
+
+    // MidiKeyboardComponent ships its own typing map (a w s e d f t g y h u j k
+    // o l p ;) and asks for focus when clicked, so once you had touched the
+    // strip with the mouse every letter played twice: once from TypingKeyboard's
+    // map and once from JUCE's, on a different note. W gave D and C sharp
+    // together, and A played a C the FL map does not even have. TypingKeyboard
+    // polls regardless of focus, so this one has nothing left to do.
+    keyboard.clearKeyMappings();
+    keyboard.setWantsKeyboardFocus(false);
+
     keyboardState.addListener(&keyboardBridge);
     addAndMakeVisible(keyboard);
 
     buildToolButtons();
+    refreshFollowButton();
 
     model.addChangeListener(this);
     refreshTabs();
@@ -67,18 +83,18 @@ void EditorPanel::buildToolButtons()
 {
     // The playlist's Slip has no meaning for a note, so this set is one shorter.
     static const ToolButton definitions[] = {
-        { PianoRollView::Tool::select,   Icon::marquee,     "Select - pilih & geser note" },
-        { PianoRollView::Tool::draw,     Icon::pencil,      "Draw - taruh note" },
-        { PianoRollView::Tool::erase,    Icon::eraser,      "Delete - hapus note" },
-        { PianoRollView::Tool::mute,     Icon::speakerMute, "Mute - bisukan note" },
-        { PianoRollView::Tool::slice,    Icon::slice,       "Slice - potong note" },
-        { PianoRollView::Tool::zoom,     Icon::zoom,        "Zoom - tarik area" },
-        { PianoRollView::Tool::playback, Icon::play,        "Playback - klik untuk memutar" }
+        { PianoRollView::Tool::select,   Icon::marquee,     "Select - pick and move notes" },
+        { PianoRollView::Tool::draw,     Icon::pencil,      "Draw - place notes" },
+        { PianoRollView::Tool::erase,    Icon::eraser,      "Delete - remove notes" },
+        { PianoRollView::Tool::mute,     Icon::speakerMute, "Mute - silence a note" },
+        { PianoRollView::Tool::slice,    Icon::slice,       "Slice - cut a note" },
+        { PianoRollView::Tool::zoom,     Icon::zoom,        "Zoom - drag out an area" },
+        { PianoRollView::Tool::playback, Icon::play,        "Playback - click to play" }
     };
 
     for (const auto& definition : definitions)
     {
-        auto* button = toolButtons.add(new IconChipButton(definition.tooltip, definition.icon));
+        auto* button = toolButtons.add(new IconChipButton(juce::translate(definition.tooltip), definition.icon));
         // Small chips need a tighter inset or the glyph is unreadable.
         button->setIconInset(3.5f);
         button->addListener(this);
@@ -105,6 +121,13 @@ void EditorPanel::refreshToolButtons()
         }
 }
 
+void EditorPanel::refreshFollowButton()
+{
+    followButton.setIcon(pianoRoll.isFollowingPlayhead() ? Icon::chevronRight : Icon::minimise);
+    // Following only means anything while the roll itself is on screen.
+    followButton.setVisible(pianoRollVisible);
+}
+
 EditorPanel::~EditorPanel()
 {
     keyboardState.removeListener(&keyboardBridge);
@@ -115,6 +138,7 @@ EditorPanel::~EditorPanel()
     pianoRollTab.removeListener(this);
     stepSequencerTab.removeListener(this);
     velocityToggle.removeListener(this);
+    followButton.removeListener(this);
 }
 
 void EditorPanel::paint(juce::Graphics& g)
@@ -144,7 +168,9 @@ void EditorPanel::paint(juce::Graphics& g)
     g.setFont(Theme::ui(11.0f));
     g.drawText("Velocity", toggleArea, juce::Justification::centred, false);
 
-    info = info.withRight(toggleArea.getX());
+    // Stop short of the follow button too, whether or not it is shown for the
+    // current tab - its slot in the strip is reserved either way.
+    info = info.withRight(followButton.getBounds().getX());
     drawDivider(info.removeFromRight(11));
 
     const auto notesText = juce::String(noteCount) + " notes";
@@ -177,6 +203,18 @@ void EditorPanel::paint(juce::Graphics& g)
                juce::Justification::centredLeft,
                false);
 
+    // Whose notes these are, dimmer than the pattern badge: the pattern is what
+    // is being edited, the track is where it belongs.
+    if (trackName.isNotEmpty())
+    {
+        g.setColour(Theme::mutedText());
+        g.setFont(Theme::ui(10.5f));
+        g.drawText(trackName,
+                   nameArea.withX(nameArea.getRight() + 6).withWidth(110),
+                   juce::Justification::centredLeft,
+                   true);
+    }
+
     // The pattern's loop length, and whether it follows the notes or is pinned.
     const auto lengthArea = getPatternLengthBounds();
     g.setColour(Theme::control());
@@ -202,8 +240,28 @@ juce::Rectangle<int> EditorPanel::getPatternNameBounds() const
 
 juce::Rectangle<int> EditorPanel::getPatternLengthBounds() const
 {
-    const auto name = getPatternNameBounds();
+    // Past the track name when there is one, so the two never sit on top of
+    // each other on a narrow panel.
+    const auto name = trackName.isEmpty()
+        ? getPatternNameBounds()
+        : getPatternNameBounds().withWidth(getPatternNameBounds().getWidth() + 6
+                                               + juce::jmin(110, Theme::textWidth(Theme::ui(10.5f), trackName) + 4));
     return juce::Rectangle<int>(name.getRight() + 8, name.getY(), 48, name.getHeight());
+}
+juce::Rectangle<int> EditorPanel::getInstrumentNameBounds() const
+{
+    const auto nameArea = getPatternNameBounds();
+
+    // The same width getPatternLengthBounds measures to place the badge after
+    // the name, so the two never overlap. A fixed width would sit underneath
+    // the badge on a short name and only work because of the order the clicks
+    // happen to be tested in. Empty on an audio track, where no name is drawn:
+    // an invisible region that swallows clicks is worse than none at all.
+    const auto width = trackName.isEmpty()
+        ? 0
+        : juce::jmin(110, Theme::textWidth(Theme::ui(10.5f), trackName) + 4);
+
+    return juce::Rectangle<int>(nameArea.getRight() + 6, nameArea.getY(), width, nameArea.getHeight());
 }
 
 void EditorPanel::setPatternLengthBeats(double beats, bool locked)
@@ -235,6 +293,16 @@ void EditorPanel::setNoteGestureCallback(std::function<void(bool)> callback)
     velocityLane.onEditGesture = std::move(callback);
 }
 
+void EditorPanel::setTrackName(const juce::String& name)
+{
+    if (name == trackName)
+        return;
+
+    trackName = name;
+    resized();
+    repaint();
+}
+
 void EditorPanel::setPatternName(const juce::String& name)
 {
     if (patternName == name)
@@ -249,10 +317,25 @@ void EditorPanel::setPatternRenameCallback(std::function<void()> callback)
     patternRenameCallback = std::move(callback);
 }
 
+void EditorPanel::setTrackListProvider(std::function<std::vector<PickableTrack>()> provider)
+{
+    trackListProvider = std::move(provider);
+}
+
+void EditorPanel::setSelectedTrackIndex(int trackIndex) noexcept
+{
+    selectedTrackIndex = trackIndex;
+}
+
+void EditorPanel::setTrackChangedCallback(std::function<void(int)> callback)
+{
+    trackChangedCallback = std::move(callback);
+}
+
 void EditorPanel::showPatternLengthMenu()
 {
     juce::PopupMenu menu;
-    menu.addSectionHeader("Panjang pattern");
+    menu.addSectionHeader(TRANS("Pattern length"));
     menu.addItem(1, "Ikuti isi (auto)", true, ! patternLengthLocked);
     menu.addSeparator();
 
@@ -267,8 +350,10 @@ void EditorPanel::showPatternLengthMenu()
                      true,
                      patternLengthLocked && std::abs(patternLengthBeats - bars[i] * barBeats) < 1.0e-9);
 
+    // Anchored to the badge that opened it, not to the whole panel: targeting
+    // the component drops the menu at the panel's edge, nowhere near the click.
     menu.showMenuAsync(juce::PopupMenu::Options()
-                           .withTargetComponent(this)
+                           .withTargetScreenArea(localAreaToGlobal(getPatternLengthBounds()))
                            .withMinimumWidth(160)
                            .withStandardItemHeight(21),
         [this] (int result)
@@ -279,6 +364,39 @@ void EditorPanel::showPatternLengthMenu()
             const int chosen[] = { 1, 2, 4, 8, 16 };
             patternLengthChangedCallback(result == 1 ? 0.0
                                                      : chosen[result - 2] * pianoRoll.getBeatsPerBar());
+        });
+}
+
+void EditorPanel::showTrackMenu()
+{
+    if (! trackListProvider)
+        return;
+
+    const auto tracks = trackListProvider();
+
+    if (tracks.empty())
+        return;
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader(TRANS("Switch track"));
+
+    for (int i = 0; i < static_cast<int>(tracks.size()); ++i)
+    {
+        const auto& track = tracks[static_cast<size_t>(i)];
+        menu.addItem(i + 1, track.name, true, track.index == selectedTrackIndex);
+    }
+
+    // Anchored to the badge that opened it, like the pattern length menu.
+    menu.showMenuAsync(juce::PopupMenu::Options()
+                           .withTargetScreenArea(localAreaToGlobal(getInstrumentNameBounds()))
+                           .withMinimumWidth(180)
+                           .withStandardItemHeight(21),
+        [this, tracks] (int result)
+        {
+            if (result <= 0 || ! trackChangedCallback)
+                return;
+
+            trackChangedCallback(tracks[static_cast<size_t>(result - 1)].index);
         });
 }
 
@@ -326,6 +444,11 @@ void EditorPanel::mouseDown(const juce::MouseEvent& event)
 
         return;
     }
+    if (getInstrumentNameBounds().contains(event.getPosition()))
+    {
+        showTrackMenu();
+        return;
+    }
 
     const auto step = getPreviousPatternBounds().contains(event.getPosition()) ? -1
                     : getNextPatternBounds().contains(event.getPosition())     ? 1
@@ -350,6 +473,8 @@ void EditorPanel::resized()
     stepSequencerTab.setBounds(strip.removeFromLeft(stepSequencerTab.getPreferredWidth()));
 
     velocityToggle.setBounds(strip.removeFromRight(58).withSizeKeepingCentre(58, 16));
+    followButton.setBounds(strip.removeFromRight(19).withSizeKeepingCentre(18, 18));
+    strip.removeFromRight(4);
 
     // Tools sit after the pattern controls, in the gap before the note count.
     auto tools = strip.withX(getPatternLengthBounds().getRight() + 10)
@@ -429,6 +554,22 @@ void EditorPanel::setViewChangedCallback(std::function<void()> callback)
     viewChangedCallback = std::move(callback);
 }
 
+juce::MidiKeyboardState& EditorPanel::getKeyboardState() noexcept
+{
+    return keyboardState;
+}
+
+void EditorPanel::ensureKeyVisible(int note)
+{
+    const auto lowest = static_cast<int>(keyboard.getLowestVisibleKey());
+    const auto span = juce::jmax(12, static_cast<int>(keyboard.getWidth() / juce::jmax(1.0f, keyboard.getKeyWidth())));
+
+    if (note < lowest)
+        keyboard.setLowestVisibleKey(juce::jmax(0, note - 2));
+    else if (note >= lowest + span)
+        keyboard.setLowestVisibleKey(juce::jlimit(0, 108, note - span + 3));
+}
+
 void EditorPanel::setKeyboardMessageCallback(std::function<void(const juce::MidiMessage&)> callback)
 {
     keyboardBridge.onMessage = std::move(callback);
@@ -443,6 +584,11 @@ void EditorPanel::buttonClicked(juce::Button* button)
     else if (button == &velocityToggle)
     {
         setVelocityLaneVisible(! velocityLaneVisible);
+    }
+    else if (button == &followButton)
+    {
+        pianoRoll.setFollowPlayhead(! pianoRoll.isFollowingPlayhead());
+        refreshFollowButton();
     }
     else
     {
@@ -473,6 +619,7 @@ void EditorPanel::changeListenerCallback(juce::ChangeBroadcaster* source)
 void EditorPanel::refreshTabs()
 {
     refreshToolButtons();
+    refreshFollowButton();
 
     pianoRollTab.setToggleState(pianoRollVisible, juce::dontSendNotification);
     stepSequencerTab.setToggleState(! pianoRollVisible, juce::dontSendNotification);

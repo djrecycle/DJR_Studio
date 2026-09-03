@@ -212,7 +212,7 @@ void PanelWindow::setRolledUp(bool shouldRollUp)
         restoredBounds = getBounds();
 
     rolledUp = shouldRollUp;
-    rollUpButton.setTooltip(rolledUp ? "Turunkan panel" : "Gulung panel");
+    rollUpButton.setTooltip(rolledUp ? TRANS("Collapse panel") : "Gulung panel");
 
     if (rolledUp)
         setBounds(getBounds().withHeight(titleBarHeight));

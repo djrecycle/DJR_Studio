@@ -39,7 +39,7 @@ void InsertChainPanel::paint(juce::Graphics& g)
     g.fillRoundedRectangle(chip.toFloat(), 1.5f);
     headerContent.removeFromLeft(6);
 
-    const auto trackName = track != nullptr ? track->getName() : juce::String("Tidak ada track");
+    const auto trackName = track != nullptr ? track->getName() : juce::String(TRANS("No track"));
     const auto nameFont = Theme::ui(12.0f, true);
     const auto nameWidth = Theme::textWidth(nameFont, trackName);
 
@@ -51,8 +51,10 @@ void InsertChainPanel::paint(juce::Graphics& g)
     if (track != nullptr)
     {
         const auto kind = track->getKind() == TrackKind::midi
-            ? "MIDI - CH " + juce::String(selectedTrack + 1)
-            : juce::String("AUDIO");
+                              ? "MIDI - CH " + juce::String(selectedTrack + 1)
+                        : track->getKind() == TrackKind::bus
+                              ? juce::String("BUS")
+                              : juce::String("AUDIO");
 
         g.setColour(Theme::faintText());
         g.setFont(Theme::mono(9.5f));
@@ -101,7 +103,7 @@ void InsertChainPanel::paint(juce::Graphics& g)
 
         g.setColour(empty ? Theme::faintText() : Theme::text());
         g.setFont(Theme::ui(11.5f));
-        g.drawText(empty ? "Belum ada instrument" : instrumentName,
+        g.drawText(empty ? TRANS("No instrument yet") : instrumentName,
                    content, juce::Justification::centredLeft, true);
     }
 
@@ -112,6 +114,7 @@ void InsertChainPanel::paint(juce::Graphics& g)
                        "Insert chain");
 
     const auto pluginNames = track->getPluginNames();
+    const auto pluginFormats = track->getPluginFormatNames();
 
     for (int i = 0; i < getNumRows(); ++i)
     {
@@ -143,14 +146,17 @@ void InsertChainPanel::paint(juce::Graphics& g)
 
         if (! isDropSlot)
         {
+            // The real format, not a fixed label: with LV2 and VST3 side by side
+            // it is the difference between a plugin's own editor and a generic one.
             g.setColour(Theme::faintText());
             g.setFont(Theme::mono(9.5f));
-            g.drawText("VST3", content.removeFromRight(30), juce::Justification::centredRight, false);
+            g.drawText(i < pluginFormats.size() ? pluginFormats[i] : juce::String(),
+                       content.removeFromRight(34), juce::Justification::centredRight, false);
         }
 
         g.setColour(isDropSlot ? Theme::faintText() : Theme::text());
         g.setFont(Theme::ui(11.5f));
-        g.drawText(isDropSlot ? "Klik untuk load plugin terpilih" : pluginNames[i],
+        g.drawText(isDropSlot ? TRANS("Click to load the selected plugin") : pluginNames[i],
                    content,
                    juce::Justification::centredLeft,
                    true);
@@ -176,9 +182,9 @@ void InsertChainPanel::mouseDown(const juce::MouseEvent& event)
         if (event.mods.isRightButtonDown())
         {
             juce::PopupMenu menu;
-            menu.addItem(1, "Buka editor instrument");
-            menu.addItem(2, "Lepas instrument");
-            menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withStandardItemHeight(21),
+            menu.addItem(1, TRANS("Open instrument editor"));
+            menu.addItem(2, TRANS("Remove instrument"));
+            menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition().withStandardItemHeight(21),
                 [this] (int result)
                 {
                     auto* selected = mixer.getTrack(selectedTrack);
@@ -220,9 +226,9 @@ void InsertChainPanel::mouseDown(const juce::MouseEvent& event)
         if (event.mods.isRightButtonDown())
         {
             juce::PopupMenu menu;
-            menu.addItem(1, "Buka editor plugin");
-            menu.addItem(2, "Hapus semua insert");
-            menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withStandardItemHeight(21),
+            menu.addItem(1, TRANS("Open plugin editor"));
+            menu.addItem(2, TRANS("Remove all inserts"));
+            menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition().withStandardItemHeight(21),
                 [this, i] (int result)
                 {
                     if (result == 1 && openSlotCallback)

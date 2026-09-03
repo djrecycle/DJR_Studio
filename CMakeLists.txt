@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 # The numeric part is set here; the rest is derived from git so a build can
 # always be traced back to the exact commit it came from. Bump DJR_VERSION_BASE
 # for a release and tag it; everything else follows.
-set(DJR_VERSION_BASE "0.2.0")
+set(DJR_VERSION_BASE "0.2.1")
 set(DJR_VERSION_STAGE "beta")
 
 # Deliberately the commit hash, not "git describe": once a release is tagged,
@@ -79,10 +79,16 @@ FetchContent_MakeAvailable(JUCE)
 # so the tests subdirectory can reuse the list.
 set(DJR_ENGINE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Transport.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AutomationLane.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/ChannelSettings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Track.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioTrack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioClip.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AudioAnalysis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/TimeStretch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/BusTrack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/MidiTrack.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/AlignmentDelay.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Mixer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/MasterBus.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/Metronome.cpp
@@ -94,8 +100,12 @@ set(DJR_ENGINE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/MidiEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/PluginChain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/project/Project.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/project/ProjectTrackLayout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/recording/Recorder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/recording/RecordingBuffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/recording/SampleCapture.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/export/ExportManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/export/TrackRenderer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/utils/Logger.cpp)
 
 set(DJR_STUDIO_SOURCES
@@ -103,13 +113,19 @@ set(DJR_STUDIO_SOURCES
     src/main.cpp
     src/app/DJRStudioApplication.cpp
     src/app/MainWindow.cpp
+    src/app/Localisation.cpp
+    src/app/Settings.cpp
+    src/app/TypingKeyboard.cpp
     src/audio/AudioEngine.cpp
     src/plugins/PluginManager.cpp
+    src/plugins/AudioEditorProcessor.cpp
     src/plugins/PluginScanner.cpp
     src/plugins/PluginWindow.cpp
-    src/recording/RecordingBuffer.cpp
     src/project/ProjectManager.cpp
     src/project/ProjectSerializer.cpp
+    src/ui/Knob.cpp
+    src/ui/PreviewSynthPanel.cpp
+    src/ui/ZoomScrollBar.cpp
     src/ui/MainComponent.cpp
     src/ui/MenuBarView.cpp
     src/ui/TransportBar.cpp
@@ -123,6 +139,7 @@ set(DJR_STUDIO_SOURCES
     src/ui/PianoRollView.cpp
     src/ui/VelocityLane.cpp
     src/ui/StepSequencerView.cpp
+    src/ui/SampleEditorView.cpp
     src/ui/PluginBrowserView.cpp
     src/ui/InsertChainPanel.cpp
     src/ui/StatusBar.cpp
@@ -159,6 +176,11 @@ target_compile_definitions(djr_studio
         JUCE_STRICT_REFCOUNTEDPOINTER=1
         JUCE_PLUGINHOST_VST=0
         JUCE_PLUGINHOST_VST3=1
+        # The Linux plugin library is overwhelmingly LV2 - on a typical Ubuntu
+        # Studio install it is hundreds of plugins against a handful of VST3.
+        # VST2 stays off: hosting it needs the Steinberg SDK, which is no longer
+        # distributable, and Carla loaded as an LV2 covers that case anyway.
+        JUCE_PLUGINHOST_LV2=1
         JUCE_PLUGINHOST_AU=0
         JUCE_ALSA=1
         JUCE_JACK=1

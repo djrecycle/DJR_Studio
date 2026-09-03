@@ -135,7 +135,7 @@ void StepSequencerView::paint(juce::Graphics& g)
     {
         g.setColour(Theme::faintText());
         g.setFont(Theme::ui(12.5f));
-        g.drawText("Pilih track MIDI untuk memakai step sequencer",
+        g.drawText(TRANS("Select a MIDI track to use the step sequencer"),
                    getLocalBounds(), juce::Justification::centred, true);
         return;
     }

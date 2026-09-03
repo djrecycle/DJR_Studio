@@ -185,6 +185,16 @@ bool MidiTrack::isPreviewDrumKit() const noexcept
     return previewSynth.isDrumMode();
 }
 
+SimpleSynth& MidiTrack::getPreviewSynth() noexcept
+{
+    return previewSynth;
+}
+
+const SimpleSynth& MidiTrack::getPreviewSynth() const noexcept
+{
+    return previewSynth;
+}
+
 void MidiTrack::prepare(double sampleRate, int blockSize)
 {
     Track::prepare(sampleRate, blockSize);
@@ -211,24 +221,42 @@ void MidiTrack::renderAudio(juce::AudioBuffer<float>& buffer,
         // sequence left hanging instead of letting it drone.
         sendAllNotesOff(midi);
         resetTransportState();
+        getChannelSettings().reset();
         wasPlaying = false;
     }
 
+    // The arpeggiator rewrites the notes before anything turns them into sound,
+    // and the same pass is what tells the channel envelopes where the gate
+    // opens - so it has to run ahead of both the preview synth and the
+    // instrument, which Track runs after this returns.
+    getChannelSettings().processMidi(midi, buffer.getNumSamples(), context.tempoBpm);
+
     // Live playing is merged by Track before the instrument runs, so the preview
     // synth has to see it too - render after the sequence has been written.
+    //
+    // Handed over directly: the synthesiser only reads the notes, and the copy
+    // this used to make allocated on the audio thread every block for every
+    // track that has no instrument loaded - which is the default state.
     if (! hasInstrument())
-    {
-        juce::MidiBuffer forSynth(midi);
-        previewSynth.render(buffer, forSynth);
-    }
+        previewSynth.render(buffer, midi);
 }
 
 void MidiTrack::renderPatternMode(juce::MidiBuffer& midi, const TrackPlaybackContext& context, int numSamples)
 {
     const auto jumpedBackward = context.startBeat + 0.0001 < lastBlockStartBeat;
+    const auto activePatternNow = getActivePattern();
+    const auto patternChanged = activePatternNow != lastRenderedPattern;
 
-    if (! transportPrepared || jumpedBackward)
+    if (! transportPrepared || jumpedBackward || patternChanged)
+    {
+        // Ahead of the notes at the new position, so one that spans the wrap is
+        // released and struck again rather than struck twice and left hanging.
+        // A pattern switch is the same problem by another door: whatever was
+        // held belongs to a sequence emitNotes is no longer reading, so it has
+        // no note-off of its own coming either.
+        releaseHeldNotes(midi);
         resetTransportState();
+    }
 
     emitNotes(midi,
               getClip().getNotesSnapshot(),
@@ -239,6 +267,7 @@ void MidiTrack::renderPatternMode(juce::MidiBuffer& midi, const TrackPlaybackCon
               numSamples);
 
     lastBlockStartBeat = context.startBeat;
+    lastRenderedPattern = activePatternNow;
     transportPrepared = true;
 }
 
@@ -247,7 +276,12 @@ void MidiTrack::renderSongMode(juce::MidiBuffer& midi, const TrackPlaybackContex
     const auto jumpedBackward = context.startBeat + 0.0001 < lastBlockStartBeat;
 
     if (! transportPrepared || jumpedBackward)
+    {
+        // As in pattern mode: the placements about to be written cannot supply
+        // the note-off the previous pass was still waiting for.
+        releaseHeldNotes(midi);
         resetTransportState();
+    }
 
     // Skipping a block beats blocking the device while the playlist is edited.
     const juce::SpinLock::ScopedTryLockType scoped(placementLock);
@@ -337,7 +371,7 @@ void MidiTrack::emitNotes(juce::MidiBuffer& midi,
     }
 }
 
-void MidiTrack::sendAllNotesOff(juce::MidiBuffer& midi)
+void MidiTrack::releaseHeldNotes(juce::MidiBuffer& midi)
 {
     for (int pitch = 0; pitch < 128; ++pitch)
     {
@@ -347,7 +381,16 @@ void MidiTrack::sendAllNotesOff(juce::MidiBuffer& midi)
         midi.addEvent(juce::MidiMessage::noteOff(1, pitch), 0);
         activeNotes[static_cast<size_t>(pitch)] = false;
     }
+}
 
+void MidiTrack::sendAllNotesOff(juce::MidiBuffer& midi)
+{
+    releaseHeldNotes(midi);
+
+    // And the catch-all on top, for anything the instrument is holding that
+    // this track did not put there - a live note played over the sequence, or a
+    // tail an earlier take left behind. Only on the way to a stop: sending it
+    // every time a loop came round would reset the sustain pedal with it.
     midi.addEvent(juce::MidiMessage::allNotesOff(1), 0);
 }
 

@@ -27,15 +27,26 @@ void ProjectManager::newProject(const juce::File& folder)
     project.reset();
     project.samplesFolder = folder.getChildFile("Samples");
     project.recordingsFolder = folder.getChildFile("Recordings");
-    ProjectTrackState audioTrack;
-    audioTrack.name = "Audio 1";
-    audioTrack.type = "audio";
-    project.tracks.add(audioTrack);
 
-    ProjectTrackState midiTrack;
-    midiTrack.name = "MIDI 1";
-    midiTrack.type = "midi";
-    project.tracks.add(midiTrack);
+    const auto addTrack = [this] (const char* name, const char* type)
+    {
+        ProjectTrackState state;
+        state.name = name;
+        state.type = type;
+        project.tracks.add(state);
+    };
+
+    // The six tracks a fresh mixer builds itself, in the same order and of the
+    // same kinds - see Mixer's constructor. Opening a project now makes the
+    // track list match the file, so a shorter list here would be a new project
+    // that throws most of the default session away.
+    addTrack("Drums", "midi");
+    addTrack("Bass", "midi");
+    addTrack("Pad", "midi");
+    addTrack("Vox", "audio");
+    addTrack("FX", "audio");
+    addTrack("Keys", "midi");
+
     sendChangeMessage();
 }
 

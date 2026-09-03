@@ -2,6 +2,7 @@
 
 #include "SessionState.h"
 #include "audio/AudioClip.h"
+#include "audio/AutomationLane.h"
 #include "audio/Mixer.h"
 #include "audio/Transport.h"
 #include "audio/PatternPlacement.h"
@@ -41,7 +42,13 @@ public:
     /** Records the state as it is now, tagged with what is about to happen.
         Call this immediately before mutating anything.
     */
-    void pushSnapshot(const juce::String& actionName);
+    /** Takes a snapshot, unless a gesture has already taken one.
+
+        Returns whether it actually took one: a drag fires this on every mouse
+        move, and everything that follows an undo step - refreshing menus,
+        marking the project dirty - is work only the first one is worth.
+    */
+    bool pushSnapshot(const juce::String& actionName);
     /** Drops the newest snapshot again, for a gesture that changed nothing. */
     void abandonSnapshot();
 
@@ -72,9 +79,23 @@ public:
 private:
     struct TrackState
     {
+        /** Recorded on every snapshot, not just on a rename: a value that is
+            restored but not recorded would let an unrelated undo drag it back.
+        */
+        juce::String name;
+        /** Where the main output goes, and what each send slot is doing. Part of
+            the document like everything else here, so it is captured on every
+            snapshot rather than only when routing is what changed.
+        */
+        int outputDestination = Track::masterDestination;
+        std::array<TrackSend, Track::maxSends> sends {};
         std::vector<PatternPlacement> placements;
         std::vector<std::unique_ptr<AudioClip>> audioClips;
         std::vector<juce::Array<MidiNote>> patterns;
+        /** Every track kind can carry automation, so unlike the rest of this
+            struct it is filled in for all of them.
+        */
+        std::vector<AutomationLaneState> automation;
     };
 
     /** Song-wide settings that are part of the document, not the view.

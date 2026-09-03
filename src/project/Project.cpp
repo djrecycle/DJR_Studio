@@ -55,6 +55,14 @@ juce::var Project::toVar() const
         trackObject->setProperty("placements", track.placements);
         trackObject->setProperty("pluginStates", track.pluginStates);
         trackObject->setProperty("audioClips", track.audioClips);
+        trackObject->setProperty("automation", track.automation);
+        trackObject->setProperty("outputDestination", track.outputDestination);
+        trackObject->setProperty("inputChannel", track.inputChannel);
+        trackObject->setProperty("inputStereo", track.inputStereo);
+        trackObject->setProperty("sends", track.sends);
+        trackObject->setProperty("channelSettings", track.channelSettings);
+        trackObject->setProperty("previewSynth", track.previewSynth);
+        trackObject->setProperty("frozenFile", track.frozenFile);
         trackObject->setProperty("laneHeight", track.laneHeight);
         trackArray.add(trackObject);
     }
@@ -155,6 +163,23 @@ void Project::fromVar(const juce::var& value)
             if (auto* clipArray = trackObject->getProperty("audioClips").getArray())
                 for (const auto& clip : *clipArray)
                     track.audioClips.add(clip);
+
+            if (auto* automationArray = trackObject->getProperty("automation").getArray())
+                for (const auto& lane : *automationArray)
+                    track.automation.add(lane);
+
+            // Absent in older files, which is what "-1" already means: master.
+            track.outputDestination = static_cast<int>(getOr(*trackObject, "outputDestination", -1));
+            track.inputChannel = static_cast<int>(getOr(*trackObject, "inputChannel", 0));
+            track.inputStereo = static_cast<bool>(getOr(*trackObject, "inputStereo", true));
+            track.channelSettings = trackObject->getProperty("channelSettings");
+            track.previewSynth = trackObject->getProperty("previewSynth");
+
+            if (auto* sendArray = trackObject->getProperty("sends").getArray())
+                for (const auto& send : *sendArray)
+                    track.sends.add(send);
+
+            track.frozenFile = trackObject->getProperty("frozenFile").toString();
 
             track.laneHeight = static_cast<int>(getOr(*trackObject, "laneHeight", 0));
 

@@ -84,7 +84,7 @@ void VelocityLane::paint(juce::Graphics& g)
         {
             g.setColour(Theme::faintText());
             g.setFont(Theme::ui(11.5f));
-            g.drawText("Belum ada note", bounds.withTrimmedLeft(keyboardWidth), juce::Justification::centred, false);
+            g.drawText(TRANS("No notes yet"), bounds.withTrimmedLeft(keyboardWidth), juce::Justification::centred, false);
         }
     }
 }

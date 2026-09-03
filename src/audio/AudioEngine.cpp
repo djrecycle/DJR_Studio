@@ -71,6 +71,11 @@ float AudioEngine::getMasterPeak() const noexcept
     return masterPeak.load(std::memory_order_acquire);
 }
 
+float AudioEngine::getInputPeak() const noexcept
+{
+    return inputPeak.load(std::memory_order_acquire);
+}
+
 juce::String AudioEngine::getAudioStatus() const
 {
     if (auto* device = deviceManager.getCurrentAudioDevice())
@@ -88,7 +93,7 @@ void AudioEngine::setLiveMidiSource(LiveMidiSource* source)
         source->prepareLiveMidi(getCurrentSampleRate());
 }
 
-bool AudioEngine::startAudioRecording(const juce::File& file)
+bool AudioEngine::startAudioRecording(const juce::File& file, int firstChannel, int numChannels)
 {
     if (getInputChannelCount() <= 0)
     {
@@ -96,9 +101,13 @@ bool AudioEngine::startAudioRecording(const juce::File& file)
         return false;
     }
 
-    const auto channels = juce::jlimit(1, 2, getInputChannelCount());
+    // Nothing asked for means the whole device, which is what recording did
+    // before a track could name its own input.
+    const auto requested = numChannels > 0 ? numChannels : getInputChannelCount();
+    const auto channels = juce::jlimit(1, 2, requested);
+    const auto start = juce::jlimit(0, juce::jmax(0, getInputChannelCount() - 1), firstChannel);
 
-    if (! recorder.startRecording(file, getCurrentSampleRate(), channels))
+    if (! recorder.startRecording(file, getCurrentSampleRate(), channels, start))
     {
         Logger::write("Recording could not be started: " + file.getFullPathName());
         return false;
@@ -137,7 +146,8 @@ void AudioEngine::renderOffline(const std::function<void()>& job)
     deviceManager.addAudioCallback(this);
 
     // The mixer was re-prepared at the export settings; put it back.
-    mixer.prepare(getCurrentSampleRate(), getCurrentBufferSize());
+    mixer.prepare(getCurrentSampleRate(), getCurrentBufferSize(),
+                  outputChannelCount.load(std::memory_order_acquire));
     metronome.prepare(getCurrentSampleRate());
 
     if (wasPlaying)
@@ -156,18 +166,22 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     inputBuffer.setSize(juce::jmax(1, numInputs), juce::jmax(1, getCurrentBufferSize()), false, true, true);
     inputChannelCount.store(numInputs, std::memory_order_release);
 
+    const auto numOutputs = juce::jmax(1, device->getActiveOutputChannels().countNumberOfSetBits());
+    outputChannelCount.store(numOutputs, std::memory_order_release);
+
     liveMidiBuffer.ensureSize(1024);
 
     if (auto* source = liveMidiSource.load(std::memory_order_acquire))
         source->prepareLiveMidi(getCurrentSampleRate());
 
-    mixer.prepare(getCurrentSampleRate(), getCurrentBufferSize());
+    mixer.prepare(getCurrentSampleRate(), getCurrentBufferSize(), numOutputs);
     metronome.prepare(getCurrentSampleRate());
 }
 
 void AudioEngine::audioDeviceStopped()
 {
     masterPeak.store(0.0f, std::memory_order_release);
+    inputPeak.store(0.0f, std::memory_order_release);
 }
 
 void AudioEngine::audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
@@ -190,6 +204,15 @@ void AudioEngine::audioDeviceIOCallbackWithContext(const float* const* inputChan
             if (inputChannelData[channel] != nullptr)
                 inputBuffer.copyFrom(channel, 0, inputChannelData[channel], numSamples);
     }
+
+    // Track input peak for level meter in preferences
+    auto inputPeakLevel = 0.0f;
+    if (usableInputs > 0)
+    {
+        for (int channel = 0; channel < usableInputs; ++channel)
+            inputPeakLevel = juce::jmax(inputPeakLevel, inputBuffer.getMagnitude(channel, 0, numSamples));
+    }
+    inputPeak.store(inputPeakLevel, std::memory_order_release);
 
     if (usableInputs > 0 && recorder.isRecording())
         recorder.processInputBlock(inputChannelData, numInputChannels, numSamples);

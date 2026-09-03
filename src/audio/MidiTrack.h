@@ -59,6 +59,12 @@ public:
     void setPreviewDrumKit(bool shouldUseDrums);
     bool isPreviewDrumKit() const noexcept;
 
+    /** The preview instrument itself, so the channel window can shape it and a
+        project can save what it was shaped into.
+    */
+    SimpleSynth& getPreviewSynth() noexcept;
+    const SimpleSynth& getPreviewSynth() const noexcept;
+
     void prepare(double sampleRate, int blockSize) override;
 
 protected:
@@ -83,6 +89,12 @@ private:
                    double windowStartBeat,
                    double windowEndBeat,
                    int numSamples);
+    /** Emits a note-off for everything this track is still holding down, and
+        forgets it. Whenever the playhead stops following the notes it started -
+        a loop wrapping, a seek backwards - the note-off those notes were waiting
+        for is behind us and will never be written, so it has to be sent here.
+    */
+    void releaseHeldNotes(juce::MidiBuffer& midi);
     void sendAllNotesOff(juce::MidiBuffer& midi);
     void resetTransportState();
 
@@ -98,6 +110,13 @@ private:
     double lastBlockStartBeat = 0.0;
     bool transportPrepared = false;
     bool wasPlaying = false;
+    /** Pattern mode's own audition selector last rendered. Switching it while
+        playing points emitNotes at a different sequence with no obligation to
+        supply the note-off a held note is still waiting for, so that has to
+        be treated like a playhead jump too. -1 so the very first block always
+        counts as a change.
+    */
+    int lastRenderedPattern = -1;
 };
 
 } // namespace djr

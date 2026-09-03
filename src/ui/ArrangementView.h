@@ -1,14 +1,17 @@
 #pragma once
 
 #include "UiControls.h"
+#include "ZoomScrollBar.h"
 
 #include "app/SnapSetting.h"
+#include "audio/AutomationLane.h"
 #include "audio/Mixer.h"
 #include "midi/MidiNote.h"
 #include "audio/Transport.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <functional>
+#include <vector>
 
 namespace djr
 {
@@ -17,6 +20,8 @@ namespace djr
     clip lanes and the playhead.
 */
 class ArrangementView final : public juce::Component,
+                              public juce::FileDragAndDropTarget,
+                              public juce::DragAndDropTarget,
                               private juce::Timer,
                               private juce::Button::Listener,
                               private juce::Slider::Listener
@@ -69,6 +74,11 @@ public:
         the host can bring up the piano roll on exactly that pattern.
     */
     void setClipOpenRequestCallback(std::function<void(int, int)> callback);
+    /** Double clicking an audio clip: track index and clip index. A MIDI clip
+        opens its notes, an audio clip opens its samples - same gesture, and the
+        clip decides which editor it means.
+    */
+    void setAudioClipOpenRequestCallback(std::function<void(int, int)> callback);
     /** Undo hooks. `push` records a restore point just before a change; `gesture`
         brackets a drag or a paint sweep so it collapses into one undo step.
     */
@@ -84,10 +94,52 @@ public:
     void setPatternLengthProvider(std::function<double(int)> provider);
     /** Fired when the user asks to rename a pattern from a clip's menu. */
     void setPatternRenameCallback(std::function<void(int)> callback);
+    /** Fired when a track's name is double clicked, or asked for from its menu. */
+    void setTrackRenameCallback(std::function<void(int)> callback);
+    /** Freeze or unfreeze a track; the host decides which, since it knows. */
+    void setTrackFreezeCallback(std::function<void(int)> callback);
+    /** Fired by the track menu's channel entry: open this track's channel. */
+    void setTrackChannelCallback(std::function<void(int)> callback);
+    /** Render a track onto a new audio track. */
+    void setTrackBounceCallback(std::function<void(int)> callback);
 
     /** Lane height for one track, so it can be saved with the project. Zero or
         anything out of range restores the default height.
     */
+    /** Where a file dropped on the grid should land: the track under the
+        pointer and the beat under it, snapped like everything else here.
+
+        The playlist accepting files is what makes a drag out of the audio
+        editor work, and it costs nothing to let a file manager do the same.
+    */
+    void setFileDropCallback(std::function<void(const juce::File&, int trackIndex, double beat)> callback);
+
+    /** The track and beat under a screen position, for something dropped from
+        another window of this app.
+
+        A drag from a plugin window cannot use the desktop's file-drag protocol:
+        the two windows belong to one process, and the drop never comes back.
+        So the drop is answered here, from the position the mouse was released
+        at. False when that position is not over a track.
+    */
+    bool findDropTarget(juce::Point<int> screenPosition, int& trackIndexOut, double& beatOut) const;
+
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void fileDragEnter(const juce::StringArray& files, int x, int y) override;
+    void fileDragMove(const juce::StringArray& files, int x, int y) override;
+    void fileDragExit(const juce::StringArray& files) override;
+    void filesDropped(const juce::StringArray& files, int x, int y) override;
+
+    /** A drag from inside this window - the browser's sample list. The
+        desktop's file drag is a different protocol and is kept for files
+        coming from outside the app.
+    */
+    bool isInterestedInDragSource(const SourceDetails& details) override;
+    void itemDragEnter(const SourceDetails& details) override;
+    void itemDragMove(const SourceDetails& details) override;
+    void itemDragExit(const SourceDetails& details) override;
+    void itemDropped(const SourceDetails& details) override;
+
     int getRowHeight(int trackIndex) const;
     void setRowHeight(int trackIndex, int height);
 
@@ -96,10 +148,64 @@ public:
     void setTrackSelectedCallback(std::function<void(int)> callback);
     /** Fired after a track is added or removed so the mixer can rebuild. */
     void setTrackListChangedCallback(std::function<void()> callback);
+    /** Re-reads the mixer's tracks. Public because the track list also changes
+        from outside this view: opening a project replaces the whole of it.
+    */
+    void notifyTrackListChanged();
     void setFollowPlayhead(bool shouldFollow);
     bool isFollowingPlayhead() const noexcept;
 
 private:
+    /** One playlist row. A track owns its clip row plus one row per automation
+        lane, which is why row indices and track indices are no longer the same
+        thing: everything that positions a lane goes through the row list.
+    */
+    struct Row
+    {
+        int trackIndex = 0;
+        /** -1 for the track's own clips, otherwise its automation lane index. */
+        int automationLane = -1;
+        /** Resolved once per rebuild. Working these out on demand meant every
+            geometry question walked the rows and took the track's automation
+            lock on each step - hundreds of times a frame, against the same lock
+            the audio thread try-locks every block.
+        */
+        int height = 0;
+        int top = 0;
+        /** The lane's curve as of this rebuild, so drawing and hit testing never
+            touch the lane itself.
+        */
+        std::vector<AutomationPoint> points;
+        bool laneEnabled = true;
+        /** Copied too, so painting a lane needs no lane pointer and therefore
+            takes no lock at all.
+        */
+        AutomationTarget target;
+    };
+
+    /** What a drag inside an automation lane is doing. */
+    struct AutomationDrag
+    {
+        enum class Mode
+        {
+            none,
+            point,  ///< moving a breakpoint
+            curve   ///< bending the segment that ends at `pointIndex`
+        };
+
+        Mode mode = Mode::none;
+        int rowIndex = -1;
+        int trackIndex = -1;
+        int laneIndex = -1;
+        int pointIndex = -1;
+        double grabCurve = 0.0;
+        int grabY = 0;
+        /** A falling segment bends the opposite way, so the drag is flipped to
+            keep "drag down" meaning "curve dips down" either way.
+        */
+        bool falling = false;
+    };
+
     /** One note drawn inside a clip, in clip-relative beats. */
     struct ClipNote
     {
@@ -121,6 +227,13 @@ private:
         double trimEndFraction = 1.0;
         bool warped = false;
         bool muted = false;
+        /** Clip gain, 0.0–2.0 linear (audio only; always 1.0 for MIDI). */
+        float gain = 1.0f;
+        /** Fade lengths as a fraction of what the clip plays, so the drawing
+            does not need the tempo to work out where they end.
+        */
+        double fadeInFraction = 0.0;
+        double fadeOutFraction = 0.0;
         /** Miniature of the pattern's notes, for MIDI clips. */
         std::vector<ClipNote> notes;
         int lowestPitch = 60;
@@ -140,10 +253,20 @@ private:
     {
         ClipDragMode mode = ClipDragMode::none;
         int trackIndex = -1;
-        int clipIndex = -1;
+        int clipIndex  = -1;
         double grabBeat = 0.0;
         double originalStart = 0.0;
         double originalEnd = 0.0;
+    };
+
+    /** State while the user drags a clip's gain handle. */
+    struct GainDrag
+    {
+        bool active    = false;
+        int trackIndex = -1;
+        int clipIndex  = -1;
+        float grabGain = 1.0f;
+        int grabY      = 0;
     };
 
     /** A clip the marquee picked up. Both kinds of clip are real objects now, so
@@ -164,7 +287,34 @@ private:
     juce::Rectangle<int> getGridArea() const;
     juce::Rectangle<int> getRowBounds(int trackIndex) const;
     int getRowTop(int trackIndex) const;
-    /** Track whose bottom edge is under `position` in the headers, or -1. */
+
+    // Rows -------------------------------------------------------------------
+    /** Re-reads the mixer's tracks and their lanes into `rows`. Cheap, and
+        called from every entry point so a lane added mid-gesture cannot leave
+        the geometry pointing at something that is no longer there.
+    */
+    void rebuildRows();
+    /** Re-runs only the vertical positions, for when scrolling moves the rows
+        without changing what they are.
+    */
+    void refreshRowTops();
+    int getRowCount() const noexcept;
+    int getRowIndexForTrack(int trackIndex) const;
+    int getRowHeightAt(int rowIndex) const;
+    void setRowHeightAt(int rowIndex, int height);
+    int getRowTopAt(int rowIndex) const;
+    juce::Rectangle<int> getRowBoundsAt(int rowIndex) const;
+    /** Row under `position`, or -1. */
+    int rowAt(juce::Point<int> position) const;
+    /** The live lane behind a row. Takes the track's lock, so it is only for
+        the handful of places that actually mutate a curve - drawing and hit
+        testing work from the snapshot in the row instead.
+    */
+    AutomationLane* getLane(int trackIndex, int laneIndex) const;
+
+    /** Outlines the row a dragged file would land on. */
+    void paintFileDropRow(juce::Graphics& g) const;
+    /** Row whose bottom edge is under `position` in the headers, or -1. */
     int hitTestRowResize(juce::Point<int> position) const;
     juce::Rectangle<int> getMuteBounds(int trackIndex) const;
     juce::Rectangle<int> getSoloBounds(int trackIndex) const;
@@ -172,17 +322,30 @@ private:
     int beatToX(double beat) const;
     int getContentHeight() const;
     void clampScroll();
+    /** Beats the bars treat as the whole timeline: what is there, with room to
+        keep going. Without the room a full timeline could never be scrolled
+        past its own last clip.
+    */
+    double getTimelineBeats() const;
+    /** Pushes where the view is back into the two bars. */
+    void refreshScrollBars();
+    /** Applies what a bar was dragged to. */
+    void applyHorizontalRange(double start, double size);
+    void applyVerticalRange(double start, double size);
     void zoomToFit();
     void showAddTrackMenu();
     void showTrackContextMenu(int trackIndex);
-    void notifyTrackListChanged();
     void notifyClipEdited();
     /** Finds the clip under `position` and what a drag there would do. */
     ClipDragMode hitTestClip(juce::Point<int> position, int& trackIndexOut, int& clipIndexOut) const;
     juce::Rectangle<int> getClipBounds(int trackIndex, const Clip& clip) const;
+    /** The small handle strip at the top of an audio clip that adjusts gain. */
+    juce::Rectangle<int> getGainHandleBounds(int trackIndex, const Clip& clip) const;
     void showClipContextMenu(int trackIndex, int clipIndex);
     void showPlacementContextMenu(int trackIndex, int placementIndex);
     double snapBeat(double beat) const noexcept;
+    /** Whether a name is one of the audio files this playlist can place. */
+    static bool isAudioFileName(const juce::String& path);
     /** Beats between grid lines: the snap length, widened when it would draw
         lines closer together than the eye can use.
     */
@@ -238,6 +401,30 @@ private:
     bool getClipStartBeat(int trackIndex, int clipIndex, double& startBeatOut) const;
     void setClipStartBeat(int trackIndex, int clipIndex, double startBeat);
 
+    // Automation lanes -------------------------------------------------------
+    void drawAutomationRow(juce::Graphics& g, int rowIndex, const Row& row);
+    /** The drawable band of an automation row, inset so a point sitting at 0 or
+        at 1 is still fully inside the lane.
+    */
+    juce::Rectangle<int> getCurveArea(int rowIndex) const;
+    double valueFromY(int rowIndex, int y) const;
+    int yFromValue(int rowIndex, double value) const;
+    /** What is under `position` in an automation lane. A hit with mode `none`
+        but a valid track means an empty spot on a lane, which is where a new
+        point goes.
+    */
+    AutomationDrag hitTestAutomation(juce::Point<int> position) const;
+    /** Returns false when the active tool has nothing to do with a curve, so
+        the click falls through to the timeline instead.
+    */
+    bool handleAutomationMouseDown(int rowIndex, juce::Point<int> position, const juce::ModifierKeys& mods);
+    /** Menu for a lane; `pointIndex` >= 0 adds the entries for that point. */
+    void showAutomationMenu(int trackIndex, int laneIndex, int pointIndex);
+    /** The "add automation" submenu: volume, pan, and every plugin parameter. */
+    void fillAutomationTargetMenu(juce::PopupMenu& menu, int trackIndex) const;
+    /** Turns an id from that menu back into a target, and creates the lane. */
+    void addAutomationTarget(int trackIndex, int menuId);
+
     /** Works out where the slice tool would cut, and whether the cut is legal.
         Clears the preview when the pointer is not over a sliceable clip.
     */
@@ -247,22 +434,39 @@ private:
     void pushUndo(const juce::String& actionName);
 
     juce::OwnedArray<IconChipButton> toolButtons;
-    IconChipButton snapButton { "Snap ke grid", Icon::magnet };
-    IconChipButton addTrackButton { "Tambah track", Icon::plus };
+    IconChipButton snapButton { TRANS("Snap to grid"), Icon::magnet };
+    IconChipButton addTrackButton { TRANS("Add track"), Icon::plus };
     IconChipButton followButton { "Ikuti playhead", Icon::chevronRight };
     IconChipButton zoomFitButton { "Zoom to fit", Icon::grid };
     juce::Slider zoomSlider;
+    /** Where the view is and how much of it is showing, in one control each
+        way. FL puts these along the edges of the playlist and they are how it
+        is actually navigated - the zoom slider only ever says how much.
+    */
+    ZoomScrollBar horizontalBar { ZoomScrollBar::Orientation::horizontal };
+    ZoomScrollBar verticalBar { ZoomScrollBar::Orientation::vertical };
 
     std::function<void(int)> trackSelectedCallback;
     std::function<void()> trackListChangedCallback;
     std::function<void()> clipEditedCallback;
     std::function<void(int, int)> clipOpenRequestCallback;
+    std::function<void(int, int)> audioClipOpenRequestCallback;
     std::function<void(const juce::String&)> pushUndoCallback;
     std::function<void(bool)> undoGestureCallback;
     std::function<juce::String(int)> patternNameProvider;
     std::function<double(int)> patternLengthProvider;
     std::function<void(int)> patternRenameCallback;
+    std::function<void(int)> trackRenameCallback;
+    std::function<void(int)> trackFreezeCallback;
+    std::function<void(int)> trackChannelCallback;
+    std::function<void(int)> trackBounceCallback;
+    std::function<void(const juce::File&, int trackIndex, double beat)> fileDropCallback;
+    /** The row a dragged file is over, for the outline that says where it would
+        land. -1 when nothing is being dragged.
+    */
+    int fileDropRow = -1;
     ClipDrag clipDrag;
+    GainDrag gainDrag;
     Tool activeTool = Tool::select;
     /** A paint drag in progress: the pointer keeps laying clips as it sweeps. */
     bool painting = false;
@@ -290,7 +494,14 @@ private:
     */
     std::vector<int> rowHeights;
     int defaultRowHeight = 30;
-    /** The lane whose edge is being dragged, or -1. */
+    /** Automation lanes start taller than a clip lane: a curve needs vertical
+        room to be worth drawing at all.
+    */
+    int defaultAutomationRowHeight = 52;
+    /** Track rows and automation rows in the order they are drawn. */
+    std::vector<Row> rows;
+    AutomationDrag automationDrag;
+    /** The row whose edge is being dragged, or -1. */
     int resizingRow = -1;
     int resizeStartHeight = 0;
     int resizeGrabY = 0;
