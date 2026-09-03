@@ -3,9 +3,9 @@
 DAW native Linux berbasis C++20, JUCE 8, dan CMake. MIDI, audio, VST3, mixer,
 piano roll, dan step sequencer dalam satu shell panel mengambang ala FL Studio.
 
-> **Status: beta.** Sudah bisa dipakai membuat pattern, merekam, dan meng-export
-> WAV, tapi belum ada automation dan belum diuji di banyak distro. Simpan
-> pekerjaan pentingmu sesering mungkin.
+> **Status: beta.** Sudah bisa dipakai membuat pattern, merekam, mixing dengan
+> automation dan bus routing, serta meng-export WAV — tapi belum diuji di
+> banyak distro. Simpan pekerjaan pentingmu sesering mungkin.
 
 ![DJR_Studio](docs/screenshots/overview.png)
 
@@ -18,12 +18,16 @@ piano roll, dan step sequencer dalam satu shell panel mengambang ala FL Studio.
 - Delapan tool ala FL: Select (marquee, geser & hapus grup), Paint (sapuan
   clip, otomatis dipotong agar pas mengisi celah), Delete, Mute, Slip, Slice
   (dengan garis pratinjau), Zoom, Playback.
-- Clip audio bisa digeser, di-trim, dipotong, dan di-warp mengikuti tempo.
+- Clip audio bisa digeser, di-trim, dipotong, dan di-warp mengikuti tempo
+  lewat dua mode: resample (cepat, pitch ikut berubah) atau stretch (WSOLA,
+  pitch tetap).
 - Tinggi tiap lane bisa ditarik sendiri-sendiri.
 - Pattern bisa diberi nama; satu pattern bisa ditempatkan berkali-kali dengan
   potongan berbeda tanpa mengubah patternnya.
 - Playlist selalu menampilkan penempatan pattern — tombol Pattern/Song hanya
   menentukan apa yang diputar, seperti FL.
+- Automation lane per parameter — volume, pan, dan tiap parameter plugin —
+  digambar langsung di bawah track yang dipilih.
 
 **Piano roll & step sequencer**
 
@@ -35,6 +39,15 @@ piano roll, dan step sequencer dalam satu shell panel mengambang ala FL Studio.
 - Step sequencer 4 lane drum yang menulis note sungguhan ke clip yang sama —
   satu halaman = satu bar, jadi 16 pad di 4/4 dan 12 pad di 3/4.
 
+**Mixer**
+
+- Send/bus routing: track bisa mengirim ke bus lain lewat send pre- atau
+  post-fader, atau outputnya sendiri dialihkan langsung ke bus.
+- Freeze per track: merender ke file lalu memutar hasil render itu saja,
+  instrument & insert dilepas dari CPU sampai di-unfreeze.
+- Plugin delay compensation otomatis, jadi track dengan latensi plugin
+  berbeda tetap serentak sampai master.
+
 **Engine**
 
 - Audio engine realtime-safe: tidak ada alokasi, file I/O, atau lock yang
@@ -44,12 +57,6 @@ piano roll, dan step sequencer dalam satu shell panel mengambang ala FL Studio.
 - Time signature 4/4 sampai 12/8.
 - Undo/redo 64 langkah untuk semua edit clip dan note.
 - Export WAV offline, lebih cepat dari realtime.
-
-## Yang belum ada
-
-Automation lane, send/bus routing di mixer, freeze/bounce track, plugin delay
-compensation, dan time-stretch yang mempertahankan pitch (warp saat ini memakai
-resampling, jadi pitch ikut bergeser saat tempo berubah).
 
 ## Install dari `.deb`
 
