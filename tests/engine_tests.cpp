@@ -3669,6 +3669,73 @@ int main()
               "in that order, so the instrument is not left holding two of them");
     }
 
+    // --- Switching pattern mid-note must not leave it held down --------------
+    // Sibling to the loop-wrap bug above, through a different door: emitNotes
+    // tracks activeNotes by pitch alone, with no idea the notes it just read
+    // came from a different pattern than the block before. Switch pattern
+    // while a note is sounding and the new one owes that pitch nothing - no
+    // note-off is ever coming for it unless the switch itself releases it.
+    {
+        djr::MidiTrack track("Switch");
+        track.prepare(sampleRate, blockSize);
+
+        juce::Array<djr::MidiNote> held;
+        djr::MidiNote note;
+        note.pitch = 60;
+        note.velocity = 0.9f;
+        note.startBeat = 0.0;
+        note.lengthBeats = 4.0;
+        held.add(note);
+        track.getClip(0).setNotes(held);
+
+        // Empty, so nothing it emits could coincidentally supply the
+        // note-off pattern 0 owed.
+        track.getClip(1).setNotes({});
+
+        const auto beatsPerBlock = (static_cast<double>(blockSize) / sampleRate) * (tempoBpm / 60.0);
+
+        juce::AudioBuffer<float> buffer(2, blockSize);
+        juce::MidiBuffer midi;
+
+        const auto renderAt = [&] (double startBeat)
+        {
+            djr::TrackPlaybackContext context;
+            context.sampleRate = sampleRate;
+            context.tempoBpm = tempoBpm;
+            context.startBeat = startBeat;
+            context.endBeat = startBeat + beatsPerBlock;
+            context.isPlaying = true;
+            context.songMode = false;
+
+            buffer.clear();
+            track.processAudio(buffer, midi, context);
+        };
+
+        const auto releasesPitch60 = [&]
+        {
+            for (const auto metadata : midi)
+            {
+                const auto message = metadata.getMessage();
+
+                if (message.getNoteNumber() == 60 && message.isNoteOff())
+                    return true;
+            }
+
+            return false;
+        };
+
+        track.setActivePattern(0);
+        renderAt(0.0);
+        check(! releasesPitch60(), "the note is freshly struck, not released, on its first block");
+
+        // Halfway through the held note, switch to the empty pattern.
+        track.setActivePattern(1);
+        renderAt(2.0);
+
+        check(releasesPitch60(),
+              "switching pattern mid-note releases what the old one left holding");
+    }
+
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
                                 : "\n" + std::to_string(failures) + " engine test(s) failed\n");
     return failures == 0 ? 0 : 1;

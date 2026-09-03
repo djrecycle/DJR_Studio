@@ -244,11 +244,16 @@ void MidiTrack::renderAudio(juce::AudioBuffer<float>& buffer,
 void MidiTrack::renderPatternMode(juce::MidiBuffer& midi, const TrackPlaybackContext& context, int numSamples)
 {
     const auto jumpedBackward = context.startBeat + 0.0001 < lastBlockStartBeat;
+    const auto activePatternNow = getActivePattern();
+    const auto patternChanged = activePatternNow != lastRenderedPattern;
 
-    if (! transportPrepared || jumpedBackward)
+    if (! transportPrepared || jumpedBackward || patternChanged)
     {
         // Ahead of the notes at the new position, so one that spans the wrap is
         // released and struck again rather than struck twice and left hanging.
+        // A pattern switch is the same problem by another door: whatever was
+        // held belongs to a sequence emitNotes is no longer reading, so it has
+        // no note-off of its own coming either.
         releaseHeldNotes(midi);
         resetTransportState();
     }
@@ -262,6 +267,7 @@ void MidiTrack::renderPatternMode(juce::MidiBuffer& midi, const TrackPlaybackCon
               numSamples);
 
     lastBlockStartBeat = context.startBeat;
+    lastRenderedPattern = activePatternNow;
     transportPrepared = true;
 }
 

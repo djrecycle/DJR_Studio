@@ -110,6 +110,13 @@ private:
     double lastBlockStartBeat = 0.0;
     bool transportPrepared = false;
     bool wasPlaying = false;
+    /** Pattern mode's own audition selector last rendered. Switching it while
+        playing points emitNotes at a different sequence with no obligation to
+        supply the note-off a held note is still waiting for, so that has to
+        be treated like a playhead jump too. -1 so the very first block always
+        counts as a change.
+    */
+    int lastRenderedPattern = -1;
 };
 
 } // namespace djr
