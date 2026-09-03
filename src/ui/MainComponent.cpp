@@ -218,14 +218,22 @@ MainComponent::MainComponent()
     arrangementView.setPatternRenameCallback([this] (int patternIndex) { renamePattern(patternIndex); });
     editorPanel.setPatternRenameCallback([this] { renamePattern(sessionState.getActivePattern()); });
 
-    // The track name next to the pattern badge is the channel these notes go to,
-    // so clicking it opens that channel - the instrument if one is loaded, and
-    // the preview synth's own pages if not, the way FL opens a channel whatever
-    // is inside it.
-    editorPanel.setInstrumentNameClickedCallback([this]
+    // The track name next to the pattern badge is the channel these notes go
+    // to - clicking it picks a different MIDI track to edit, without a trip
+    // back to the playlist or the mixer. Opening the instrument itself is
+    // still one click away, from the mixer channel or the insert chain.
+    editorPanel.setTrackListProvider([this]
     {
-        openTrackPluginEditor(sessionState.getSelectedTrack());
+        std::vector<EditorPanel::PickableTrack> tracks;
+        auto& mixer = audioEngine.getMixer();
+
+        for (int i = 0; i < mixer.getNumTracks(); ++i)
+            if (auto* track = mixer.getTrack(i); track != nullptr && track->getKind() == TrackKind::midi)
+                tracks.push_back({ i, track->getName() });
+
+        return tracks;
     });
+    editorPanel.setTrackChangedCallback([this] (int trackIndex) { selectTrack(trackIndex); });
 
     wireUndoHooks();
 
@@ -2026,6 +2034,7 @@ void MainComponent::applySelectionToPanels()
     const auto* selected = getTrack(trackIndex);
     editorPanel.setTrackName(dynamic_cast<const MidiTrack*>(selected) != nullptr ? selected->getName()
                                                                                  : juce::String());
+    editorPanel.setSelectedTrackIndex(trackIndex);
 
     arrangementView.setSelectedTrack(trackIndex);
     insertChainPanel.setSelectedTrack(trackIndex);

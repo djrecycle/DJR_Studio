@@ -11,6 +11,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <functional>
+#include <vector>
 
 namespace djr
 {
@@ -59,7 +60,25 @@ public:
     /** Shows the pattern's loop length; `locked` means it was set by hand. */
     void setPatternLengthBeats(double beats, bool locked);
     void setPatternLengthChangedCallback(std::function<void(double)> callback);
-    void setInstrumentNameClickedCallback(std::function<void()> callback);
+
+    /** One entry in the track-name badge's picker menu. */
+    struct PickableTrack
+    {
+        int index = -1;
+        juce::String name;
+    };
+    /** Every MIDI track the roll could switch to, in mixer order - queried
+        fresh each time the track name badge is clicked, so the menu always
+        matches whatever the mixer currently holds.
+    */
+    void setTrackListProvider(std::function<std::vector<PickableTrack>()> provider);
+    /** Which track the badge's list should tick as current. Independent of
+        setTrackName: a track can be selected before its name is known to be
+        worth showing (an audio track selected mid-switch, say).
+    */
+    void setSelectedTrackIndex(int trackIndex) noexcept;
+    /** Fired with the chosen track's index when a pick is made in that menu. */
+    void setTrackChangedCallback(std::function<void(int)> callback);
 
     /** Notes played on the on-screen keyboard, ready for the live MIDI path. */
     void setKeyboardMessageCallback(std::function<void(const juce::MidiMessage&)> callback);
@@ -126,14 +145,17 @@ private:
     juce::Rectangle<int> getPatternLengthBounds() const;
     juce::Rectangle<int> getInstrumentNameBounds() const;
     void showPatternLengthMenu();
+    void showTrackMenu();
 
     std::function<void()> viewChangedCallback;
     std::function<void(int)> patternChangedCallback;
-    std::function<void()> instrumentNameClickedCallback;
+    std::function<std::vector<PickableTrack>()> trackListProvider;
+    std::function<void(int)> trackChangedCallback;
     std::function<void(double)> patternLengthChangedCallback;
     std::function<void()> patternRenameCallback;
     juce::String patternName;
     juce::String trackName;
+    int selectedTrackIndex = -1;
     int activePattern = 0;
     double patternLengthBeats = 4.0;
     bool patternLengthLocked = false;

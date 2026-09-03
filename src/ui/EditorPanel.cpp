@@ -316,9 +316,20 @@ void EditorPanel::setPatternRenameCallback(std::function<void()> callback)
 {
     patternRenameCallback = std::move(callback);
 }
-void EditorPanel::setInstrumentNameClickedCallback(std::function<void()> callback)
+
+void EditorPanel::setTrackListProvider(std::function<std::vector<PickableTrack>()> provider)
 {
-    instrumentNameClickedCallback = std::move(callback);
+    trackListProvider = std::move(provider);
+}
+
+void EditorPanel::setSelectedTrackIndex(int trackIndex) noexcept
+{
+    selectedTrackIndex = trackIndex;
+}
+
+void EditorPanel::setTrackChangedCallback(std::function<void(int)> callback)
+{
+    trackChangedCallback = std::move(callback);
 }
 
 void EditorPanel::showPatternLengthMenu()
@@ -353,6 +364,39 @@ void EditorPanel::showPatternLengthMenu()
             const int chosen[] = { 1, 2, 4, 8, 16 };
             patternLengthChangedCallback(result == 1 ? 0.0
                                                      : chosen[result - 2] * pianoRoll.getBeatsPerBar());
+        });
+}
+
+void EditorPanel::showTrackMenu()
+{
+    if (! trackListProvider)
+        return;
+
+    const auto tracks = trackListProvider();
+
+    if (tracks.empty())
+        return;
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader(TRANS("Switch track"));
+
+    for (int i = 0; i < static_cast<int>(tracks.size()); ++i)
+    {
+        const auto& track = tracks[static_cast<size_t>(i)];
+        menu.addItem(i + 1, track.name, true, track.index == selectedTrackIndex);
+    }
+
+    // Anchored to the badge that opened it, like the pattern length menu.
+    menu.showMenuAsync(juce::PopupMenu::Options()
+                           .withTargetScreenArea(localAreaToGlobal(getInstrumentNameBounds()))
+                           .withMinimumWidth(180)
+                           .withStandardItemHeight(21),
+        [this, tracks] (int result)
+        {
+            if (result <= 0 || ! trackChangedCallback)
+                return;
+
+            trackChangedCallback(tracks[static_cast<size_t>(result - 1)].index);
         });
 }
 
@@ -402,9 +446,7 @@ void EditorPanel::mouseDown(const juce::MouseEvent& event)
     }
     if (getInstrumentNameBounds().contains(event.getPosition()))
     {
-        if (instrumentNameClickedCallback)
-            instrumentNameClickedCallback();
-
+        showTrackMenu();
         return;
     }
 
