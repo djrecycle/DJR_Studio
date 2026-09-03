@@ -336,6 +336,7 @@ void AudioClip::prepareWarp(double tempoBpm)
     {
         // Nothing to prepare any more - drop the copy rather than leave a stale
         // one for the audio thread to find.
+        sweepGarbage();
         const juce::SpinLock::ScopedLockType scoped(stretchLock);
         stretched = nullptr;
         stretchedForFactor = 1.0;
@@ -353,6 +354,7 @@ void AudioClip::prepareWarp(double tempoBpm)
         ? std::make_shared<const juce::AudioBuffer<float>>(*samples)
         : std::make_shared<const juce::AudioBuffer<float>>(TimeStretch::process(*samples, factor));
 
+    sweepGarbage();
     const juce::SpinLock::ScopedLockType scoped(stretchLock);
     stretched = std::move(built);
     stretchedForTempo = tempoBpm;
@@ -399,7 +401,20 @@ void AudioClip::addToBuffer(juce::AudioBuffer<float>& destination,
     // A destructive edit swaps this pointer from the message thread. Held only
     // long enough to take a reference: a lost race costs one block, the same
     // trade the plugin chain and the stretch cache already make.
-    std::shared_ptr<const juce::AudioBuffer<float>> playing;
+    //
+    // Whichever buffer that reference ends up pointing at is handed off to
+    // deferRelease when this call ends, on every exit path, rather than being
+    // freed inline: if the swap above is what dropped the last other
+    // reference, this may be the last one left, and its release has no
+    // business running on the audio thread.
+    struct DeferredRelease
+    {
+        const AudioClip* clip;
+        std::shared_ptr<const juce::AudioBuffer<float>> value;
+        ~DeferredRelease() { clip->deferRelease(std::move(value)); }
+    } playingGuard { this, nullptr };
+
+    auto& playing = playingGuard.value;
 
     {
         const juce::SpinLock::ScopedTryLockType scoped(sampleLock);
@@ -1005,6 +1020,12 @@ bool AudioClip::editSamples(SampleEdit edit, double offsetSeconds, double length
 
     auto replacement = std::make_shared<const juce::AudioBuffer<float>>(std::move(edited));
 
+    // Free whatever the audio thread parked from an earlier block before
+    // dropping this thread's own reference to the buffer being replaced -
+    // otherwise a lost race still leaves the very last reference for some
+    // later audio-thread call to free.
+    sweepGarbage();
+
     {
         const juce::SpinLock::ScopedLockType scoped(sampleLock);
         samples = std::move(replacement);
@@ -1078,6 +1099,49 @@ void AudioClip::buildPeaks()
     }
 
     peaks = std::make_shared<const std::vector<float>>(std::move(built));
+}
+
+void AudioClip::deferRelease(std::shared_ptr<const juce::AudioBuffer<float>> buffer) const
+{
+    if (buffer == nullptr)
+        return;
+
+    const juce::SpinLock::ScopedTryLockType scoped(garbageLock);
+
+    // Contended is not worth waiting out here: whatever is holding the lock
+    // is either the message thread about to clear these out anyway, or
+    // another block that will get the next slot. Falling through just frees
+    // `buffer` normally when this returns, same as before this existed.
+    if (! scoped.isLocked())
+        return;
+
+    for (auto& slot : garbage)
+    {
+        if (slot == nullptr)
+        {
+            slot = std::move(buffer);
+            return;
+        }
+    }
+}
+
+void AudioClip::sweepGarbage() const
+{
+    const juce::SpinLock::ScopedLockType scoped(garbageLock);
+
+    for (auto& slot : garbage)
+        slot = nullptr;
+}
+
+bool AudioClip::hasPendingRelease() const noexcept
+{
+    const juce::SpinLock::ScopedLockType scoped(garbageLock);
+
+    for (const auto& slot : garbage)
+        if (slot != nullptr)
+            return true;
+
+    return false;
 }
 
 } // namespace djr

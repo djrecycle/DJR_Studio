@@ -2823,6 +2823,69 @@ int main()
         wav.deleteFile();
     }
 
+    // --- A checked-out sample buffer is released off the audio thread -------
+    // The bug: addToBuffer copies the samples shared_ptr under a try-lock,
+    // but if a destructive edit swaps the pointer while that copy is still
+    // alive, the audio thread's copy can end up the last reference - and
+    // its destructor, which may call free(), has no business running there.
+    // hasPendingRelease exposes the handoff this is fixed with: the audio
+    // thread parks what it used instead of releasing it inline, and only a
+    // message-thread edit actually clears the parked reference.
+    {
+        const auto wav = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                             .getChildFile("djr_deferred_release_test.wav");
+        wav.deleteFile();
+
+        {
+            juce::WavAudioFormat wavFormat;
+            std::unique_ptr<juce::FileOutputStream> stream(wav.createOutputStream());
+            std::unique_ptr<juce::AudioFormatWriter> writer(
+                wavFormat.createWriterFor(stream.get(), sampleRate, 1, 16, {}, 0));
+
+            if (writer != nullptr)
+            {
+                stream.release();
+
+                const auto totalSamples = static_cast<int>(sampleRate);
+                juce::AudioBuffer<float> tone(1, totalSamples);
+                tone.clear();
+
+                writer->writeFromAudioSampleBuffer(tone, 0, totalSamples);
+                writer.reset();
+            }
+        }
+
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+
+        juce::String error;
+        auto clip = djr::AudioClip::createFromFile(wav, sampleRate, formats, error);
+        check(clip != nullptr, "the deferred-release clip loads: " + error);
+
+        if (clip != nullptr)
+        {
+            check(! clip->hasPendingRelease(), "a freshly loaded clip has nothing parked");
+
+            juce::AudioBuffer<float> probe(1, blockSize);
+            probe.clear();
+            clip->addToBuffer(probe, 0.0, tempoBpm, sampleRate);
+
+            check(clip->hasPendingRelease(),
+                  "addToBuffer parks the buffer it used instead of releasing it inline");
+
+            // A destructive edit is the one place that swaps the pointer out
+            // from under a concurrent block - and the one place that has to
+            // sweep the parked reference before it does.
+            check(clip->applySampleEdit(djr::AudioClip::SampleEdit::reverse),
+                  "the edit that provokes the race succeeds");
+
+            check(! clip->hasPendingRelease(),
+                  "the edit sweeps the parked buffer before swapping in its own");
+        }
+
+        wav.deleteFile();
+    }
+
     // The channel's own stage: the envelope, the LFO, the filter and the
     // arpeggiator, driven directly so the assertions do not depend on whatever
     // the preview synth happens to sound like.

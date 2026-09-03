@@ -235,6 +235,12 @@ public:
                      double tempoBpm,
                      double sampleRate) const;
 
+    /** Whether a buffer the audio thread checked out is still waiting for the
+        message thread to actually release it. Exposed for tests: there is no
+        other way to see this deferred-release handoff from outside.
+    */
+    bool hasPendingRelease() const noexcept;
+
     /** Normalised peaks for drawing, one per bucket, over the whole source. */
     const std::vector<float>& getPeaks() const noexcept;
     /** Fraction of the source the clip currently shows, for drawing the trim. */
@@ -279,6 +285,22 @@ private:
     mutable juce::SpinLock sampleLock;
     // Shared so slicing and duplicating a clip costs nothing.
     std::shared_ptr<const juce::AudioBuffer<float>> samples;
+
+    /** Where the audio thread parks a buffer it was using instead of letting
+        the shared_ptr's destructor - and the free() that might be inside it -
+        run there: a destructive edit can drop the message thread's own
+        reference at any time, and if the audio thread's copy turns out to be
+        the last one, its release has no business happening on that thread.
+        Only sweepGarbage(), called from the message thread right before it
+        swaps in a new buffer, actually clears these.
+    */
+    mutable juce::SpinLock garbageLock;
+    mutable std::shared_ptr<const juce::AudioBuffer<float>> garbage[4];
+    /** Audio thread only. */
+    void deferRelease(std::shared_ptr<const juce::AudioBuffer<float>> buffer) const;
+    /** Message thread only. */
+    void sweepGarbage() const;
+
     std::shared_ptr<const std::vector<float>> peaks;
     double clipSampleRate = 44100.0;
     double sourceLengthSeconds = 0.0;
