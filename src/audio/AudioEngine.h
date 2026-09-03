@@ -75,6 +75,9 @@ private:
     std::atomic<double> sampleRate { 44100.0 };
     std::atomic<int> bufferSize { 512 };
     std::atomic<int> inputChannelCount { 0 };
+    // What the mixer was last prepared for, so renderOffline can put it back
+    // at the device's own channel count rather than assuming stereo.
+    std::atomic<int> outputChannelCount { 2 };
     std::atomic<float> masterPeak { 0.0f };
     std::atomic<float> inputPeak { 0.0f };
 };

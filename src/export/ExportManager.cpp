@@ -56,7 +56,7 @@ bool ExportManager::render(Mixer& mixer,
 
     stream.release();
 
-    mixer.prepare(options.sampleRate, options.blockSize);
+    mixer.prepare(options.sampleRate, options.blockSize, channels);
 
     const auto beatsPerBlock = (static_cast<double>(options.blockSize) / options.sampleRate)
                              * (options.tempoBpm / 60.0);

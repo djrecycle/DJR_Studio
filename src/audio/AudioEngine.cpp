@@ -146,7 +146,8 @@ void AudioEngine::renderOffline(const std::function<void()>& job)
     deviceManager.addAudioCallback(this);
 
     // The mixer was re-prepared at the export settings; put it back.
-    mixer.prepare(getCurrentSampleRate(), getCurrentBufferSize());
+    mixer.prepare(getCurrentSampleRate(), getCurrentBufferSize(),
+                  outputChannelCount.load(std::memory_order_acquire));
     metronome.prepare(getCurrentSampleRate());
 
     if (wasPlaying)
@@ -165,12 +166,15 @@ void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
     inputBuffer.setSize(juce::jmax(1, numInputs), juce::jmax(1, getCurrentBufferSize()), false, true, true);
     inputChannelCount.store(numInputs, std::memory_order_release);
 
+    const auto numOutputs = juce::jmax(1, device->getActiveOutputChannels().countNumberOfSetBits());
+    outputChannelCount.store(numOutputs, std::memory_order_release);
+
     liveMidiBuffer.ensureSize(1024);
 
     if (auto* source = liveMidiSource.load(std::memory_order_acquire))
         source->prepareLiveMidi(getCurrentSampleRate());
 
-    mixer.prepare(getCurrentSampleRate(), getCurrentBufferSize());
+    mixer.prepare(getCurrentSampleRate(), getCurrentBufferSize(), numOutputs);
     metronome.prepare(getCurrentSampleRate());
 }
 

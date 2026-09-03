@@ -1531,6 +1531,32 @@ int main()
         }
     }
 
+    // --- The mixer is sized for the device's real channel count -------------
+    // The bug: prepare() always sized the summing buffers and the alignment
+    // delays for two channels, no matter what was asked for. A device with
+    // more outputs than that would grow the buffers on the audio thread on
+    // first use, and the alignment delay - never resized - would go on
+    // compensating only its first two channels forever.
+    {
+        djr::Mixer channelMixer;
+        channelMixer.prepare(sampleRate, blockSize, 6);
+        check(channelMixer.getPreparedChannelCount() == 6,
+              "prepare sizes the mixer for the channel count it is given");
+
+        // The default keeps working for every call site that never mentions one.
+        djr::Mixer defaultMixer;
+        defaultMixer.prepare(sampleRate, blockSize);
+        check(defaultMixer.getPreparedChannelCount() == 2,
+              "leaving numChannels out still prepares a stereo mixer");
+
+        // A count past what a track's own plugin chain can carry would just add
+        // channels nothing downstream can fill - clamped, not taken as asked.
+        djr::Mixer clampedMixer;
+        clampedMixer.prepare(sampleRate, blockSize, 64);
+        check(clampedMixer.getPreparedChannelCount() == djr::PluginChain::maxPluginChannels,
+              "an unreasonable channel count is clamped to what plugins can carry");
+    }
+
     // --- Project round trip: what survives closing the app ------------------
     {
         djr::Project saved;

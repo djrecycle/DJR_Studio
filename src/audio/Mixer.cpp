@@ -27,10 +27,15 @@ Mixer::Mixer()
     addTrack(std::make_unique<MidiTrack>("Keys"));
 }
 
-void Mixer::prepare(double sampleRate, int blockSize)
+void Mixer::prepare(double sampleRate, int blockSize, int numChannels)
 {
-    scratchBuffer.setSize(2, blockSize, false, false, true);
-    preFaderBuffer.setSize(2, blockSize, false, false, true);
+    // Clamped to what a track's own plugin chain can carry - PluginChain's
+    // scratch buffers are this wide regardless, so sizing past it would just
+    // add channels nothing downstream can fill.
+    const auto channels = juce::jlimit(1, PluginChain::maxPluginChannels, numChannels);
+
+    scratchBuffer.setSize(channels, blockSize, false, false, true);
+    preFaderBuffer.setSize(channels, blockSize, false, false, true);
 
     // Room for far more events than a block can carry - an all-notes-off is 129
     // of them, the densest pattern nothing like that - so the audio thread never
@@ -40,13 +45,14 @@ void Mixer::prepare(double sampleRate, int blockSize)
     const juce::SpinLock::ScopedLockType scoped(trackLock);
     preparedSampleRate = sampleRate;
     preparedBlockSize = blockSize;
+    preparedNumChannels = channels;
 
     // One summing buffer per slot, allocated here because the audio thread
     // cannot: a bus that appears mid-session must already have somewhere to sum.
     busBuffers.resize(static_cast<size_t>(maxTracks));
 
     for (auto& buffer : busBuffers)
-        buffer.setSize(2, blockSize, false, false, true);
+        buffer.setSize(channels, blockSize, false, false, true);
 
     audible.resize(static_cast<size_t>(maxTracks));
 
@@ -75,7 +81,7 @@ void Mixer::prepare(double sampleRate, int blockSize)
             if (delay == nullptr)
                 delay = std::make_unique<AlignmentDelay>();
 
-            delay->prepare(2, sampleRate);
+            delay->prepare(channels, sampleRate);
         }
     }
 
@@ -234,6 +240,12 @@ int Mixer::getLatencyCompensationSamples(int index) const
 int Mixer::getReportedLatencySamples() const noexcept
 {
     return reportedLatency.load(std::memory_order_acquire);
+}
+
+int Mixer::getPreparedChannelCount() const noexcept
+{
+    const juce::SpinLock::ScopedLockType scoped(trackLock);
+    return preparedNumChannels;
 }
 
 void Mixer::process(juce::AudioBuffer<float>& output, const TrackPlaybackContext& context)

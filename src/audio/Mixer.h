@@ -20,7 +20,12 @@ public:
 
     Mixer();
 
-    void prepare(double sampleRate, int blockSize);
+    /** `numChannels` is how many the output device actually has - the summing
+        buffers, bus buffers and alignment delays are all sized to it, not
+        pinned to stereo, so a device with more outputs does not silently lose
+        latency compensation on the channels past the second.
+    */
+    void prepare(double sampleRate, int blockSize, int numChannels = 2);
 
     /** Works out how much each track must be held back so everything lands on
         the master together, and hands the amounts to the delay lines.
@@ -65,6 +70,10 @@ public:
         now carries.
     */
     int getReportedLatencySamples() const noexcept;
+    /** How many channels the summing buffers and alignment delays were last
+        sized for - what prepare()'s numChannels was clamped to.
+    */
+    int getPreparedChannelCount() const noexcept;
     void process(juce::AudioBuffer<float>& output, const TrackPlaybackContext& context);
 
     /** Adds a track at any time; it is prepared before the audio thread can see it. */
@@ -177,6 +186,7 @@ private:
     std::atomic<int> liveMidiTarget { 0 };
     double preparedSampleRate = 44100.0;
     int preparedBlockSize = 512;
+    int preparedNumChannels = 2;
 };
 
 } // namespace djr
