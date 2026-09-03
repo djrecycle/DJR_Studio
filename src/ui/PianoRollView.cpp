@@ -28,6 +28,8 @@ namespace
         the two read as one timeline seen twice.
     */
     constexpr int rulerHeight = 18;
+    /** The chord badge's own corner, pinned to the ruler's right end. */
+    constexpr int chordBadgeWidth = 56;
 }
 
 PianoRollView::PianoRollView(PianoRollModel& modelToUse, Transport& transportToUse)
@@ -46,7 +48,15 @@ PianoRollView::PianoRollView(PianoRollModel& modelToUse, Transport& transportToU
 
 juce::Rectangle<int> PianoRollView::getRulerBounds() const
 {
-    return getContentBounds().withHeight(rulerHeight).withTrimmedLeft(keyboardWidth);
+    return getContentBounds().withHeight(rulerHeight).withTrimmedLeft(keyboardWidth)
+                             .withTrimmedRight(chordBadgeWidth);
+}
+
+juce::Rectangle<int> PianoRollView::getChordBadgeBounds() const
+{
+    const auto bounds = getContentBounds().withHeight(rulerHeight);
+    return juce::Rectangle<int>(bounds.getRight() - chordBadgeWidth, bounds.getY(),
+                                chordBadgeWidth, rulerHeight);
 }
 
 juce::Rectangle<int> PianoRollView::getContentBounds() const
@@ -282,6 +292,21 @@ void PianoRollView::paint(juce::Graphics& g)
         }
     }
 
+    // Chord badge --------------------------------------------------------------
+    {
+        const auto badge = getChordBadgeBounds();
+        g.setColour(Theme::panelHeader());
+        g.fillRect(badge);
+        g.setColour(Theme::outlineStrong());
+        g.drawRect(badge, 1);
+
+        g.setColour(chordModeEnabled ? Theme::accent() : Theme::mutedText());
+        g.setFont(Theme::mono(9.0f));
+        g.drawText(chordModeEnabled ? Chord::shortNameFor(activeChordType)
+                                    : juce::String(TRANS("Chord")),
+                   badge, juce::Justification::centred, false);
+    }
+
     // Rubber bands ------------------------------------------------------------
     if (! zoomDrag.isEmpty())
     {
@@ -358,6 +383,12 @@ void PianoRollView::mouseMove(const juce::MouseEvent& event)
 
 void PianoRollView::mouseDown(const juce::MouseEvent& event)
 {
+    if (getChordBadgeBounds().contains(event.getPosition()))
+    {
+        showChordMenu();
+        return;
+    }
+
     if (event.x < keyboardWidth)
         return;
 
@@ -802,13 +833,77 @@ bool PianoRollView::drawNoteAt(juce::Point<int> position)
     if (pitch == lastDrawnPitch && std::abs(beat - lastDrawnBeat) < 1.0e-6)
         return false;
 
-    if (noteAtPosition(position) >= 0)
-        return false;
+    const auto length = juce::jmax(0.25, model.getSnapBeats() * 4.0);
+    auto wroteAny = false;
 
-    model.addNote(pitch, beat, juce::jmax(0.25, model.getSnapBeats() * 4.0), 0.85f);
-    lastDrawnBeat = beat;
-    lastDrawnPitch = pitch;
-    return true;
+    if (chordModeEnabled)
+    {
+        // Each interval that already has something there is skipped rather
+        // than aborting the whole chord - one clashing tone should not
+        // swallow the rest of the stamp.
+        for (const auto interval : Chord::intervalsFor(activeChordType))
+        {
+            const auto chordPitch = juce::jlimit(0, 127, pitch + interval);
+
+            if (hasNoteAt(chordPitch, beat))
+                continue;
+
+            model.addNote(chordPitch, beat, length, 0.85f);
+            wroteAny = true;
+        }
+    }
+    else if (noteAtPosition(position) < 0)
+    {
+        model.addNote(pitch, beat, length, 0.85f);
+        wroteAny = true;
+    }
+
+    if (wroteAny)
+    {
+        lastDrawnBeat = beat;
+        lastDrawnPitch = pitch;
+    }
+
+    return wroteAny;
+}
+
+bool PianoRollView::hasNoteAt(int pitch, double beat) const
+{
+    for (const auto& note : model.getNotes())
+        if (note.pitch == pitch && beat >= note.startBeat && beat < note.startBeat + note.lengthBeats)
+            return true;
+
+    return false;
+}
+
+void PianoRollView::showChordMenu()
+{
+    juce::PopupMenu menu;
+    menu.addItem(1, TRANS("Off - single notes"), true, ! chordModeEnabled);
+    menu.addSeparator();
+
+    for (int i = 0; i < static_cast<int>(ChordType::count); ++i)
+        menu.addItem(2 + i, Chord::nameFor(static_cast<ChordType>(i)), true,
+                     chordModeEnabled && static_cast<int>(activeChordType) == i);
+
+    // Anchored to the badge that opened it, like the piano roll's other
+    // corner pickers.
+    menu.showMenuAsync(juce::PopupMenu::Options()
+                           .withTargetScreenArea(localAreaToGlobal(getChordBadgeBounds()))
+                           .withMinimumWidth(190)
+                           .withStandardItemHeight(21),
+        [this] (int result)
+        {
+            if (result <= 0)
+                return;
+
+            chordModeEnabled = result != 1;
+
+            if (chordModeEnabled)
+                activeChordType = static_cast<ChordType>(result - 2);
+
+            repaint(getChordBadgeBounds());
+        });
 }
 
 bool PianoRollView::keyPressed(const juce::KeyPress& key)

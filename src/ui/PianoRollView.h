@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/SnapSetting.h"
+#include "midi/Chord.h"
 #include "midi/PianoRollModel.h"
 #include "audio/Transport.h"
 
@@ -95,8 +96,18 @@ private:
 
     /** Applies the active tool to the note under the pointer. True if handled. */
     bool applyToolToNote(int noteIndex);
-    /** Adds a note under the pointer if that spot is free; used by draw sweeps. */
+    /** Adds a note under the pointer if that spot is free; used by draw sweeps.
+        With the chord stamp on, writes every interval of the active chord
+        instead of the one pitch clicked.
+    */
     bool drawNoteAt(juce::Point<int> position);
+    /** Whether an existing note at `pitch` already covers `beat` - a chord
+        tone lands away from the click, so it needs its own check rather than
+        noteAtPosition's screen-space one.
+    */
+    bool hasNoteAt(int pitch, double beat) const;
+    juce::Rectangle<int> getChordBadgeBounds() const;
+    void showChordMenu();
     bool isNoteSelected(int noteIndex) const;
     void clearNoteSelection();
     void selectNotesInMarquee();
@@ -142,6 +153,11 @@ private:
     bool drawing = false;
     double lastDrawnBeat = -1.0;
     int lastDrawnPitch = -1;
+    /** The chord stamp: off by default, so the draw tool writes single notes
+        until it is turned on from its own badge.
+    */
+    bool chordModeEnabled = false;
+    ChordType activeChordType = ChordType::major;
     /** Where the roll is and how much of it is showing - the same two bars the
         playlist has, so navigating one is navigating the other.
     */
@@ -164,8 +180,9 @@ private:
         strips the two bars sit in.
     */
     juce::Rectangle<int> getContentBounds() const;
-    /** The bar numbers along the top. Clicking it moves the playhead, which is
-        what everyone who has used a piano roll before will try first.
+    /** The bar numbers along the top, short of the chord badge's own corner.
+        Clicking it moves the playhead, which is what everyone who has used a
+        piano roll before will try first.
     */
     juce::Rectangle<int> getRulerBounds() const;
     /** The pointer for wherever it is now: the tool it is holding, or the

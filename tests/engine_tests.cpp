@@ -14,6 +14,7 @@
 #include "audio/Mixer.h"
 #include "audio/SimpleSynth.h"
 #include "app/SessionState.h"
+#include "midi/Chord.h"
 #include "midi/MidiEngine.h"
 #include "midi/PianoRollModel.h"
 #include "export/ExportManager.h"
@@ -3734,6 +3735,53 @@ int main()
 
         check(releasesPitch60(),
               "switching pattern mid-note releases what the old one left holding");
+    }
+
+    // --- Chord: the intervals the piano roll's chord stamp writes -----------
+    {
+        using namespace djr::Chord;
+        using djr::ChordType;
+
+        const auto contains = [] (const std::vector<int>& intervals, int value)
+        {
+            return std::find(intervals.begin(), intervals.end(), value) != intervals.end();
+        };
+
+        // Spot-check the shapes a reader would actually recognise.
+        {
+            const auto& major = intervalsFor(ChordType::major);
+            check(major.size() == 3 && contains(major, 0) && contains(major, 4) && contains(major, 7),
+                  "major is a plain root-third-fifth triad");
+
+            const auto& minor = intervalsFor(ChordType::minor);
+            check(minor.size() == 3 && contains(minor, 0) && contains(minor, 3) && contains(minor, 7),
+                  "minor flattens only the third");
+
+            const auto& dominant7 = intervalsFor(ChordType::dominant7);
+            check(dominant7.size() == 4 && contains(dominant7, 4) && contains(dominant7, 10),
+                  "a dominant 7th keeps the major third and flattens the seventh");
+
+            check(intervalsFor(ChordType::major) != intervalsFor(ChordType::minor),
+                  "major and minor are not secretly the same shape");
+        }
+
+        // Every chord type: root present, every interval inside an octave and
+        // a bit, and both name functions have something to say.
+        for (int i = 0; i < static_cast<int>(ChordType::count); ++i)
+        {
+            const auto type = static_cast<ChordType>(i);
+            const auto& intervals = intervalsFor(type);
+
+            check(! intervals.empty(), "chord type " + juce::String(i) + " has at least one interval");
+            check(contains(intervals, 0), "chord type " + juce::String(i) + " includes its own root");
+
+            for (const auto interval : intervals)
+                check(interval >= 0 && interval <= 11,
+                      "chord type " + juce::String(i) + " keeps every interval within an octave of the root");
+
+            check(nameFor(type).isNotEmpty(), "chord type " + juce::String(i) + " has a menu name");
+            check(shortNameFor(type).isNotEmpty(), "chord type " + juce::String(i) + " has a badge name");
+        }
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
