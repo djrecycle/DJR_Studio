@@ -1,0 +1,44 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git pkg-config \
+            libasound2-dev libjack-jackd2-dev libfreetype6-dev libfontconfig1-dev \
+            libx11-dev libxext-dev libxinerama-dev libxcursor-dev libxrandr-dev \
+            libgl1-mesa-dev libcurl4-openssl-dev
+
+      # JUCE is pulled in fresh via FetchContent and takes most of the build
+      # time; caching it keyed on CMakeLists.txt means a run only re-fetches
+      # when the pinned JUCE version actually changes.
+      - name: Cache JUCE (FetchContent)
+        uses: actions/cache@v4
+        with:
+          path: build-debug/_deps
+          key: ${{ runner.os }}-juce-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure
+        run: cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug -DDJR_STUDIO_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build-debug -j"$(nproc)"
+
+      - name: Test
+        run: ctest --test-dir build-debug --output-on-failure

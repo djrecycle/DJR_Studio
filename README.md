@@ -82,7 +82,7 @@ Dependency (Debian/Ubuntu):
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential cmake git pkg-config libasound2-dev libjack-jackd2-dev libfreetype6-dev libx11-dev libxext-dev libxinerama-dev libxcursor-dev libxrandr-dev libgl1-mesa-dev libcurl4-openssl-dev
+sudo apt install -y build-essential cmake git pkg-config libasound2-dev libjack-jackd2-dev libfreetype6-dev libfontconfig1-dev libx11-dev libxext-dev libxinerama-dev libxcursor-dev libxrandr-dev libgl1-mesa-dev libcurl4-openssl-dev
 ```
 
 Build dan jalankan:
