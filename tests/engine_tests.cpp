@@ -3538,6 +3538,17 @@ int main()
 
         check(! saved.isDefault(), "a shaped preview synth knows it is not the default");
 
+        // The reset button: puts a shaped synth back to what a fresh channel
+        // sounds like, not just partway.
+        Synth resetTest;
+        resetTest.setWaveform(Synth::Waveform::square);
+        resetTest.setEnvelope({ 1.5f, 0.5f, 0.2f, 1.0f });
+        check(! resetTest.isDefault(), "the synth used for the reset check starts shaped away from default");
+
+        resetTest.resetToDefault();
+        check(resetTest.isDefault(), "resetToDefault puts the waveform and envelope back to the sine default");
+        check(resetTest.getWaveform() == Synth::Waveform::sine, "specifically back to sine, not just some default");
+
         Synth loaded;
         loaded.fromVar(saved.toVar());
 

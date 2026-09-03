@@ -53,6 +53,11 @@ PreviewSynthPanel::PreviewSynthPanel(SimpleSynth& synthToEdit, bool drumKit)
         knobs.push_back(std::move(knob));
     }
 
+    resetButton.setEnabled(! isDrumKit);
+    resetButton.addListener(this);
+    resetButton.setTooltip(TRANS("Put the waveform and envelope back to their starting values"));
+    addAndMakeVisible(resetButton);
+
     loadFromSynth();
 
     // Last, not first: sizing is what lays the page out, and a resize before
@@ -68,6 +73,8 @@ PreviewSynthPanel::~PreviewSynthPanel()
 
     for (auto& knob : knobs)
         knob->removeListener(this);
+
+    resetButton.removeListener(this);
 }
 
 float PreviewSynthPanel::secondsFromKnob(double position) noexcept
@@ -113,6 +120,14 @@ void PreviewSynthPanel::writeToSynth()
 
 void PreviewSynthPanel::buttonClicked(juce::Button* button)
 {
+    if (button == &resetButton)
+    {
+        synth.resetToDefault();
+        loadFromSynth();
+        repaint();
+        return;
+    }
+
     // A radio group also tells the chip that lost, and it tells it in whatever
     // order it likes: acting on that one too would set the waveform back to
     // whatever was showing before.
@@ -196,6 +211,10 @@ void PreviewSynthPanel::paint(juce::Graphics& g)
     g.drawText(TRANS("Waveform"), waveRow.withHeight(sectionHeader).translated(0, -sectionHeader),
                juce::Justification::centredLeft, false);
 
+    g.setColour(isDrumKit ? Theme::faintText() : Theme::mutedText());
+    g.setFont(Theme::ui(10.5f));
+    g.drawText(TRANS("Reset"), resetButton.getBounds(), juce::Justification::centred, false);
+
     // Envelope ---------------------------------------------------------------
     g.setColour(Theme::panel());
     g.fillRoundedRectangle(envelopeBox.toFloat(), 5.0f);
@@ -226,6 +245,8 @@ void PreviewSynthPanel::resized()
     waveRow = area.removeFromTop(chipHeight);
 
     auto chips = waveRow;
+    resetButton.setBounds(chips.removeFromRight(60));
+
     for (auto* chip : waveformChips)
     {
         chip->setBounds(chips.removeFromLeft(juce::jmax(56, chip->getPreferredWidth())));

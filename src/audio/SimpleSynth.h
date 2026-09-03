@@ -66,6 +66,10 @@ public:
         sounded like, so a project need not carry the defaults around.
     */
     bool isDefault() const noexcept;
+    /** Puts the waveform and envelope back to what a channel sounds like
+        before anyone has touched its Generator page.
+    */
+    void resetToDefault() noexcept;
 
     juce::var toVar() const;
     /** A void or malformed value leaves the defaults in place, which is what an
