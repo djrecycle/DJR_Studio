@@ -3,9 +3,9 @@
 DAW native Linux berbasis C++20, JUCE 8, dan CMake. MIDI, audio, VST3, mixer,
 piano roll, dan step sequencer dalam satu shell panel mengambang ala FL Studio.
 
-> **Status: beta.** Sudah bisa dipakai membuat pattern, merekam, mixing dengan
-> automation dan bus routing, serta meng-export WAV — tapi belum diuji di
-> banyak distro. Simpan pekerjaan pentingmu sesering mungkin.
+> **Status: v1.0.0.** Sudah bisa dipakai membuat pattern, merekam, mixing
+> dengan automation dan bus routing, serta meng-export WAV — tapi belum diuji
+> di banyak distro. Simpan pekerjaan pentingmu sesering mungkin.
 
 ![DJR_Studio](docs/screenshots/overview.png)
 
@@ -61,7 +61,7 @@ piano roll, dan step sequencer dalam satu shell panel mengambang ala FL Studio.
 ## Install dari `.deb`
 
 ```bash
-sudo apt install ./djr-studio-0.2.0-beta-Linux.deb
+sudo apt install ./djr-studio-1.0.0-Linux.deb
 ```
 
 Jalankan lewat menu aplikasi (**DJR_Studio**) atau dari terminal:
@@ -127,8 +127,11 @@ Versi dibentuk otomatis saat configure: bagian angka dari `DJR_VERSION_BASE` di
 `CMakeLists.txt`, sisanya dari `git describe`. Binary hasil build selalu bisa
 dilacak balik ke commit asalnya — lihat **Help → About**.
 
-Paket Debian memakai `0.2.0~beta`; tilde membuatnya diurutkan *di bawah* `0.2.0`,
-sehingga rilis stabil nanti terdeteksi sebagai upgrade.
+Selama `DJR_VERSION_STAGE` di `CMakeLists.txt` kosong (rilis stabil, mis.
+`1.0.0`), paket Debian memakai versi apa adanya. Kalau nanti ada pre-release
+lagi, `DJR_VERSION_STAGE` diisi (mis. `beta`) dan paketnya jadi `1.0.0~beta` -
+tilde membuatnya diurutkan *di bawah* `1.0.0`, sehingga rilis stabil
+berikutnya terdeteksi sebagai upgrade.
 
 ## Struktur
 
