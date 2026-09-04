@@ -25,6 +25,13 @@ public:
     void addNote(int pitch, double startBeat, double lengthBeats, float velocity);
     /** Adds several notes as one undo step, e.g. every tone of a chord stamp. */
     void addNoteGroup(const juce::Array<MidiNote>& newNotes);
+    /** Chops the given notes' combined time span into equal steps and lines
+        them up one after another, lowest pitch first - a stacked chord
+        turned into a run rather than played all at once. Permanent, unlike
+        the live arpeggiator in ChannelSettings: this rewrites the notes
+        themselves. A no-op below two notes: there is nothing to sequence.
+    */
+    void arpeggiateNotes(const juce::Array<int>& indices);
     void deleteNoteAt(int index);
     void dragNote(int index, double startBeat, int pitch);
     void setNoteVelocity(int index, float velocity);
