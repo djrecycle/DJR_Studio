@@ -1,5 +1,7 @@
 #pragma once
 
+#include "midi/Scale.h"
+
 #include <juce_core/juce_core.h>
 #include <juce_events/juce_events.h>
 
@@ -40,6 +42,10 @@ public:
     void setSongMode(bool shouldPlaySong);
     bool isSongMode() const noexcept;
 
+    /** The piano roll's scale highlight. Chromatic (the default) means off. */
+    void setScale(const Scale& newScale);
+    const Scale& getScale() const noexcept;
+
     /** Re-announces the current selection, e.g. after tracks are added. */
     void refresh();
 
@@ -47,6 +53,7 @@ private:
     int selectedTrack = 0;
     int activePattern = 0;
     bool songMode = false;
+    Scale scale;
     std::array<double, maxPatterns> patternLengths {};
     std::array<juce::String, maxPatterns> patternNames {};
 };

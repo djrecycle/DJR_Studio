@@ -235,6 +235,11 @@ MainComponent::MainComponent()
     });
     editorPanel.setTrackChangedCallback([this] (int trackIndex) { selectTrack(trackIndex); });
 
+    // The scale badge is the roll's own UI, but the choice belongs to the
+    // session - every other panel that cares (none yet, but the project file
+    // does) reads it from there, not from the roll directly.
+    editorPanel.setScaleChangedCallback([this] (Scale newScale) { sessionState.setScale(newScale); });
+
     wireUndoHooks();
 
     editorPanel.setViewChangedCallback([this] { handleEditorViewChanged(); });
@@ -2024,6 +2029,7 @@ void MainComponent::applySelectionToPanels()
 
     audioEngine.getTransport().setSongMode(sessionState.isSongMode());
     editorPanel.setActivePattern(pattern);
+    editorPanel.setScale(sessionState.getScale());
     arrangementView.setActivePattern(pattern);
     refreshPatternName();
     refreshPatternLength();
@@ -2079,6 +2085,9 @@ void MainComponent::synchroniseProjectState()
         project.patternNames.add(sessionState.getCustomPatternName(i));
         project.patternLengths.add(sessionState.getPatternLengthBeats(i));
     }
+
+    project.scaleRoot = sessionState.getScale().getRoot();
+    project.scaleType = static_cast<int>(sessionState.getScale().getType());
 
     for (int i = 0; i < audioEngine.getMixer().getNumTracks(); ++i)
     {
@@ -2614,6 +2623,12 @@ void MainComponent::applyProjectToSession()
         sessionState.setPatternLengthBeats(i, i < project.patternLengths.size() ? project.patternLengths[i]
                                                                                 : 0.0);
     }
+
+    // Absent in projects saved before scale highlighting existed, which reads
+    // back as scaleType 0 - chromatic, i.e. off, so an old file opens looking
+    // exactly as it did.
+    const auto scaleType = juce::jlimit(0, static_cast<int>(ScaleType::count) - 1, project.scaleType);
+    sessionState.setScale(Scale(project.scaleRoot, static_cast<ScaleType>(scaleType)));
 
     // Re-point the editors at the freshly loaded clip.
     applySelectionToPanels();

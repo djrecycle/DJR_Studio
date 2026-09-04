@@ -58,6 +58,10 @@ private:
 
     juce::OwnedArray<TabChip> waveformChips;
     std::vector<std::unique_ptr<Knob>> knobs;
+    /** Puts the waveform and envelope back to what a fresh channel sounds
+        like. Disabled on the drum kit's page, which has neither.
+    */
+    HitAreaButton resetButton { "Reset preview instrument" };
     juce::Rectangle<int> waveRow;
     juce::Rectangle<int> envelopeBox;
     juce::Rectangle<int> envelopeDisplay;

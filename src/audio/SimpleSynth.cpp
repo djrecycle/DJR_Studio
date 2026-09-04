@@ -426,6 +426,12 @@ bool SimpleSynth::isDefault() const noexcept
         && same(shaping.release, defaults.release);
 }
 
+void SimpleSynth::resetToDefault() noexcept
+{
+    setWaveform(Waveform::sine);
+    setEnvelope(Envelope {});
+}
+
 juce::var SimpleSynth::toVar() const
 {
     auto* object = new juce::DynamicObject();

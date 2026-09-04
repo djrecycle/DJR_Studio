@@ -101,6 +101,20 @@ bool SessionState::isSongMode() const noexcept
     return songMode;
 }
 
+void SessionState::setScale(const Scale& newScale)
+{
+    if (scale == newScale)
+        return;
+
+    scale = newScale;
+    sendChangeMessage();
+}
+
+const Scale& SessionState::getScale() const noexcept
+{
+    return scale;
+}
+
 void SessionState::refresh()
 {
     sendChangeMessage();

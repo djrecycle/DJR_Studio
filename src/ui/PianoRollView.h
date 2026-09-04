@@ -3,6 +3,7 @@
 #include "app/SnapSetting.h"
 #include "midi/Chord.h"
 #include "midi/PianoRollModel.h"
+#include "midi/Scale.h"
 #include "audio/Transport.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -76,6 +77,14 @@ public:
     */
     void setFollowPlayhead(bool shouldFollow);
     bool isFollowingPlayhead() const noexcept;
+
+    /** The scale highlighted in the key rows; chromatic means no highlight. */
+    void setScale(const Scale& newScale);
+    const Scale& getScale() const noexcept;
+    /** Fired with the user's pick from the scale badge's menu - the host owns
+        where this is remembered, the roll only asks.
+    */
+    std::function<void(Scale)> onScaleChanged;
 
 private:
     void changeListenerCallback(juce::ChangeBroadcaster* source) override;
@@ -193,6 +202,7 @@ private:
     double pixelsPerBeat = 14.0;
     double scrollBeats = 0.0;
     bool followPlayhead = true;
+    Scale scale;
     int topPitch = 84;
     /** A drag that started on the ruler keeps moving the playhead, even once
         the pointer has wandered down into the notes.
@@ -208,6 +218,11 @@ private:
         piano roll before will try first.
     */
     juce::Rectangle<int> getRulerBounds() const;
+    /** The corner above the keyboard and left of the ruler - dead space
+        otherwise, so it is where the scale badge lives.
+    */
+    juce::Rectangle<int> getScaleBadgeBounds() const;
+    void showScaleMenu();
     /** The pointer for wherever it is now: the tool it is holding, or the
         resize arrows when it is over the end of a note.
 

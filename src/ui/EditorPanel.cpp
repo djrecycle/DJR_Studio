@@ -287,6 +287,21 @@ void EditorPanel::setSnapUnit(SnapUnit unit)
     pianoRoll.setSnapUnit(unit);
 }
 
+void EditorPanel::setScale(const Scale& newScale)
+{
+    pianoRoll.setScale(newScale);
+}
+
+const Scale& EditorPanel::getScale() const noexcept
+{
+    return pianoRoll.getScale();
+}
+
+void EditorPanel::setScaleChangedCallback(std::function<void(Scale)> callback)
+{
+    pianoRoll.onScaleChanged = std::move(callback);
+}
+
 void EditorPanel::setNoteGestureCallback(std::function<void(bool)> callback)
 {
     pianoRoll.onEditGesture = callback;

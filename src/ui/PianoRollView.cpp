@@ -59,6 +59,11 @@ juce::Rectangle<int> PianoRollView::getChordBadgeBounds() const
                                 chordBadgeWidth, rulerHeight);
 }
 
+juce::Rectangle<int> PianoRollView::getScaleBadgeBounds() const
+{
+    return getContentBounds().withHeight(rulerHeight).withWidth(keyboardWidth);
+}
+
 juce::Rectangle<int> PianoRollView::getContentBounds() const
 {
     return getLocalBounds()
@@ -151,6 +156,7 @@ void PianoRollView::paint(juce::Graphics& g)
     g.fillAll(Theme::panelDeep());
 
     const auto visibleRows = (bounds.getHeight() - rulerHeight) / keyHeight + 2;
+    const auto scaleActive = scale.getType() != ScaleType::chromatic;
 
     // Key rows ---------------------------------------------------------------
     for (int row = 0; row < visibleRows; ++row)
@@ -165,17 +171,54 @@ void PianoRollView::paint(juce::Graphics& g)
         g.setColour(black ? juce::Colour::fromString("bf141922") : juce::Colour::fromString("731c232f"));
         g.fillRect(keyboardWidth, y, bounds.getWidth() - keyboardWidth, keyHeight);
 
+        // Out-of-scale rows sink further into the background; the root comes
+        // forward instead, so the key is legible without hiding which notes
+        // are black or white underneath.
+        if (scaleActive)
+        {
+            if (scale.isRoot(pitch))
+            {
+                g.setColour(Theme::accent().withAlpha(0.16f));
+                g.fillRect(keyboardWidth, y, bounds.getWidth() - keyboardWidth, keyHeight);
+            }
+            else if (! scale.isInScale(pitch))
+            {
+                g.setColour(juce::Colours::black.withAlpha(0.4f));
+                g.fillRect(keyboardWidth, y, bounds.getWidth() - keyboardWidth, keyHeight);
+            }
+        }
+
         g.setColour(juce::Colour::fromString("ff1b2230"));
         g.fillRect(0, y + keyHeight - 1, bounds.getWidth(), 1);
 
         g.setColour(black ? juce::Colour::fromString("ff171c26") : juce::Colour::fromString("ffe7edf7"));
         g.fillRect(0, y, keyboardWidth, keyHeight - 1);
 
-        g.setColour(black ? Theme::mutedText() : juce::Colour::fromString("ff3a4152"));
+        const auto dimmed = scaleActive && ! scale.isInScale(pitch);
+        g.setColour(scaleActive && scale.isRoot(pitch) ? Theme::accent()
+                  : dimmed                             ? (black ? Theme::mutedText().withAlpha(0.5f)
+                                                                 : juce::Colour::fromString("ff3a4152").withAlpha(0.45f))
+                  : black                               ? Theme::mutedText()
+                                                        : juce::Colour::fromString("ff3a4152"));
         g.setFont(Theme::mono(9.0f));
         g.drawText(juce::MidiMessage::getMidiNoteName(pitch, true, true, 3),
                    0, y, keyboardWidth - 4, keyHeight,
                    juce::Justification::centredRight, false);
+    }
+
+    // Scale badge --------------------------------------------------------------
+    {
+        const auto badge = getScaleBadgeBounds();
+        g.setColour(Theme::panel());
+        g.fillRect(badge);
+        g.setColour(Theme::outlineStrong());
+        g.drawRect(badge, 1);
+
+        g.setColour(scaleActive ? Theme::accent() : Theme::mutedText());
+        g.setFont(Theme::mono(9.0f));
+        g.drawText(scaleActive ? Scale::pitchClassName(scale.getRoot()) + " " + Scale::shortNameFor(scale.getType())
+                                : juce::String(TRANS("Scale")),
+                   badge, juce::Justification::centred, false);
     }
 
     // Vertical grid ----------------------------------------------------------
@@ -392,6 +435,12 @@ void PianoRollView::mouseDown(const juce::MouseEvent& event)
         else
             toggleChordStamp();
 
+        return;
+    }
+
+    if (getScaleBadgeBounds().contains(event.getPosition()))
+    {
+        showScaleMenu();
         return;
     }
 
@@ -1285,6 +1334,67 @@ void PianoRollView::setFollowPlayhead(bool shouldFollow)
 bool PianoRollView::isFollowingPlayhead() const noexcept
 {
     return followPlayhead;
+}
+
+void PianoRollView::setScale(const Scale& newScale)
+{
+    if (scale == newScale)
+        return;
+
+    scale = newScale;
+    repaint();
+}
+
+const Scale& PianoRollView::getScale() const noexcept
+{
+    return scale;
+}
+
+void PianoRollView::showScaleMenu()
+{
+    juce::PopupMenu menu;
+    menu.addItem(1, TRANS("Off (chromatic)"), true, scale.getType() == ScaleType::chromatic);
+    menu.addSeparator();
+
+    juce::PopupMenu rootMenu;
+    for (int i = 0; i < 12; ++i)
+        rootMenu.addItem(100 + i, Scale::pitchClassName(i), true, i == scale.getRoot());
+    menu.addSubMenu(TRANS("Root"), rootMenu);
+
+    juce::PopupMenu typeMenu;
+    for (int i = 1; i < static_cast<int>(ScaleType::count); ++i)
+        typeMenu.addItem(200 + i, Scale::nameFor(static_cast<ScaleType>(i)), true,
+                         static_cast<int>(scale.getType()) == i);
+    menu.addSubMenu(TRANS("Scale"), typeMenu);
+
+    // Anchored to the badge that opened it, so it does not land somewhere
+    // the click had nothing to do with.
+    menu.showMenuAsync(juce::PopupMenu::Options()
+                           .withTargetScreenArea(localAreaToGlobal(getScaleBadgeBounds()))
+                           .withMinimumWidth(170)
+                           .withStandardItemHeight(21),
+        [this] (int result)
+        {
+            if (result <= 0)
+                return;
+
+            auto updated = scale;
+
+            if (result == 1)
+                updated = Scale(scale.getRoot(), ScaleType::chromatic);
+            else if (result < 200)
+                // Picking a root while off implies wanting highlighting, not
+                // a root that changes nothing visible.
+                updated = Scale(result - 100,
+                                scale.getType() == ScaleType::chromatic ? ScaleType::major : scale.getType());
+            else
+                updated = Scale(scale.getRoot(), static_cast<ScaleType>(result - 200));
+
+            setScale(updated);
+
+            if (onScaleChanged)
+                onScaleChanged(updated);
+        });
 }
 
 } // namespace djr
