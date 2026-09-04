@@ -29,10 +29,6 @@ namespace
     */
     constexpr int rulerHeight = 18;
     /** The chord badge's own corner, pinned to the ruler's right end. */
-    /** Wide enough for the two-line scale-over-chord label; the badge sits
-        in the dead corner above the keyboard and left of the ruler.
-    */
-    constexpr int helperBadgeWidth = 64;
 }
 
 PianoRollView::PianoRollView(PianoRollModel& modelToUse, Transport& transportToUse)
@@ -51,12 +47,7 @@ PianoRollView::PianoRollView(PianoRollModel& modelToUse, Transport& transportToU
 
 juce::Rectangle<int> PianoRollView::getRulerBounds() const
 {
-    return getContentBounds().withHeight(rulerHeight).withTrimmedLeft(helperBadgeWidth);
-}
-
-juce::Rectangle<int> PianoRollView::getHelperBadgeBounds() const
-{
-    return getContentBounds().withHeight(rulerHeight).withWidth(helperBadgeWidth);
+    return getContentBounds().withHeight(rulerHeight).withTrimmedLeft(keyboardWidth);
 }
 
 juce::Rectangle<int> PianoRollView::getContentBounds() const
@@ -199,32 +190,6 @@ void PianoRollView::paint(juce::Graphics& g)
         g.drawText(juce::MidiMessage::getMidiNoteName(pitch, true, true, 3),
                    0, y, keyboardWidth - 4, keyHeight,
                    juce::Justification::centredRight, false);
-    }
-
-    // Helper badge - scale on top, chord stamp underneath, one menu for
-    // both -----------------------------------------------------------------
-    {
-        const auto badge = getHelperBadgeBounds();
-        g.setColour(Theme::panel());
-        g.fillRect(badge);
-        g.setColour(Theme::outlineStrong());
-        g.drawRect(badge, 1);
-
-        const auto topHalf = badge.withHeight(badge.getHeight() / 2);
-        const auto bottomHalf = badge.withTrimmedTop(badge.getHeight() / 2);
-
-        g.setFont(Theme::mono(8.5f));
-        g.setColour(scaleActive ? Theme::accent() : Theme::mutedText());
-        g.drawText(scaleActive ? Scale::pitchClassName(scale.getRoot()) + " " + Scale::shortNameFor(scale.getType())
-                                : juce::String(TRANS("Key")),
-                   topHalf, juce::Justification::centred, false);
-
-        g.setColour(chordModeEnabled ? Theme::accent() : Theme::mutedText());
-        g.drawText(chordModeEnabled ? Chord::shortNameFor(activeChordType) : juce::String(TRANS("Chord")),
-                   bottomHalf, juce::Justification::centred, false);
-
-        g.setColour(Theme::outline());
-        g.fillRect(badge.getX(), badge.getCentreY(), badge.getWidth(), 1);
     }
 
     // Vertical grid ----------------------------------------------------------
@@ -417,19 +382,6 @@ void PianoRollView::mouseMove(const juce::MouseEvent& event)
 
 void PianoRollView::mouseDown(const juce::MouseEvent& event)
 {
-    if (getHelperBadgeBounds().contains(event.getPosition()))
-    {
-        // Right click for the full scale + chord picker; a plain click just
-        // flips the chord stamp on or off, so stamping a run of the same
-        // chord needs no trip back to the menu.
-        if (event.mods.isRightButtonDown())
-            showHelperMenu();
-        else
-            toggleChordStamp();
-
-        return;
-    }
-
     if (event.x < keyboardWidth)
         return;
 
@@ -1035,10 +987,30 @@ int PianoRollView::nextChordGroupId(const juce::Array<MidiNote>& notes) const
 void PianoRollView::toggleChordStamp()
 {
     chordModeEnabled = ! chordModeEnabled;
-    repaint(getHelperBadgeBounds());
+
+    if (onChordStampChanged)
+        onChordStampChanged();
 }
 
-void PianoRollView::showHelperMenu()
+bool PianoRollView::isChordStampEnabled() const noexcept
+{
+    return chordModeEnabled;
+}
+
+ChordType PianoRollView::getActiveChordType() const noexcept
+{
+    return activeChordType;
+}
+
+void PianoRollView::handleHelperBadgeClick(bool isRightClick, juce::Rectangle<int> screenAnchor)
+{
+    if (isRightClick)
+        showHelperMenu(screenAnchor);
+    else
+        toggleChordStamp();
+}
+
+void PianoRollView::showHelperMenu(juce::Rectangle<int> screenAnchor)
 {
     // Scale ids: 1 = off, 100-111 = root, 200+ScaleType = scale type.
     // Chord ids: 300 = off, 301+ChordType = chord type. Kept far apart so
@@ -1093,10 +1065,10 @@ void PianoRollView::showHelperMenu()
 
     menu.addSubMenu(TRANS("Chord stamp"), chordMenu, true, nullptr, chordModeEnabled);
 
-    // Anchored to the badge that opened it, like the piano roll's other
-    // corner pickers.
+    // Anchored to the badge that opened it - now the host toolbar's, since
+    // the roll's own corners are too small to read a chord name in.
     menu.showMenuAsync(juce::PopupMenu::Options()
-                           .withTargetScreenArea(localAreaToGlobal(getHelperBadgeBounds()))
+                           .withTargetScreenArea(screenAnchor)
                            .withMinimumWidth(190)
                            .withStandardItemHeight(21),
         [this] (int result)
@@ -1129,9 +1101,10 @@ void PianoRollView::showHelperMenu()
 
                 if (chordModeEnabled)
                     activeChordType = static_cast<ChordType>(result - 301);
-            }
 
-            repaint(getHelperBadgeBounds());
+                if (onChordStampChanged)
+                    onChordStampChanged();
+            }
         });
 }
 

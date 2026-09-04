@@ -81,10 +81,26 @@ public:
     /** The scale highlighted in the key rows; chromatic means no highlight. */
     void setScale(const Scale& newScale);
     const Scale& getScale() const noexcept;
-    /** Fired with the user's pick from the scale badge's menu - the host owns
+    /** Fired with the user's pick from the helper menu - the host owns
         where this is remembered, the roll only asks.
     */
     std::function<void(Scale)> onScaleChanged;
+
+    /** Whether the chord stamp is armed, and which shape it writes. The
+        badge for both this and the scale above lives in the host's own
+        toolbar - the roll's corners are too small to read a chord name in.
+    */
+    bool isChordStampEnabled() const noexcept;
+    ChordType getActiveChordType() const noexcept;
+    /** A click on the host's helper badge: left toggles the chord stamp with
+        whatever type was last picked, right opens the combined scale + chord
+        menu anchored at `screenAnchor` (already in screen coordinates).
+    */
+    void handleHelperBadgeClick(bool isRightClick, juce::Rectangle<int> screenAnchor);
+    /** Fired after the chord stamp changes, from a toggle or a menu pick, so
+        the host badge can repaint to match.
+    */
+    std::function<void()> onChordStampChanged;
 
 private:
     void changeListenerCallback(juce::ChangeBroadcaster* source) override;
@@ -119,16 +135,11 @@ private:
         stamp never collides with notes loaded from a saved project.
     */
     int nextChordGroupId(const juce::Array<MidiNote>& notes) const;
-    /** Flips the chord stamp on or off with whatever chord type was last
-        picked, so writing a run of the same chord needs no trip back to
-        the menu. A plain click on the badge does this; right click opens
-        the full scale + chord picker.
-    */
     void toggleChordStamp();
-    /** The scale and the chord stamp share one badge and one menu, the way
-        FL keeps its own key and chord helpers in a single tool.
+    /** The scale and the chord stamp share one menu, the way FL keeps its
+        own key and chord helpers in a single tool.
     */
-    void showHelperMenu();
+    void showHelperMenu(juce::Rectangle<int> screenAnchor);
     bool isNoteSelected(int noteIndex) const;
     void clearNoteSelection();
     /** Selects every note sharing `groupId`, so grabbing one tone of a
@@ -217,15 +228,10 @@ private:
         strips the two bars sit in.
     */
     juce::Rectangle<int> getContentBounds() const;
-    /** The bar numbers along the top, short of the helper badge's own corner.
-        Clicking it moves the playhead, which is what everyone who has used a
-        piano roll before will try first.
+    /** The bar numbers along the top. Clicking it moves the playhead, which
+        is what everyone who has used a piano roll before will try first.
     */
     juce::Rectangle<int> getRulerBounds() const;
-    /** The corner above the keyboard and left of the ruler - dead space
-        otherwise, so it is where the scale/chord badge lives.
-    */
-    juce::Rectangle<int> getHelperBadgeBounds() const;
     /** The pointer for wherever it is now: the tool it is holding, or the
         resize arrows when it is over the end of a note.
 
