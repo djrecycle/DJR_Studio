@@ -29,7 +29,10 @@ namespace
     */
     constexpr int rulerHeight = 18;
     /** The chord badge's own corner, pinned to the ruler's right end. */
-    constexpr int chordBadgeWidth = 56;
+    /** Wide enough for the two-line scale-over-chord label; the badge sits
+        in the dead corner above the keyboard and left of the ruler.
+    */
+    constexpr int helperBadgeWidth = 64;
 }
 
 PianoRollView::PianoRollView(PianoRollModel& modelToUse, Transport& transportToUse)
@@ -48,20 +51,12 @@ PianoRollView::PianoRollView(PianoRollModel& modelToUse, Transport& transportToU
 
 juce::Rectangle<int> PianoRollView::getRulerBounds() const
 {
-    return getContentBounds().withHeight(rulerHeight).withTrimmedLeft(keyboardWidth)
-                             .withTrimmedRight(chordBadgeWidth);
+    return getContentBounds().withHeight(rulerHeight).withTrimmedLeft(helperBadgeWidth);
 }
 
-juce::Rectangle<int> PianoRollView::getChordBadgeBounds() const
+juce::Rectangle<int> PianoRollView::getHelperBadgeBounds() const
 {
-    const auto bounds = getContentBounds().withHeight(rulerHeight);
-    return juce::Rectangle<int>(bounds.getRight() - chordBadgeWidth, bounds.getY(),
-                                chordBadgeWidth, rulerHeight);
-}
-
-juce::Rectangle<int> PianoRollView::getScaleBadgeBounds() const
-{
-    return getContentBounds().withHeight(rulerHeight).withWidth(keyboardWidth);
+    return getContentBounds().withHeight(rulerHeight).withWidth(helperBadgeWidth);
 }
 
 juce::Rectangle<int> PianoRollView::getContentBounds() const
@@ -206,19 +201,30 @@ void PianoRollView::paint(juce::Graphics& g)
                    juce::Justification::centredRight, false);
     }
 
-    // Scale badge --------------------------------------------------------------
+    // Helper badge - scale on top, chord stamp underneath, one menu for
+    // both -----------------------------------------------------------------
     {
-        const auto badge = getScaleBadgeBounds();
+        const auto badge = getHelperBadgeBounds();
         g.setColour(Theme::panel());
         g.fillRect(badge);
         g.setColour(Theme::outlineStrong());
         g.drawRect(badge, 1);
 
+        const auto topHalf = badge.withHeight(badge.getHeight() / 2);
+        const auto bottomHalf = badge.withTrimmedTop(badge.getHeight() / 2);
+
+        g.setFont(Theme::mono(8.5f));
         g.setColour(scaleActive ? Theme::accent() : Theme::mutedText());
-        g.setFont(Theme::mono(9.0f));
         g.drawText(scaleActive ? Scale::pitchClassName(scale.getRoot()) + " " + Scale::shortNameFor(scale.getType())
-                                : juce::String(TRANS("Scale")),
-                   badge, juce::Justification::centred, false);
+                                : juce::String(TRANS("Key")),
+                   topHalf, juce::Justification::centred, false);
+
+        g.setColour(chordModeEnabled ? Theme::accent() : Theme::mutedText());
+        g.drawText(chordModeEnabled ? Chord::shortNameFor(activeChordType) : juce::String(TRANS("Chord")),
+                   bottomHalf, juce::Justification::centred, false);
+
+        g.setColour(Theme::outline());
+        g.fillRect(badge.getX(), badge.getCentreY(), badge.getWidth(), 1);
     }
 
     // Vertical grid ----------------------------------------------------------
@@ -335,21 +341,6 @@ void PianoRollView::paint(juce::Graphics& g)
         }
     }
 
-    // Chord badge --------------------------------------------------------------
-    {
-        const auto badge = getChordBadgeBounds();
-        g.setColour(Theme::panelHeader());
-        g.fillRect(badge);
-        g.setColour(Theme::outlineStrong());
-        g.drawRect(badge, 1);
-
-        g.setColour(chordModeEnabled ? Theme::accent() : Theme::mutedText());
-        g.setFont(Theme::mono(9.0f));
-        g.drawText(chordModeEnabled ? Chord::shortNameFor(activeChordType)
-                                    : juce::String(TRANS("Chord")),
-                   badge, juce::Justification::centred, false);
-    }
-
     // Rubber bands ------------------------------------------------------------
     if (! zoomDrag.isEmpty())
     {
@@ -426,21 +417,16 @@ void PianoRollView::mouseMove(const juce::MouseEvent& event)
 
 void PianoRollView::mouseDown(const juce::MouseEvent& event)
 {
-    if (getChordBadgeBounds().contains(event.getPosition()))
+    if (getHelperBadgeBounds().contains(event.getPosition()))
     {
-        // Right click for the type picker; a plain click just flips the
-        // stamp on or off so stamping a run of the same chord needs no menu.
+        // Right click for the full scale + chord picker; a plain click just
+        // flips the chord stamp on or off, so stamping a run of the same
+        // chord needs no trip back to the menu.
         if (event.mods.isRightButtonDown())
-            showChordMenu();
+            showHelperMenu();
         else
             toggleChordStamp();
 
-        return;
-    }
-
-    if (getScaleBadgeBounds().contains(event.getPosition()))
-    {
-        showScaleMenu();
         return;
     }
 
@@ -1049,13 +1035,14 @@ int PianoRollView::nextChordGroupId(const juce::Array<MidiNote>& notes) const
 void PianoRollView::toggleChordStamp()
 {
     chordModeEnabled = ! chordModeEnabled;
-    repaint(getChordBadgeBounds());
+    repaint(getHelperBadgeBounds());
 }
 
-void PianoRollView::showChordMenu()
+void PianoRollView::showHelperMenu()
 {
-    // Triads and sevenths grouped under their own headings, the way FL's
-    // own chord picker sorts its (much longer) list into categories.
+    // Scale ids: 1 = off, 100-111 = root, 200+ScaleType = scale type.
+    // Chord ids: 300 = off, 301+ChordType = chord type. Kept far apart so
+    // the one result handler below can tell which section fired.
     static const ChordType triads[] { ChordType::major, ChordType::minor, ChordType::diminished,
                                        ChordType::augmented, ChordType::sus2, ChordType::sus4 };
     static const ChordType sevenths[] { ChordType::major7, ChordType::minor7, ChordType::dominant7,
@@ -1063,27 +1050,53 @@ void PianoRollView::showChordMenu()
                                          ChordType::minorMajor7 };
 
     juce::PopupMenu menu;
-    menu.addItem(1, TRANS("Off - single notes"), true, ! chordModeEnabled);
+
+    // --- Scale section: root highlighting for the key rows -----------------
+    juce::PopupMenu scaleMenu;
+    scaleMenu.addItem(1, TRANS("Off (chromatic)"), true, scale.getType() == ScaleType::chromatic);
+    scaleMenu.addSeparator();
+
+    juce::PopupMenu rootMenu;
+    for (int i = 0; i < 12; ++i)
+        rootMenu.addItem(100 + i, Scale::pitchClassName(i), true, i == scale.getRoot());
+    scaleMenu.addSubMenu(TRANS("Root"), rootMenu);
+
+    juce::PopupMenu scaleTypeMenu;
+    for (int i = 1; i < static_cast<int>(ScaleType::count); ++i)
+        scaleTypeMenu.addItem(200 + i, Scale::nameFor(static_cast<ScaleType>(i)), true,
+                              static_cast<int>(scale.getType()) == i);
+    scaleMenu.addSubMenu(TRANS("Scale"), scaleTypeMenu);
+
+    menu.addSubMenu(TRANS("Scale"), scaleMenu, true, nullptr, scale.getType() != ScaleType::chromatic);
     menu.addSeparator();
 
-    const auto addCategory = [this, &menu] (const juce::String& heading, const ChordType* types, int count)
+    // --- Chord section: what the draw tool stamps down ---------------------
+    juce::PopupMenu chordMenu;
+    chordMenu.addItem(300, TRANS("Off - single notes"), true, ! chordModeEnabled);
+    chordMenu.addSeparator();
+
+    // Triads and sevenths grouped under their own headings, the way FL's
+    // own chord picker sorts its (much longer) list into categories.
+    const auto addCategory = [this, &chordMenu] (const juce::String& heading, const ChordType* types, int count)
     {
         juce::PopupMenu sub;
 
         for (int i = 0; i < count; ++i)
-            sub.addItem(2 + static_cast<int>(types[i]), Chord::nameFor(types[i]), true,
+            sub.addItem(301 + static_cast<int>(types[i]), Chord::nameFor(types[i]), true,
                         chordModeEnabled && activeChordType == types[i]);
 
-        menu.addSubMenu(heading, sub);
+        chordMenu.addSubMenu(heading, sub);
     };
 
     addCategory(TRANS("Triads"), triads, juce::numElementsInArray(triads));
     addCategory(TRANS("Seventh chords"), sevenths, juce::numElementsInArray(sevenths));
 
+    menu.addSubMenu(TRANS("Chord stamp"), chordMenu, true, nullptr, chordModeEnabled);
+
     // Anchored to the badge that opened it, like the piano roll's other
     // corner pickers.
     menu.showMenuAsync(juce::PopupMenu::Options()
-                           .withTargetScreenArea(localAreaToGlobal(getChordBadgeBounds()))
+                           .withTargetScreenArea(localAreaToGlobal(getHelperBadgeBounds()))
                            .withMinimumWidth(190)
                            .withStandardItemHeight(21),
         [this] (int result)
@@ -1091,12 +1104,34 @@ void PianoRollView::showChordMenu()
             if (result <= 0)
                 return;
 
-            chordModeEnabled = result != 1;
+            if (result < 300)
+            {
+                auto updated = scale;
 
-            if (chordModeEnabled)
-                activeChordType = static_cast<ChordType>(result - 2);
+                if (result == 1)
+                    updated = Scale(scale.getRoot(), ScaleType::chromatic);
+                else if (result < 200)
+                    // Picking a root while off implies wanting highlighting,
+                    // not a root that changes nothing visible.
+                    updated = Scale(result - 100,
+                                    scale.getType() == ScaleType::chromatic ? ScaleType::major : scale.getType());
+                else
+                    updated = Scale(scale.getRoot(), static_cast<ScaleType>(result - 200));
 
-            repaint(getChordBadgeBounds());
+                setScale(updated);
+
+                if (onScaleChanged)
+                    onScaleChanged(updated);
+            }
+            else
+            {
+                chordModeEnabled = result != 300;
+
+                if (chordModeEnabled)
+                    activeChordType = static_cast<ChordType>(result - 301);
+            }
+
+            repaint(getHelperBadgeBounds());
         });
 }
 
@@ -1348,53 +1383,6 @@ void PianoRollView::setScale(const Scale& newScale)
 const Scale& PianoRollView::getScale() const noexcept
 {
     return scale;
-}
-
-void PianoRollView::showScaleMenu()
-{
-    juce::PopupMenu menu;
-    menu.addItem(1, TRANS("Off (chromatic)"), true, scale.getType() == ScaleType::chromatic);
-    menu.addSeparator();
-
-    juce::PopupMenu rootMenu;
-    for (int i = 0; i < 12; ++i)
-        rootMenu.addItem(100 + i, Scale::pitchClassName(i), true, i == scale.getRoot());
-    menu.addSubMenu(TRANS("Root"), rootMenu);
-
-    juce::PopupMenu typeMenu;
-    for (int i = 1; i < static_cast<int>(ScaleType::count); ++i)
-        typeMenu.addItem(200 + i, Scale::nameFor(static_cast<ScaleType>(i)), true,
-                         static_cast<int>(scale.getType()) == i);
-    menu.addSubMenu(TRANS("Scale"), typeMenu);
-
-    // Anchored to the badge that opened it, so it does not land somewhere
-    // the click had nothing to do with.
-    menu.showMenuAsync(juce::PopupMenu::Options()
-                           .withTargetScreenArea(localAreaToGlobal(getScaleBadgeBounds()))
-                           .withMinimumWidth(170)
-                           .withStandardItemHeight(21),
-        [this] (int result)
-        {
-            if (result <= 0)
-                return;
-
-            auto updated = scale;
-
-            if (result == 1)
-                updated = Scale(scale.getRoot(), ScaleType::chromatic);
-            else if (result < 200)
-                // Picking a root while off implies wanting highlighting, not
-                // a root that changes nothing visible.
-                updated = Scale(result - 100,
-                                scale.getType() == ScaleType::chromatic ? ScaleType::major : scale.getType());
-            else
-                updated = Scale(scale.getRoot(), static_cast<ScaleType>(result - 200));
-
-            setScale(updated);
-
-            if (onScaleChanged)
-                onScaleChanged(updated);
-        });
 }
 
 } // namespace djr

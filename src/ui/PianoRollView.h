@@ -119,12 +119,16 @@ private:
         stamp never collides with notes loaded from a saved project.
     */
     int nextChordGroupId(const juce::Array<MidiNote>& notes) const;
-    juce::Rectangle<int> getChordBadgeBounds() const;
-    /** Flips the stamp on or off with whatever chord type was last picked,
-        so writing a run of the same chord needs no trip back to the menu.
+    /** Flips the chord stamp on or off with whatever chord type was last
+        picked, so writing a run of the same chord needs no trip back to
+        the menu. A plain click on the badge does this; right click opens
+        the full scale + chord picker.
     */
     void toggleChordStamp();
-    void showChordMenu();
+    /** The scale and the chord stamp share one badge and one menu, the way
+        FL keeps its own key and chord helpers in a single tool.
+    */
+    void showHelperMenu();
     bool isNoteSelected(int noteIndex) const;
     void clearNoteSelection();
     /** Selects every note sharing `groupId`, so grabbing one tone of a
@@ -213,16 +217,15 @@ private:
         strips the two bars sit in.
     */
     juce::Rectangle<int> getContentBounds() const;
-    /** The bar numbers along the top, short of the chord badge's own corner.
+    /** The bar numbers along the top, short of the helper badge's own corner.
         Clicking it moves the playhead, which is what everyone who has used a
         piano roll before will try first.
     */
     juce::Rectangle<int> getRulerBounds() const;
     /** The corner above the keyboard and left of the ruler - dead space
-        otherwise, so it is where the scale badge lives.
+        otherwise, so it is where the scale/chord badge lives.
     */
-    juce::Rectangle<int> getScaleBadgeBounds() const;
-    void showScaleMenu();
+    juce::Rectangle<int> getHelperBadgeBounds() const;
     /** The pointer for wherever it is now: the tool it is holding, or the
         resize arrows when it is over the end of a note.
 
