@@ -849,6 +849,22 @@ void PianoRollView::shiftSelectedNotesByOctave(int direction)
     repaint();
 }
 
+void PianoRollView::arpeggiateSelectedNotes()
+{
+    if (selectedNotes.size() < 2)
+        return;
+
+    if (onEditGesture)
+        onEditGesture(true);
+
+    model.arpeggiateNotes(selectedNotes);
+
+    if (onEditGesture)
+        onEditGesture(false);
+
+    repaint();
+}
+
 bool PianoRollView::applyToolToNote(int noteIndex)
 {
     auto notes = model.getNotes();
@@ -1127,6 +1143,12 @@ bool PianoRollView::keyPressed(const juce::KeyPress& key)
         if (character == 'v')
         {
             pasteNotes();
+            return true;
+        }
+
+        if (character == 'k')
+        {
+            arpeggiateSelectedNotes();
             return true;
         }
 

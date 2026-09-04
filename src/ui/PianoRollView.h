@@ -173,6 +173,11 @@ private:
     */
     void pasteNotes();
     void shiftSelectedNotesByOctave(int direction);
+    /** Chops the selection's time span into equal steps, lowest pitch
+        first - a no-op below two selected notes, since there is nothing
+        to sequence.
+    */
+    void arpeggiateSelectedNotes();
 
     Tool activeTool = Tool::draw;
     int draggedNote = -1;

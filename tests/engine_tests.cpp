@@ -3931,6 +3931,106 @@ int main()
               "pitch class names wrap the same way the root does");
     }
 
+    // --- Arpeggiate: a stacked chord turned into a run --------------------
+    {
+        djr::Mixer arpMixer;
+        arpMixer.prepare(sampleRate, blockSize);
+
+        auto* track = findFirstMidiTrack(arpMixer);
+        check(track != nullptr, "there is a MIDI track for the arpeggiate check");
+
+        if (track != nullptr)
+        {
+            djr::PianoRollModel model;
+            model.setTargetClip(&track->getClip());
+
+            // Stacked out of pitch order, same as a marquee-selected group
+            // is not guaranteed to come back indexed.
+            juce::Array<djr::MidiNote> chord;
+            djr::MidiNote high; high.pitch = 67; high.startBeat = 2.0; high.lengthBeats = 1.0;
+            djr::MidiNote low;  low.pitch = 60;  low.startBeat = 2.0; low.lengthBeats = 1.0;
+            djr::MidiNote mid;  mid.pitch = 64;  mid.startBeat = 2.0; mid.lengthBeats = 1.0;
+            chord.add(high);
+            chord.add(low);
+            chord.add(mid);
+            model.setNotes(chord);
+
+            model.arpeggiateNotes({ 0, 1, 2 });
+            const auto arpeggiated = model.getNotes();
+
+            check(arpeggiated.size() == 3, "arpeggiating neither adds nor removes notes");
+
+            const auto find = [&arpeggiated] (int pitch)
+            {
+                for (const auto& note : arpeggiated)
+                    if (note.pitch == pitch)
+                        return note;
+                return djr::MidiNote {};
+            };
+
+            const auto lowest = find(60);
+            const auto middle = find(64);
+            const auto highest = find(67);
+            constexpr double step = 1.0 / 3.0;
+
+            check(std::abs(lowest.startBeat - 2.0) < 1.0e-9, "the lowest note keeps the chord's original start");
+            check(std::abs(middle.startBeat - (2.0 + step)) < 1.0e-9, "the middle note starts one step later");
+            check(std::abs(highest.startBeat - (2.0 + 2 * step)) < 1.0e-9, "the highest note starts two steps later");
+
+            for (const auto& note : arpeggiated)
+                check(std::abs(note.lengthBeats - step) < 1.0e-9,
+                      "each note is shortened to its own slice of the original span");
+
+            check(std::abs((highest.startBeat + highest.lengthBeats) - 3.0) < 1.0e-9,
+                  "the run still ends exactly where the stacked chord did");
+
+            // Not stacked evenly: the run spans from the earliest start to
+            // the latest end, not just the first note's own length.
+            juce::Array<djr::MidiNote> uneven;
+            djr::MidiNote first;  first.pitch = 60;  first.startBeat = 1.0; first.lengthBeats = 1.0;
+            djr::MidiNote second; second.pitch = 64; second.startBeat = 1.5; second.lengthBeats = 1.0;
+            uneven.add(first);
+            uneven.add(second);
+            model.setNotes(uneven);
+
+            model.arpeggiateNotes({ 0, 1 });
+            const auto unevenArpeggiated = model.getNotes();
+
+            check(unevenArpeggiated.size() == 2
+                      && std::abs(unevenArpeggiated[0].startBeat - 1.0) < 1.0e-9
+                      && std::abs(unevenArpeggiated[0].lengthBeats - 0.75) < 1.0e-9
+                      && std::abs(unevenArpeggiated[1].startBeat - 1.75) < 1.0e-9
+                      && std::abs(unevenArpeggiated[1].lengthBeats - 0.75) < 1.0e-9,
+                  "an uneven selection splits its full earliest-to-latest span in two");
+
+            // A single note is not a chord: nothing to sequence.
+            juce::Array<djr::MidiNote> single;
+            djr::MidiNote lone; lone.pitch = 60; lone.startBeat = 4.0; lone.lengthBeats = 1.0;
+            single.add(lone);
+            model.setNotes(single);
+
+            model.arpeggiateNotes({ 0 });
+            check(std::abs(model.getNotes()[0].startBeat - 4.0) < 1.0e-9
+                      && std::abs(model.getNotes()[0].lengthBeats - 1.0) < 1.0e-9,
+                  "arpeggiating a single note is a no-op");
+
+            // Zero-length notes stacked on the same beat have no real span
+            // to divide - the fallback step keeps the result sane instead
+            // of collapsing every note onto the same instant.
+            juce::Array<djr::MidiNote> zeroSpan;
+            djr::MidiNote z1; z1.pitch = 60; z1.startBeat = 5.0; z1.lengthBeats = 0.0;
+            djr::MidiNote z2; z2.pitch = 64; z2.startBeat = 5.0; z2.lengthBeats = 0.0;
+            zeroSpan.add(z1);
+            zeroSpan.add(z2);
+            model.setNotes(zeroSpan);
+
+            model.arpeggiateNotes({ 0, 1 });
+            const auto zeroResult = model.getNotes();
+            check(zeroResult.size() == 2 && std::abs(zeroResult[1].startBeat - zeroResult[0].startBeat) > 1.0e-6,
+                  "a degenerate zero-length span still fans notes out rather than stacking them");
+        }
+    }
+
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
                                 : "\n" + std::to_string(failures) + " engine test(s) failed\n");
     return failures == 0 ? 0 : 1;
