@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/SnapSetting.h"
+#include "midi/Chord.h"
 #include "midi/PianoRollModel.h"
 #include "midi/Scale.h"
 #include "audio/Transport.h"
@@ -80,10 +81,26 @@ public:
     /** The scale highlighted in the key rows; chromatic means no highlight. */
     void setScale(const Scale& newScale);
     const Scale& getScale() const noexcept;
-    /** Fired with the user's pick from the scale badge's menu - the host owns
+    /** Fired with the user's pick from the helper menu - the host owns
         where this is remembered, the roll only asks.
     */
     std::function<void(Scale)> onScaleChanged;
+
+    /** Whether the chord stamp is armed, and which shape it writes. The
+        badge for both this and the scale above lives in the host's own
+        toolbar - the roll's corners are too small to read a chord name in.
+    */
+    bool isChordStampEnabled() const noexcept;
+    ChordType getActiveChordType() const noexcept;
+    /** A click on the host's helper badge: left toggles the chord stamp with
+        whatever type was last picked, right opens the combined scale + chord
+        menu anchored at `screenAnchor` (already in screen coordinates).
+    */
+    void handleHelperBadgeClick(bool isRightClick, juce::Rectangle<int> screenAnchor);
+    /** Fired after the chord stamp changes, from a toggle or a menu pick, so
+        the host badge can repaint to match.
+    */
+    std::function<void()> onChordStampChanged;
 
 private:
     void changeListenerCallback(juce::ChangeBroadcaster* source) override;
@@ -104,14 +121,46 @@ private:
 
     /** Applies the active tool to the note under the pointer. True if handled. */
     bool applyToolToNote(int noteIndex);
-    /** Adds a note under the pointer if that spot is free; used by draw sweeps. */
+    /** Adds a note under the pointer if that spot is free; used by draw sweeps.
+        With the chord stamp on, writes every interval of the active chord
+        instead of the one pitch clicked.
+    */
     bool drawNoteAt(juce::Point<int> position);
+    /** Whether an existing note at `pitch` already covers `beat` - a chord
+        tone lands away from the click, so it needs its own check rather than
+        noteAtPosition's screen-space one.
+    */
+    bool hasNoteAt(int pitch, double beat) const;
+    /** One higher than the highest chord group id already in use, so a new
+        stamp never collides with notes loaded from a saved project.
+    */
+    int nextChordGroupId(const juce::Array<MidiNote>& notes) const;
+    void toggleChordStamp();
+    /** The scale and the chord stamp share one menu, the way FL keeps its
+        own key and chord helpers in a single tool.
+    */
+    void showHelperMenu(juce::Rectangle<int> screenAnchor);
     bool isNoteSelected(int noteIndex) const;
     void clearNoteSelection();
+    /** Selects every note sharing `groupId`, so grabbing one tone of a
+        chord stamp carries the whole chord with it without the user having
+        to marquee-select it first.
+    */
+    void selectChordGroup(int groupId);
+    /** Drops the chord-group tag from the selected notes, freeing them to be
+        dragged or resized on their own again.
+    */
+    void ungroupSelectedNotes();
     void selectNotesInMarquee();
-    /** Records where each selected note started, so a group drag stays rigid. */
+    /** Records where each selected note started, so a group drag or a group
+        resize both stay rigid.
+    */
     void beginGroupDrag();
     void moveSelectedNotes(double deltaBeats, int deltaPitch);
+    /** Applies the same length change to every selected note, relative to
+        the length each one had when the resize began.
+    */
+    void resizeSelectedNotes(double deltaBeats);
     void deleteSelectedNotes();
     /** Snapshots the selected notes into the clipboard, pitch and position as
         they are - paste puts them back untouched, ready to be dragged to
@@ -151,6 +200,11 @@ private:
     bool drawing = false;
     double lastDrawnBeat = -1.0;
     int lastDrawnPitch = -1;
+    /** The chord stamp: off by default, so the draw tool writes single notes
+        until it is turned on from its own badge.
+    */
+    bool chordModeEnabled = false;
+    ChordType activeChordType = ChordType::major;
     /** Where the roll is and how much of it is showing - the same two bars the
         playlist has, so navigating one is navigating the other.
     */
@@ -174,15 +228,10 @@ private:
         strips the two bars sit in.
     */
     juce::Rectangle<int> getContentBounds() const;
-    /** The bar numbers along the top. Clicking it moves the playhead, which is
-        what everyone who has used a piano roll before will try first.
+    /** The bar numbers along the top. Clicking it moves the playhead, which
+        is what everyone who has used a piano roll before will try first.
     */
     juce::Rectangle<int> getRulerBounds() const;
-    /** The corner above the keyboard and left of the ruler - dead space
-        otherwise, so it is where the scale badge lives.
-    */
-    juce::Rectangle<int> getScaleBadgeBounds() const;
-    void showScaleMenu();
     /** The pointer for wherever it is now: the tool it is holding, or the
         resize arrows when it is over the end of a note.
 

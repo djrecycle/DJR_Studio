@@ -48,6 +48,10 @@ EditorPanel::EditorPanel(PianoRollModel& modelToUse, Transport& transport)
     followButton.setTooltip(TRANS("Follow playhead during playback"));
     addAndMakeVisible(followButton);
 
+    // The roll only knows the chord stamp flipped; the badge showing that
+    // lives here now, so this is the only way it finds out to repaint.
+    pianoRoll.onChordStampChanged = [this] { repaint(); };
+
     addAndMakeVisible(pianoRoll);
     addAndMakeVisible(velocityLane);
     addChildComponent(stepSequencer);
@@ -227,6 +231,39 @@ void EditorPanel::paint(juce::Graphics& g)
                lengthArea,
                juce::Justification::centred,
                false);
+
+    // Scale + chord stamp badge: a piano-roll-only helper, gone with the
+    // tools once the step sequencer takes over the strip.
+    if (pianoRollVisible)
+    {
+        auto badge = getHelperBadgeBounds();
+        g.setColour(Theme::control());
+        g.fillRoundedRectangle(badge.toFloat(), 3.0f);
+        g.setColour(Theme::outlineStrong());
+        g.drawRoundedRectangle(badge.toFloat().reduced(0.5f), 3.0f, 1.0f);
+
+        const auto& helperScale = pianoRoll.getScale();
+        const auto scaleActive = helperScale.getType() != ScaleType::chromatic;
+        const auto chordActive = pianoRoll.isChordStampEnabled();
+
+        const auto scaleText = scaleActive
+            ? Scale::pitchClassName(helperScale.getRoot()) + " " + Scale::shortNameFor(helperScale.getType())
+            : juce::String(TRANS("Key"));
+        const auto chordText = chordActive
+            ? Chord::shortNameFor(pianoRoll.getActiveChordType())
+            : juce::String(TRANS("Chord"));
+
+        g.setFont(Theme::mono(10.0f));
+        const auto scaleArea = badge.removeFromLeft(badge.getWidth() / 2);
+        g.setColour(scaleActive ? Theme::accent() : Theme::mutedText());
+        g.drawText(scaleText, scaleArea, juce::Justification::centred, false);
+
+        g.setColour(Theme::outlineStrong());
+        g.fillRect(badge.getX(), badge.getY() + 2, 1, badge.getHeight() - 4);
+
+        g.setColour(chordActive ? Theme::accent() : Theme::mutedText());
+        g.drawText(chordText, badge, juce::Justification::centred, false);
+    }
 }
 
 juce::Rectangle<int> EditorPanel::getPatternNameBounds() const
@@ -248,6 +285,15 @@ juce::Rectangle<int> EditorPanel::getPatternLengthBounds() const
                                                + juce::jmin(110, Theme::textWidth(Theme::ui(10.5f), trackName) + 4));
     return juce::Rectangle<int>(name.getRight() + 8, name.getY(), 48, name.getHeight());
 }
+juce::Rectangle<int> EditorPanel::getHelperBadgeBounds() const
+{
+    // Right after the tool chips, level with the Piano Roll tab rather than
+    // tucked into one of the roll's own cramped corners.
+    const auto strip = getLocalBounds().withHeight(tabStripHeight).reduced(5, 0);
+    const auto toolsRight = getPatternLengthBounds().getRight() + 10 + toolButtons.size() * 21;
+    return juce::Rectangle<int>(toolsRight + 8, strip.getY() + 4, 100, tabStripHeight - 8);
+}
+
 juce::Rectangle<int> EditorPanel::getInstrumentNameBounds() const
 {
     const auto nameArea = getPatternNameBounds();
@@ -299,7 +345,15 @@ const Scale& EditorPanel::getScale() const noexcept
 
 void EditorPanel::setScaleChangedCallback(std::function<void(Scale)> callback)
 {
-    pianoRoll.onScaleChanged = std::move(callback);
+    // The badge for this lives in this panel's own strip now, not on the
+    // roll, so a pick needs to repaint here too before it reaches the host.
+    pianoRoll.onScaleChanged = [this, callback] (Scale newScale)
+    {
+        repaint();
+
+        if (callback)
+            callback(newScale);
+    };
 }
 
 void EditorPanel::setNoteGestureCallback(std::function<void(bool)> callback)
@@ -446,6 +500,17 @@ void EditorPanel::setPatternChangedCallback(std::function<void(int)> callback)
 
 void EditorPanel::mouseDown(const juce::MouseEvent& event)
 {
+    if (pianoRollVisible && getHelperBadgeBounds().contains(event.getPosition()))
+    {
+        // Left toggles the chord stamp with whatever type was last picked;
+        // right opens the full scale + chord menu. The roll owns both
+        // states, so it decides which; this badge just repaints after.
+        pianoRoll.handleHelperBadgeClick(event.mods.isRightButtonDown(),
+                                         localAreaToGlobal(getHelperBadgeBounds()));
+        repaint();
+        return;
+    }
+
     if (getPatternLengthBounds().contains(event.getPosition()))
     {
         showPatternLengthMenu();

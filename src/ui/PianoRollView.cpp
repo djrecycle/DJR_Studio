@@ -28,6 +28,7 @@ namespace
         the two read as one timeline seen twice.
     */
     constexpr int rulerHeight = 18;
+    /** The chord badge's own corner, pinned to the ruler's right end. */
 }
 
 PianoRollView::PianoRollView(PianoRollModel& modelToUse, Transport& transportToUse)
@@ -47,11 +48,6 @@ PianoRollView::PianoRollView(PianoRollModel& modelToUse, Transport& transportToU
 juce::Rectangle<int> PianoRollView::getRulerBounds() const
 {
     return getContentBounds().withHeight(rulerHeight).withTrimmedLeft(keyboardWidth);
-}
-
-juce::Rectangle<int> PianoRollView::getScaleBadgeBounds() const
-{
-    return getContentBounds().withHeight(rulerHeight).withWidth(keyboardWidth);
 }
 
 juce::Rectangle<int> PianoRollView::getContentBounds() const
@@ -194,21 +190,6 @@ void PianoRollView::paint(juce::Graphics& g)
         g.drawText(juce::MidiMessage::getMidiNoteName(pitch, true, true, 3),
                    0, y, keyboardWidth - 4, keyHeight,
                    juce::Justification::centredRight, false);
-    }
-
-    // Scale badge --------------------------------------------------------------
-    {
-        const auto badge = getScaleBadgeBounds();
-        g.setColour(Theme::panel());
-        g.fillRect(badge);
-        g.setColour(Theme::outlineStrong());
-        g.drawRect(badge, 1);
-
-        g.setColour(scaleActive ? Theme::accent() : Theme::mutedText());
-        g.setFont(Theme::mono(9.0f));
-        g.drawText(scaleActive ? Scale::pitchClassName(scale.getRoot()) + " " + Scale::shortNameFor(scale.getType())
-                                : juce::String(TRANS("Scale")),
-                   badge, juce::Justification::centred, false);
     }
 
     // Vertical grid ----------------------------------------------------------
@@ -401,12 +382,6 @@ void PianoRollView::mouseMove(const juce::MouseEvent& event)
 
 void PianoRollView::mouseDown(const juce::MouseEvent& event)
 {
-    if (getScaleBadgeBounds().contains(event.getPosition()))
-    {
-        showScaleMenu();
-        return;
-    }
-
     if (event.x < keyboardWidth)
         return;
 
@@ -478,9 +453,21 @@ void PianoRollView::mouseDown(const juce::MouseEvent& event)
         if (applyToolToNote(noteIndex))
             return;
 
-        // Grabbing a note outside the selection starts a fresh one.
+        // Grabbing a note outside the selection starts a fresh one - unless
+        // it belongs to a chord stamp, in which case the whole chord comes
+        // along rather than just the one tone under the pointer.
         if (! isNoteSelected(noteIndex))
-            clearNoteSelection();
+        {
+            const auto notes = model.getNotes();
+            const auto groupId = juce::isPositiveAndBelow(noteIndex, notes.size())
+                                      ? notes[noteIndex].chordGroupId
+                                      : -1;
+
+            if (groupId >= 0)
+                selectChordGroup(groupId);
+            else
+                clearNoteSelection();
+        }
 
         const auto notes = model.getNotes();
         draggedNote = noteIndex;
@@ -494,8 +481,8 @@ void PianoRollView::mouseDown(const juce::MouseEvent& event)
             dragGrabPitch = yToPitch(event.y);
         }
 
-        if (! resizingNote)
-            beginGroupDrag();
+        // Origins are needed for a group resize too, not just a group drag.
+        beginGroupDrag();
 
         return;
     }
@@ -565,6 +552,18 @@ void PianoRollView::mouseDrag(const juce::MouseEvent& event)
 
     if (resizingNote)
     {
+        // A resize on a note that is part of a selection - a chord stamp's
+        // notes, or a manual multi-select - stretches all of them by the
+        // same amount, keeping the shape the chord was stamped with.
+        const auto originIndex = selectedNotes.indexOf(draggedNote);
+
+        if (selectedNotes.size() > 1 && originIndex >= 0 && originIndex < groupDragOrigins.size())
+        {
+            const auto& origin = groupDragOrigins.getReference(originIndex);
+            resizeSelectedNotes(xToBeat(event.x) - origin.startBeat - origin.lengthBeats);
+            return;
+        }
+
         const auto notes = model.getNotes();
 
         if (juce::isPositiveAndBelow(draggedNote, notes.size()))
@@ -668,6 +667,48 @@ void PianoRollView::clearNoteSelection()
     repaint();
 }
 
+void PianoRollView::selectChordGroup(int groupId)
+{
+    selectedNotes.clearQuick();
+
+    const auto notes = model.getNotes();
+    for (int i = 0; i < notes.size(); ++i)
+        if (notes[i].chordGroupId == groupId)
+            selectedNotes.add(i);
+}
+
+void PianoRollView::ungroupSelectedNotes()
+{
+    if (selectedNotes.isEmpty())
+        return;
+
+    auto notes = model.getNotes();
+    auto touchedAny = false;
+
+    for (const auto index : selectedNotes)
+    {
+        if (! juce::isPositiveAndBelow(index, notes.size()))
+            continue;
+
+        if (notes.getReference(index).chordGroupId >= 0)
+        {
+            notes.getReference(index).chordGroupId = -1;
+            touchedAny = true;
+        }
+    }
+
+    if (! touchedAny)
+        return;
+
+    if (onEditGesture)
+        onEditGesture(true);
+
+    model.setNotes(notes);
+
+    if (onEditGesture)
+        onEditGesture(false);
+}
+
 void PianoRollView::selectNotesInMarquee()
 {
     const auto notes = model.getNotes();
@@ -711,6 +752,26 @@ void PianoRollView::moveSelectedNotes(double deltaBeats, int deltaPitch)
     {
         const auto& origin = groupDragOrigins.getReference(i);
         model.dragNote(selectedNotes[i], origin.startBeat + beats, origin.pitch + pitch);
+    }
+}
+
+void PianoRollView::resizeSelectedNotes(double deltaBeats)
+{
+    if (selectedNotes.size() != groupDragOrigins.size())
+        return;
+
+    constexpr double shortest = 0.03125;
+
+    // Shrinking is limited by whichever note in the group is already
+    // shortest, so the group keeps its relative shape instead of some notes
+    // hitting the floor before others.
+    for (const auto& origin : groupDragOrigins)
+        deltaBeats = juce::jmax(deltaBeats, shortest - origin.lengthBeats);
+
+    for (int i = 0; i < selectedNotes.size(); ++i)
+    {
+        const auto& origin = groupDragOrigins.getReference(i);
+        model.setNoteLength(selectedNotes[i], origin.lengthBeats + deltaBeats);
     }
 }
 
@@ -851,13 +912,200 @@ bool PianoRollView::drawNoteAt(juce::Point<int> position)
     if (pitch == lastDrawnPitch && std::abs(beat - lastDrawnBeat) < 1.0e-6)
         return false;
 
-    if (noteAtPosition(position) >= 0)
-        return false;
+    const auto length = juce::jmax(0.25, model.getSnapBeats() * 4.0);
+    auto wroteAny = false;
 
-    model.addNote(pitch, beat, juce::jmax(0.25, model.getSnapBeats() * 4.0), 0.85f);
-    lastDrawnBeat = beat;
-    lastDrawnPitch = pitch;
-    return true;
+    if (chordModeEnabled)
+    {
+        // Each interval that already has something there is skipped rather
+        // than aborting the whole chord - one clashing tone should not
+        // swallow the rest of the stamp.
+        const auto groupId = nextChordGroupId(model.getNotes());
+        juce::Array<MidiNote> chordNotes;
+
+        for (const auto interval : Chord::intervalsFor(activeChordType))
+        {
+            const auto chordPitch = juce::jlimit(0, 127, pitch + interval);
+
+            if (hasNoteAt(chordPitch, beat))
+                continue;
+
+            MidiNote note;
+            note.pitch = chordPitch;
+            note.velocity = 0.85f;
+            note.startBeat = beat;
+            note.lengthBeats = length;
+            note.chordGroupId = groupId;
+            chordNotes.add(note);
+        }
+
+        if (! chordNotes.isEmpty())
+        {
+            // A single surviving tone is not a chord any more, so it needs
+            // no group tag - nothing left to drag along with it.
+            if (chordNotes.size() == 1)
+                chordNotes.getReference(0).chordGroupId = -1;
+
+            model.addNoteGroup(chordNotes);
+            wroteAny = true;
+        }
+    }
+    else if (noteAtPosition(position) < 0)
+    {
+        model.addNote(pitch, beat, length, 0.85f);
+        wroteAny = true;
+    }
+
+    if (wroteAny)
+    {
+        lastDrawnBeat = beat;
+        lastDrawnPitch = pitch;
+    }
+
+    return wroteAny;
+}
+
+bool PianoRollView::hasNoteAt(int pitch, double beat) const
+{
+    for (const auto& note : model.getNotes())
+        if (note.pitch == pitch && beat >= note.startBeat && beat < note.startBeat + note.lengthBeats)
+            return true;
+
+    return false;
+}
+
+int PianoRollView::nextChordGroupId(const juce::Array<MidiNote>& notes) const
+{
+    auto highest = -1;
+
+    for (const auto& note : notes)
+        highest = juce::jmax(highest, note.chordGroupId);
+
+    return highest + 1;
+}
+
+void PianoRollView::toggleChordStamp()
+{
+    chordModeEnabled = ! chordModeEnabled;
+
+    if (onChordStampChanged)
+        onChordStampChanged();
+}
+
+bool PianoRollView::isChordStampEnabled() const noexcept
+{
+    return chordModeEnabled;
+}
+
+ChordType PianoRollView::getActiveChordType() const noexcept
+{
+    return activeChordType;
+}
+
+void PianoRollView::handleHelperBadgeClick(bool isRightClick, juce::Rectangle<int> screenAnchor)
+{
+    if (isRightClick)
+        showHelperMenu(screenAnchor);
+    else
+        toggleChordStamp();
+}
+
+void PianoRollView::showHelperMenu(juce::Rectangle<int> screenAnchor)
+{
+    // Scale ids: 1 = off, 100-111 = root, 200+ScaleType = scale type.
+    // Chord ids: 300 = off, 301+ChordType = chord type. Kept far apart so
+    // the one result handler below can tell which section fired.
+    static const ChordType triads[] { ChordType::major, ChordType::minor, ChordType::diminished,
+                                       ChordType::augmented, ChordType::sus2, ChordType::sus4 };
+    static const ChordType sevenths[] { ChordType::major7, ChordType::minor7, ChordType::dominant7,
+                                         ChordType::diminished7, ChordType::halfDiminished7,
+                                         ChordType::minorMajor7 };
+
+    juce::PopupMenu menu;
+
+    // --- Scale section: root highlighting for the key rows -----------------
+    juce::PopupMenu scaleMenu;
+    scaleMenu.addItem(1, TRANS("Off (chromatic)"), true, scale.getType() == ScaleType::chromatic);
+    scaleMenu.addSeparator();
+
+    juce::PopupMenu rootMenu;
+    for (int i = 0; i < 12; ++i)
+        rootMenu.addItem(100 + i, Scale::pitchClassName(i), true, i == scale.getRoot());
+    scaleMenu.addSubMenu(TRANS("Root"), rootMenu);
+
+    juce::PopupMenu scaleTypeMenu;
+    for (int i = 1; i < static_cast<int>(ScaleType::count); ++i)
+        scaleTypeMenu.addItem(200 + i, Scale::nameFor(static_cast<ScaleType>(i)), true,
+                              static_cast<int>(scale.getType()) == i);
+    scaleMenu.addSubMenu(TRANS("Scale"), scaleTypeMenu);
+
+    menu.addSubMenu(TRANS("Scale"), scaleMenu, true, nullptr, scale.getType() != ScaleType::chromatic);
+    menu.addSeparator();
+
+    // --- Chord section: what the draw tool stamps down ---------------------
+    juce::PopupMenu chordMenu;
+    chordMenu.addItem(300, TRANS("Off - single notes"), true, ! chordModeEnabled);
+    chordMenu.addSeparator();
+
+    // Triads and sevenths grouped under their own headings, the way FL's
+    // own chord picker sorts its (much longer) list into categories.
+    const auto addCategory = [this, &chordMenu] (const juce::String& heading, const ChordType* types, int count)
+    {
+        juce::PopupMenu sub;
+
+        for (int i = 0; i < count; ++i)
+            sub.addItem(301 + static_cast<int>(types[i]), Chord::nameFor(types[i]), true,
+                        chordModeEnabled && activeChordType == types[i]);
+
+        chordMenu.addSubMenu(heading, sub);
+    };
+
+    addCategory(TRANS("Triads"), triads, juce::numElementsInArray(triads));
+    addCategory(TRANS("Seventh chords"), sevenths, juce::numElementsInArray(sevenths));
+
+    menu.addSubMenu(TRANS("Chord stamp"), chordMenu, true, nullptr, chordModeEnabled);
+
+    // Anchored to the badge that opened it - now the host toolbar's, since
+    // the roll's own corners are too small to read a chord name in.
+    menu.showMenuAsync(juce::PopupMenu::Options()
+                           .withTargetScreenArea(screenAnchor)
+                           .withMinimumWidth(190)
+                           .withStandardItemHeight(21),
+        [this] (int result)
+        {
+            if (result <= 0)
+                return;
+
+            if (result < 300)
+            {
+                auto updated = scale;
+
+                if (result == 1)
+                    updated = Scale(scale.getRoot(), ScaleType::chromatic);
+                else if (result < 200)
+                    // Picking a root while off implies wanting highlighting,
+                    // not a root that changes nothing visible.
+                    updated = Scale(result - 100,
+                                    scale.getType() == ScaleType::chromatic ? ScaleType::major : scale.getType());
+                else
+                    updated = Scale(scale.getRoot(), static_cast<ScaleType>(result - 200));
+
+                setScale(updated);
+
+                if (onScaleChanged)
+                    onScaleChanged(updated);
+            }
+            else
+            {
+                chordModeEnabled = result != 300;
+
+                if (chordModeEnabled)
+                    activeChordType = static_cast<ChordType>(result - 301);
+
+                if (onChordStampChanged)
+                    onChordStampChanged();
+            }
+        });
 }
 
 bool PianoRollView::keyPressed(const juce::KeyPress& key)
@@ -879,6 +1127,14 @@ bool PianoRollView::keyPressed(const juce::KeyPress& key)
         if (character == 'v')
         {
             pasteNotes();
+            return true;
+        }
+
+        // Breaks a chord stamp's notes apart so each can be dragged or
+        // resized on its own again.
+        if (character == 'u')
+        {
+            ungroupSelectedNotes();
             return true;
         }
 
@@ -1100,53 +1356,6 @@ void PianoRollView::setScale(const Scale& newScale)
 const Scale& PianoRollView::getScale() const noexcept
 {
     return scale;
-}
-
-void PianoRollView::showScaleMenu()
-{
-    juce::PopupMenu menu;
-    menu.addItem(1, TRANS("Off (chromatic)"), true, scale.getType() == ScaleType::chromatic);
-    menu.addSeparator();
-
-    juce::PopupMenu rootMenu;
-    for (int i = 0; i < 12; ++i)
-        rootMenu.addItem(100 + i, Scale::pitchClassName(i), true, i == scale.getRoot());
-    menu.addSubMenu(TRANS("Root"), rootMenu);
-
-    juce::PopupMenu typeMenu;
-    for (int i = 1; i < static_cast<int>(ScaleType::count); ++i)
-        typeMenu.addItem(200 + i, Scale::nameFor(static_cast<ScaleType>(i)), true,
-                         static_cast<int>(scale.getType()) == i);
-    menu.addSubMenu(TRANS("Scale"), typeMenu);
-
-    // Anchored to the badge that opened it, so it does not land somewhere
-    // the click had nothing to do with.
-    menu.showMenuAsync(juce::PopupMenu::Options()
-                           .withTargetScreenArea(localAreaToGlobal(getScaleBadgeBounds()))
-                           .withMinimumWidth(170)
-                           .withStandardItemHeight(21),
-        [this] (int result)
-        {
-            if (result <= 0)
-                return;
-
-            auto updated = scale;
-
-            if (result == 1)
-                updated = Scale(scale.getRoot(), ScaleType::chromatic);
-            else if (result < 200)
-                // Picking a root while off implies wanting highlighting, not
-                // a root that changes nothing visible.
-                updated = Scale(result - 100,
-                                scale.getType() == ScaleType::chromatic ? ScaleType::major : scale.getType());
-            else
-                updated = Scale(scale.getRoot(), static_cast<ScaleType>(result - 200));
-
-            setScale(updated);
-
-            if (onScaleChanged)
-                onScaleChanged(updated);
-        });
 }
 
 } // namespace djr

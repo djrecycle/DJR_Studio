@@ -98,6 +98,7 @@ set(DJR_ENGINE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/MidiClip.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/PianoRollModel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/MidiEngine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/Chord.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/Scale.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/PluginChain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/project/Project.cpp
