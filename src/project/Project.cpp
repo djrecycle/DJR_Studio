@@ -16,6 +16,8 @@ void Project::reset()
     tracks.clear();
     patternNames.clear();
     patternLengths.clear();
+    scaleRoot = 0;
+    scaleType = 0;
 }
 
 juce::var Project::toVar() const
@@ -79,6 +81,8 @@ juce::var Project::toVar() const
     root->setProperty("panelLayout", panelLayout);
     root->setProperty("patternNames", patternNameArray);
     root->setProperty("patternLengths", patternLengthArray);
+    root->setProperty("scaleRoot", scaleRoot);
+    root->setProperty("scaleType", scaleType);
     return root;
 }
 
@@ -113,6 +117,9 @@ void Project::fromVar(const juce::var& value)
     if (auto* patternLengthArray = root->getProperty("patternLengths").getArray())
         for (const auto& length : *patternLengthArray)
             patternLengths.add(static_cast<double>(length));
+
+    scaleRoot = static_cast<int>(getOr(*root, "scaleRoot", 0));
+    scaleType = static_cast<int>(getOr(*root, "scaleType", 0));
 
     if (auto* trackArray = root->getProperty("tracks").getArray())
     {

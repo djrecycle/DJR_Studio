@@ -74,6 +74,12 @@ public:
     juce::StringArray patternNames;
     /** Manually pinned pattern lengths in beats. Zero means follow the notes. */
     juce::Array<double> patternLengths;
+    /** The piano roll's scale highlight: root pitch class (0 = C) and a
+        djr::ScaleType cast to int. Type 0 is chromatic - off - which is what
+        every project saved before this existed reads back as.
+    */
+    int scaleRoot = 0;
+    int scaleType = 0;
 
     void reset();
     juce::var toVar() const;

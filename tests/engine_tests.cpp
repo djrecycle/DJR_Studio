@@ -16,6 +16,7 @@
 #include "app/SessionState.h"
 #include "midi/MidiEngine.h"
 #include "midi/PianoRollModel.h"
+#include "midi/Scale.h"
 #include "export/ExportManager.h"
 #include "export/TrackRenderer.h"
 #include "project/Project.h"
@@ -3745,6 +3746,90 @@ int main()
 
         check(releasesPitch60(),
               "switching pattern mid-note releases what the old one left holding");
+    }
+
+    // --- Scale: which piano roll rows the key highlight lights up -----------
+    {
+        using djr::Scale;
+        using djr::ScaleType;
+
+        {
+            const Scale off;
+            check(off.getType() == ScaleType::chromatic, "a default scale is chromatic - off");
+
+            for (int pitch = 0; pitch < 128; pitch += 13)
+                check(off.isInScale(pitch), "chromatic treats every pitch as in scale: " + juce::String(pitch));
+
+            check(! off.isRoot(60), "chromatic has no root, even at what would be middle C");
+        }
+
+        // C major: white keys only. C4 is 60.
+        {
+            const Scale cMajor(0, ScaleType::major);
+            const bool expectedInScale[12] = { true, false, true, false, true, true, false,
+                                               true, false, true, false, true };
+
+            for (int pc = 0; pc < 12; ++pc)
+                check(cMajor.isInScale(60 + pc) == expectedInScale[pc],
+                      "C major pitch class " + juce::String(pc) + " matches the white keys");
+
+            check(cMajor.isInScale(60 + 12) && cMajor.isInScale(60 - 12),
+                  "scale membership repeats every octave, not just near the root");
+            check(cMajor.isRoot(60) && cMajor.isRoot(72) && cMajor.isRoot(48),
+                  "the root lights up in every octave, not only the one it was set from");
+            check(! cMajor.isRoot(62), "D is not the root of C major");
+        }
+
+        // A natural minor is C major's relative minor - same seven notes.
+        {
+            const Scale cMajor(0, ScaleType::major);
+            const Scale aMinor(9, ScaleType::naturalMinor);
+
+            for (int pitch = 60; pitch < 72; ++pitch)
+                check(cMajor.isInScale(pitch) == aMinor.isInScale(pitch),
+                      "A natural minor and C major share the same in-scale pitches: " + juce::String(pitch));
+
+            check(! aMinor.isRoot(60) && aMinor.isRoot(69),
+                  "the two scales agree on membership but not on which note is home");
+        }
+
+        // Root wraps into 0..11 whatever is handed to the constructor, and
+        // isInScale/isRoot do the same for pitches outside that first octave.
+        {
+            const Scale wrapped(-1, ScaleType::major);
+            const Scale unwrapped(11, ScaleType::major);
+            check(wrapped.getRoot() == 11 && wrapped == unwrapped,
+                  "a negative root wraps to the same scale as its positive equivalent");
+        }
+
+        check(Scale(0, ScaleType::major) == Scale(0, ScaleType::major),
+              "two scales built the same way compare equal");
+        check(Scale(0, ScaleType::major) != Scale(2, ScaleType::major),
+              "a different root compares unequal");
+        check(Scale(0, ScaleType::major) != Scale(0, ScaleType::naturalMinor),
+              "a different type compares unequal");
+
+        // Every real scale type: intervals are in range, always include the
+        // root itself, and both name functions have something to say.
+        for (int i = 0; i < static_cast<int>(ScaleType::count); ++i)
+        {
+            const auto type = static_cast<ScaleType>(i);
+            const auto& intervals = Scale::intervalsFor(type);
+
+            check(! intervals.empty(), "scale type " + juce::String(i) + " has at least one interval");
+            check(std::find(intervals.begin(), intervals.end(), 0) != intervals.end(),
+                  "scale type " + juce::String(i) + " includes its own root");
+
+            for (const auto interval : intervals)
+                check(interval >= 0 && interval < 12,
+                      "scale type " + juce::String(i) + " has every interval within one octave");
+
+            check(Scale::nameFor(type).isNotEmpty(), "scale type " + juce::String(i) + " has a menu name");
+            check(Scale::shortNameFor(type).isNotEmpty(), "scale type " + juce::String(i) + " has a badge name");
+        }
+
+        check(Scale::pitchClassName(0) == "C" && Scale::pitchClassName(-1) == "B",
+              "pitch class names wrap the same way the root does");
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

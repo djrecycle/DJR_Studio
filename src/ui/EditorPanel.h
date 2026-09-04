@@ -39,6 +39,12 @@ public:
     /** Brackets note drags in the roll and the velocity lane for undo. */
     void setNoteGestureCallback(std::function<void(bool)> callback);
 
+    /** The scale highlighted in the piano roll's key rows. */
+    void setScale(const Scale& newScale);
+    const Scale& getScale() const noexcept;
+    /** Fired when the user picks a scale from the roll's own badge menu. */
+    void setScaleChangedCallback(std::function<void(Scale)> callback);
+
     void setVelocityLaneVisible(bool shouldBeVisible);
     bool isVelocityLaneVisible() const noexcept;
 
