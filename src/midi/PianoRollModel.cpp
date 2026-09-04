@@ -36,6 +36,26 @@ void PianoRollModel::addNote(int pitch, double startBeat, double lengthBeats, fl
     sendChangeMessage();
 }
 
+void PianoRollModel::addNoteGroup(const juce::Array<MidiNote>& newNotes)
+{
+    if (targetClip == nullptr || newNotes.isEmpty())
+        return;
+
+    if (onBeforeEdit)
+        onBeforeEdit();
+
+    auto notes = targetClip->getNotesSnapshot();
+
+    for (auto note : newNotes)
+    {
+        note.startBeat = snapToGrid(note.startBeat);
+        notes.add(note);
+    }
+
+    targetClip->setNotes(notes);
+    sendChangeMessage();
+}
+
 void PianoRollModel::deleteNoteAt(int index)
 {
     if (targetClip == nullptr)

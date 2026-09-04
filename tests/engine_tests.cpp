@@ -3784,6 +3784,57 @@ int main()
         }
     }
 
+    // --- Chord stamp grouping: notes written together move together --------
+    {
+        djr::Mixer groupMixer;
+        groupMixer.prepare(sampleRate, blockSize);
+
+        auto* track = findFirstMidiTrack(groupMixer);
+        check(track != nullptr, "there is a MIDI track for the chord-group check");
+
+        if (track != nullptr)
+        {
+            djr::PianoRollModel model;
+            model.setTargetClip(&track->getClip());
+
+            juce::Array<djr::MidiNote> chord;
+            for (const auto pitch : { 60, 64, 67 })
+            {
+                djr::MidiNote tone;
+                tone.pitch = pitch;
+                tone.startBeat = 0.0;
+                tone.lengthBeats = 1.0;
+                tone.chordGroupId = 3;
+                chord.add(tone);
+            }
+
+            model.addNoteGroup(chord);
+            check(track->getClip().getNumNotes() == 3, "a chord stamp writes every tone in one call");
+
+            const auto written = model.getNotes();
+            check(written.size() == 3
+                      && written[0].chordGroupId == 3 && written[1].chordGroupId == 3
+                      && written[2].chordGroupId == 3,
+                  "every tone of the stamp shares the same chord group id");
+
+            // The tag survives a save and load, unlike the stamp's own on/off
+            // state, since it describes the notes rather than the tool.
+            const auto restored = djr::MidiNote::fromVar(written[0].toVar());
+            check(restored.chordGroupId == 3, "the chord group id survives a save and load");
+
+            // A file written before grouping existed must still open, with
+            // every note standing alone.
+            auto* legacy = new juce::DynamicObject();
+            legacy->setProperty("pitch", 60);
+            legacy->setProperty("velocity", 0.8);
+            legacy->setProperty("startBeat", 0.0);
+            legacy->setProperty("lengthBeats", 1.0);
+            legacy->setProperty("muted", false);
+            const auto legacyNote = djr::MidiNote::fromVar(juce::var(legacy));
+            check(legacyNote.chordGroupId == -1, "a note saved before chord grouping loads as ungrouped");
+        }
+    }
+
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
                                 : "\n" + std::to_string(failures) + " engine test(s) failed\n");
     return failures == 0 ? 0 : 1;

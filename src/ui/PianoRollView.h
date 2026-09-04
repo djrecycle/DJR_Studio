@@ -106,14 +106,37 @@ private:
         noteAtPosition's screen-space one.
     */
     bool hasNoteAt(int pitch, double beat) const;
+    /** One higher than the highest chord group id already in use, so a new
+        stamp never collides with notes loaded from a saved project.
+    */
+    int nextChordGroupId(const juce::Array<MidiNote>& notes) const;
     juce::Rectangle<int> getChordBadgeBounds() const;
+    /** Flips the stamp on or off with whatever chord type was last picked,
+        so writing a run of the same chord needs no trip back to the menu.
+    */
+    void toggleChordStamp();
     void showChordMenu();
     bool isNoteSelected(int noteIndex) const;
     void clearNoteSelection();
+    /** Selects every note sharing `groupId`, so grabbing one tone of a
+        chord stamp carries the whole chord with it without the user having
+        to marquee-select it first.
+    */
+    void selectChordGroup(int groupId);
+    /** Drops the chord-group tag from the selected notes, freeing them to be
+        dragged or resized on their own again.
+    */
+    void ungroupSelectedNotes();
     void selectNotesInMarquee();
-    /** Records where each selected note started, so a group drag stays rigid. */
+    /** Records where each selected note started, so a group drag or a group
+        resize both stay rigid.
+    */
     void beginGroupDrag();
     void moveSelectedNotes(double deltaBeats, int deltaPitch);
+    /** Applies the same length change to every selected note, relative to
+        the length each one had when the resize began.
+    */
+    void resizeSelectedNotes(double deltaBeats);
     void deleteSelectedNotes();
     /** Snapshots the selected notes into the clipboard, pitch and position as
         they are - paste puts them back untouched, ready to be dragged to

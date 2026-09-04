@@ -385,7 +385,13 @@ void PianoRollView::mouseDown(const juce::MouseEvent& event)
 {
     if (getChordBadgeBounds().contains(event.getPosition()))
     {
-        showChordMenu();
+        // Right click for the type picker; a plain click just flips the
+        // stamp on or off so stamping a run of the same chord needs no menu.
+        if (event.mods.isRightButtonDown())
+            showChordMenu();
+        else
+            toggleChordStamp();
+
         return;
     }
 
@@ -460,9 +466,21 @@ void PianoRollView::mouseDown(const juce::MouseEvent& event)
         if (applyToolToNote(noteIndex))
             return;
 
-        // Grabbing a note outside the selection starts a fresh one.
+        // Grabbing a note outside the selection starts a fresh one - unless
+        // it belongs to a chord stamp, in which case the whole chord comes
+        // along rather than just the one tone under the pointer.
         if (! isNoteSelected(noteIndex))
-            clearNoteSelection();
+        {
+            const auto notes = model.getNotes();
+            const auto groupId = juce::isPositiveAndBelow(noteIndex, notes.size())
+                                      ? notes[noteIndex].chordGroupId
+                                      : -1;
+
+            if (groupId >= 0)
+                selectChordGroup(groupId);
+            else
+                clearNoteSelection();
+        }
 
         const auto notes = model.getNotes();
         draggedNote = noteIndex;
@@ -476,8 +494,8 @@ void PianoRollView::mouseDown(const juce::MouseEvent& event)
             dragGrabPitch = yToPitch(event.y);
         }
 
-        if (! resizingNote)
-            beginGroupDrag();
+        // Origins are needed for a group resize too, not just a group drag.
+        beginGroupDrag();
 
         return;
     }
@@ -547,6 +565,18 @@ void PianoRollView::mouseDrag(const juce::MouseEvent& event)
 
     if (resizingNote)
     {
+        // A resize on a note that is part of a selection - a chord stamp's
+        // notes, or a manual multi-select - stretches all of them by the
+        // same amount, keeping the shape the chord was stamped with.
+        const auto originIndex = selectedNotes.indexOf(draggedNote);
+
+        if (selectedNotes.size() > 1 && originIndex >= 0 && originIndex < groupDragOrigins.size())
+        {
+            const auto& origin = groupDragOrigins.getReference(originIndex);
+            resizeSelectedNotes(xToBeat(event.x) - origin.startBeat - origin.lengthBeats);
+            return;
+        }
+
         const auto notes = model.getNotes();
 
         if (juce::isPositiveAndBelow(draggedNote, notes.size()))
@@ -650,6 +680,48 @@ void PianoRollView::clearNoteSelection()
     repaint();
 }
 
+void PianoRollView::selectChordGroup(int groupId)
+{
+    selectedNotes.clearQuick();
+
+    const auto notes = model.getNotes();
+    for (int i = 0; i < notes.size(); ++i)
+        if (notes[i].chordGroupId == groupId)
+            selectedNotes.add(i);
+}
+
+void PianoRollView::ungroupSelectedNotes()
+{
+    if (selectedNotes.isEmpty())
+        return;
+
+    auto notes = model.getNotes();
+    auto touchedAny = false;
+
+    for (const auto index : selectedNotes)
+    {
+        if (! juce::isPositiveAndBelow(index, notes.size()))
+            continue;
+
+        if (notes.getReference(index).chordGroupId >= 0)
+        {
+            notes.getReference(index).chordGroupId = -1;
+            touchedAny = true;
+        }
+    }
+
+    if (! touchedAny)
+        return;
+
+    if (onEditGesture)
+        onEditGesture(true);
+
+    model.setNotes(notes);
+
+    if (onEditGesture)
+        onEditGesture(false);
+}
+
 void PianoRollView::selectNotesInMarquee()
 {
     const auto notes = model.getNotes();
@@ -693,6 +765,26 @@ void PianoRollView::moveSelectedNotes(double deltaBeats, int deltaPitch)
     {
         const auto& origin = groupDragOrigins.getReference(i);
         model.dragNote(selectedNotes[i], origin.startBeat + beats, origin.pitch + pitch);
+    }
+}
+
+void PianoRollView::resizeSelectedNotes(double deltaBeats)
+{
+    if (selectedNotes.size() != groupDragOrigins.size())
+        return;
+
+    constexpr double shortest = 0.03125;
+
+    // Shrinking is limited by whichever note in the group is already
+    // shortest, so the group keeps its relative shape instead of some notes
+    // hitting the floor before others.
+    for (const auto& origin : groupDragOrigins)
+        deltaBeats = juce::jmax(deltaBeats, shortest - origin.lengthBeats);
+
+    for (int i = 0; i < selectedNotes.size(); ++i)
+    {
+        const auto& origin = groupDragOrigins.getReference(i);
+        model.setNoteLength(selectedNotes[i], origin.lengthBeats + deltaBeats);
     }
 }
 
@@ -841,6 +933,9 @@ bool PianoRollView::drawNoteAt(juce::Point<int> position)
         // Each interval that already has something there is skipped rather
         // than aborting the whole chord - one clashing tone should not
         // swallow the rest of the stamp.
+        const auto groupId = nextChordGroupId(model.getNotes());
+        juce::Array<MidiNote> chordNotes;
+
         for (const auto interval : Chord::intervalsFor(activeChordType))
         {
             const auto chordPitch = juce::jlimit(0, 127, pitch + interval);
@@ -848,7 +943,23 @@ bool PianoRollView::drawNoteAt(juce::Point<int> position)
             if (hasNoteAt(chordPitch, beat))
                 continue;
 
-            model.addNote(chordPitch, beat, length, 0.85f);
+            MidiNote note;
+            note.pitch = chordPitch;
+            note.velocity = 0.85f;
+            note.startBeat = beat;
+            note.lengthBeats = length;
+            note.chordGroupId = groupId;
+            chordNotes.add(note);
+        }
+
+        if (! chordNotes.isEmpty())
+        {
+            // A single surviving tone is not a chord any more, so it needs
+            // no group tag - nothing left to drag along with it.
+            if (chordNotes.size() == 1)
+                chordNotes.getReference(0).chordGroupId = -1;
+
+            model.addNoteGroup(chordNotes);
             wroteAny = true;
         }
     }
@@ -876,15 +987,49 @@ bool PianoRollView::hasNoteAt(int pitch, double beat) const
     return false;
 }
 
+int PianoRollView::nextChordGroupId(const juce::Array<MidiNote>& notes) const
+{
+    auto highest = -1;
+
+    for (const auto& note : notes)
+        highest = juce::jmax(highest, note.chordGroupId);
+
+    return highest + 1;
+}
+
+void PianoRollView::toggleChordStamp()
+{
+    chordModeEnabled = ! chordModeEnabled;
+    repaint(getChordBadgeBounds());
+}
+
 void PianoRollView::showChordMenu()
 {
+    // Triads and sevenths grouped under their own headings, the way FL's
+    // own chord picker sorts its (much longer) list into categories.
+    static const ChordType triads[] { ChordType::major, ChordType::minor, ChordType::diminished,
+                                       ChordType::augmented, ChordType::sus2, ChordType::sus4 };
+    static const ChordType sevenths[] { ChordType::major7, ChordType::minor7, ChordType::dominant7,
+                                         ChordType::diminished7, ChordType::halfDiminished7,
+                                         ChordType::minorMajor7 };
+
     juce::PopupMenu menu;
     menu.addItem(1, TRANS("Off - single notes"), true, ! chordModeEnabled);
     menu.addSeparator();
 
-    for (int i = 0; i < static_cast<int>(ChordType::count); ++i)
-        menu.addItem(2 + i, Chord::nameFor(static_cast<ChordType>(i)), true,
-                     chordModeEnabled && static_cast<int>(activeChordType) == i);
+    const auto addCategory = [this, &menu] (const juce::String& heading, const ChordType* types, int count)
+    {
+        juce::PopupMenu sub;
+
+        for (int i = 0; i < count; ++i)
+            sub.addItem(2 + static_cast<int>(types[i]), Chord::nameFor(types[i]), true,
+                        chordModeEnabled && activeChordType == types[i]);
+
+        menu.addSubMenu(heading, sub);
+    };
+
+    addCategory(TRANS("Triads"), triads, juce::numElementsInArray(triads));
+    addCategory(TRANS("Seventh chords"), sevenths, juce::numElementsInArray(sevenths));
 
     // Anchored to the badge that opened it, like the piano roll's other
     // corner pickers.
@@ -925,6 +1070,14 @@ bool PianoRollView::keyPressed(const juce::KeyPress& key)
         if (character == 'v')
         {
             pasteNotes();
+            return true;
+        }
+
+        // Breaks a chord stamp's notes apart so each can be dragged or
+        // resized on its own again.
+        if (character == 'u')
+        {
+            ungroupSelectedNotes();
             return true;
         }
 
