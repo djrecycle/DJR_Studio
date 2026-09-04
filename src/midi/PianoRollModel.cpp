@@ -1,6 +1,8 @@
 #include "PianoRollModel.h"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace djr
 {
@@ -92,6 +94,41 @@ void PianoRollModel::setNoteLength(int index, double lengthBeats)
     // With snapping off a note can be any length, down to a hair.
     const auto shortest = snapBeats > 0.0 ? snapBeats : 0.03125;
     notes.getReference(index).lengthBeats = juce::jmax(shortest, snapToGrid(lengthBeats));
+    targetClip->setNotes(notes);
+    sendChangeMessage();
+}
+
+void PianoRollModel::strumNotes(const juce::Array<int>& indices, double strumStepBeats)
+{
+    if (targetClip == nullptr || indices.size() < 2)
+        return;
+
+    if (onBeforeEdit)
+        onBeforeEdit();
+
+    auto notes = targetClip->getNotesSnapshot();
+
+    auto ordered = indices;
+    std::sort(ordered.begin(), ordered.end(), [&notes] (int a, int b)
+    {
+        return notes[a].pitch < notes[b].pitch;
+    });
+
+    // Fanned out from whichever of them starts earliest, so strumming a
+    // chord that is not already perfectly stacked spreads forward from
+    // where it begins instead of dragging the whole thing later.
+    auto anchorBeat = std::numeric_limits<double>::max();
+    for (const auto index : ordered)
+        if (juce::isPositiveAndBelow(index, notes.size()))
+            anchorBeat = juce::jmin(anchorBeat, notes[index].startBeat);
+
+    for (int i = 0; i < ordered.size(); ++i)
+    {
+        const auto index = ordered[i];
+        if (juce::isPositiveAndBelow(index, notes.size()))
+            notes.getReference(index).startBeat = anchorBeat + i * strumStepBeats;
+    }
+
     targetClip->setNotes(notes);
     sendChangeMessage();
 }

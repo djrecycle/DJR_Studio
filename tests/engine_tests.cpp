@@ -3832,6 +3832,80 @@ int main()
               "pitch class names wrap the same way the root does");
     }
 
+    // --- Strum: fanning a chord out in time, lowest pitch first ------------
+    {
+        djr::Mixer strumMixer;
+        strumMixer.prepare(sampleRate, blockSize);
+
+        auto* track = findFirstMidiTrack(strumMixer);
+        check(track != nullptr, "there is a MIDI track for the strum check");
+
+        if (track != nullptr)
+        {
+            djr::PianoRollModel model;
+            model.setTargetClip(&track->getClip());
+
+            // Stacked out of pitch order, the way a marquee-selected or
+            // chord-stamped group is not guaranteed to come back indexed.
+            juce::Array<djr::MidiNote> chord;
+            djr::MidiNote high; high.pitch = 67; high.startBeat = 2.0; high.lengthBeats = 1.0;
+            djr::MidiNote low;  low.pitch = 60;  low.startBeat = 2.0; low.lengthBeats = 1.0;
+            djr::MidiNote mid;  mid.pitch = 64;  mid.startBeat = 2.0; mid.lengthBeats = 1.0;
+            chord.add(high);
+            chord.add(low);
+            chord.add(mid);
+            model.setNotes(chord);
+
+            model.strumNotes({ 0, 1, 2 }, 0.05);
+            const auto strummed = model.getNotes();
+
+            check(strummed.size() == 3, "strumming neither adds nor removes notes");
+
+            const auto startOf = [&strummed] (int pitch)
+            {
+                for (const auto& note : strummed)
+                    if (note.pitch == pitch)
+                        return note.startBeat;
+                return -1.0;
+            };
+
+            check(std::abs(startOf(60) - 2.0) < 1.0e-9, "the lowest note keeps the chord's original start");
+            check(std::abs(startOf(64) - 2.05) < 1.0e-9, "the middle note lands one strum step later");
+            check(std::abs(startOf(67) - 2.10) < 1.0e-9, "the highest note lands two strum steps later");
+
+            for (const auto& note : strummed)
+                check(std::abs(note.lengthBeats - 1.0) < 1.0e-9,
+                      "strumming moves a note's start, not its length");
+
+            // Already spread out rather than stacked: strumming fans out
+            // from whichever of them starts earliest, not from beat zero.
+            juce::Array<djr::MidiNote> uneven;
+            djr::MidiNote first;  first.pitch = 60;  first.startBeat = 3.0; first.lengthBeats = 1.0;
+            djr::MidiNote second; second.pitch = 64; second.startBeat = 3.5; second.lengthBeats = 1.0;
+            uneven.add(first);
+            uneven.add(second);
+            model.setNotes(uneven);
+
+            model.strumNotes({ 0, 1 }, 0.05);
+            const auto unevenStrummed = model.getNotes();
+
+            check(unevenStrummed.size() == 2
+                      && std::abs(unevenStrummed[0].startBeat - 3.0) < 1.0e-9
+                      && std::abs(unevenStrummed[1].startBeat - 3.05) < 1.0e-9,
+                  "an already-spread selection fans out from its own earliest note");
+
+            // A single note is not a chord: nothing to stagger against.
+            juce::Array<djr::MidiNote> single;
+            djr::MidiNote lone; lone.pitch = 60; lone.startBeat = 1.0; lone.lengthBeats = 1.0;
+            single.add(lone);
+            model.setNotes(single);
+
+            model.strumNotes({ 0 }, 0.05);
+            check(std::abs(model.getNotes()[0].startBeat - 1.0) < 1.0e-9,
+                  "strumming a single note is a no-op");
+        }
+    }
+
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
                                 : "\n" + std::to_string(failures) + " engine test(s) failed\n");
     return failures == 0 ? 0 : 1;
