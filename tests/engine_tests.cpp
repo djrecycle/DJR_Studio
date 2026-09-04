@@ -3931,6 +3931,61 @@ int main()
               "pitch class names wrap the same way the root does");
     }
 
+    // --- Flam: a quieter grace note just ahead of the main hit --------------
+    {
+        djr::Mixer flamMixer;
+        flamMixer.prepare(sampleRate, blockSize);
+
+        auto* track = findFirstMidiTrack(flamMixer);
+        check(track != nullptr, "there is a MIDI track for the flam check");
+
+        if (track != nullptr)
+        {
+            djr::PianoRollModel model;
+            model.setTargetClip(&track->getClip());
+
+            juce::Array<djr::MidiNote> notes;
+            djr::MidiNote main; main.pitch = 64; main.velocity = 1.0f; main.startBeat = 4.0; main.lengthBeats = 1.0;
+            notes.add(main);
+            model.setNotes(notes);
+
+            model.flamNotes({ 0 }, 0.1, 0.5f);
+            const auto flammed = model.getNotes();
+
+            check(flammed.size() == 2, "flamming adds one grace note per note flammed");
+
+            const auto& mainAfter = flammed[0];
+            const auto& grace = flammed[1];
+
+            check(std::abs(mainAfter.startBeat - 4.0) < 1.0e-9 && std::abs(mainAfter.velocity - 1.0f) < 1.0e-6,
+                  "the main note itself is untouched");
+            check(grace.pitch == mainAfter.pitch, "the grace note is the same pitch as the note it leads into");
+            check(std::abs(grace.startBeat - 3.9) < 1.0e-9, "the grace note lands one flam offset ahead");
+            check(std::abs(grace.lengthBeats - 0.1) < 1.0e-9, "the grace note ends exactly where the main note begins");
+            check(std::abs(grace.velocity - 0.5f) < 1.0e-6, "the grace note is quieter by the given scale");
+
+            // A note right at the start of the timeline has no room to spare
+            // ahead of it - the grace note gets whatever is actually there.
+            juce::Array<djr::MidiNote> atStart;
+            djr::MidiNote early; early.pitch = 60; early.velocity = 0.8f; early.startBeat = 0.03; early.lengthBeats = 1.0;
+            atStart.add(early);
+            model.setNotes(atStart);
+
+            model.flamNotes({ 0 }, 0.1, 0.5f);
+            const auto clamped = model.getNotes();
+
+            check(clamped.size() == 2 && std::abs(clamped[1].startBeat) < 1.0e-9,
+                  "a grace note is clamped to beat zero rather than going negative");
+            check(std::abs(clamped[1].lengthBeats - 0.03) < 1.0e-9,
+                  "a clamped grace note is only as long as the room actually available");
+
+            // No selection, nothing to do.
+            model.setNotes(atStart);
+            model.flamNotes({}, 0.1, 0.5f);
+            check(model.getNotes().size() == 1, "flamming an empty selection is a no-op");
+        }
+    }
+
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
                                 : "\n" + std::to_string(failures) + " engine test(s) failed\n");
     return failures == 0 ? 0 : 1;

@@ -56,6 +56,39 @@ void PianoRollModel::addNoteGroup(const juce::Array<MidiNote>& newNotes)
     sendChangeMessage();
 }
 
+void PianoRollModel::flamNotes(const juce::Array<int>& indices, double flamOffsetBeats, float velocityScale)
+{
+    if (targetClip == nullptr || indices.isEmpty())
+        return;
+
+    if (onBeforeEdit)
+        onBeforeEdit();
+
+    auto notes = targetClip->getNotesSnapshot();
+    juce::Array<MidiNote> graceNotes;
+
+    for (const auto index : indices)
+    {
+        if (! juce::isPositiveAndBelow(index, notes.size()))
+            continue;
+
+        const auto& main = notes.getReference(index);
+
+        MidiNote grace;
+        grace.pitch = main.pitch;
+        grace.velocity = juce::jlimit(0.0f, 1.0f, main.velocity * velocityScale);
+        grace.startBeat = juce::jmax(0.0, main.startBeat - flamOffsetBeats);
+        grace.lengthBeats = juce::jmax(0.015625, main.startBeat - grace.startBeat);
+        graceNotes.add(grace);
+    }
+
+    for (const auto& grace : graceNotes)
+        notes.add(grace);
+
+    targetClip->setNotes(notes);
+    sendChangeMessage();
+}
+
 void PianoRollModel::deleteNoteAt(int index)
 {
     if (targetClip == nullptr)

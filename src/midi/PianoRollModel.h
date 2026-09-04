@@ -25,6 +25,13 @@ public:
     void addNote(int pitch, double startBeat, double lengthBeats, float velocity);
     /** Adds several notes as one undo step, e.g. every tone of a chord stamp. */
     void addNoteGroup(const juce::Array<MidiNote>& newNotes);
+    /** Gives each of the given notes a quieter grace note just before it, at
+        the same pitch, ending exactly where the main note begins - a flam,
+        the way a drummer's off-hand strikes just ahead of the main hit.
+        Clamped so a note already at (or near) beat zero gets whatever room
+        is actually there instead of a grace note landing on top of it.
+    */
+    void flamNotes(const juce::Array<int>& indices, double flamOffsetBeats, float velocityScale);
     void deleteNoteAt(int index);
     void dragNote(int index, double startBeat, int pitch);
     void setNoteVelocity(int index, float velocity);
