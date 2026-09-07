@@ -380,6 +380,11 @@ void Track::addPlugin(std::unique_ptr<juce::AudioPluginInstance> plugin)
                                      preparedSampleRate.load(std::memory_order_acquire),
                                      preparedBlockSize.load(std::memory_order_acquire));
 
+    const auto required = juce::jmax(plugin->getTotalNumInputChannels(), plugin->getTotalNumOutputChannels());
+
+    if (required > PluginChain::maxPluginChannels && onPluginChannelCountExceeded)
+        onPluginChannelCountExceeded(plugin.get(), required);
+
     const juce::SpinLock::ScopedLockType scoped(pluginLock);
     pluginChain.adoptPreparedPlugin(std::move(plugin));
 }
@@ -450,10 +455,17 @@ void Track::setInstrument(std::unique_ptr<juce::AudioPluginInstance> plugin)
     std::unique_ptr<juce::AudioPluginInstance> previous;
 
     if (plugin != nullptr)
+    {
         PluginChain::configureAndPrepare(*plugin,
                                          true,
                                          preparedSampleRate.load(std::memory_order_acquire),
                                          preparedBlockSize.load(std::memory_order_acquire));
+
+        const auto required = juce::jmax(plugin->getTotalNumInputChannels(), plugin->getTotalNumOutputChannels());
+
+        if (required > PluginChain::maxPluginChannels && onPluginChannelCountExceeded)
+            onPluginChannelCountExceeded(plugin.get(), required);
+    }
 
     {
         const juce::SpinLock::ScopedLockType scoped(instrumentLock);

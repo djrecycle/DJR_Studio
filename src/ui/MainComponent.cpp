@@ -169,7 +169,7 @@ MainComponent::MainComponent()
     arrangementView.setTrackListChangedCallback([this]
     {
         closeWindowsForMissingTracks();
-        wirePluginRemovalNotifications();
+        wirePluginLifecycleNotifications();
         mixerView.refreshStrips();
         insertChainPanel.refresh();
         pluginBrowserView.refreshTrackList();
@@ -183,7 +183,7 @@ MainComponent::MainComponent()
 
     // Covers the tracks the mixer already starts with; new ones get the same
     // wiring above, whenever the track list changes.
-    wirePluginRemovalNotifications();
+    wirePluginLifecycleNotifications();
 
     arrangementView.setClipOpenRequestCallback([this] (int trackIndex, int patternIndex)
     {
@@ -1790,16 +1790,28 @@ void MainComponent::closeWindowForProcessor(juce::AudioProcessor* processor)
     pluginWindows.erase(stale, pluginWindows.end());
 }
 
-void MainComponent::wirePluginRemovalNotifications()
+void MainComponent::wirePluginLifecycleNotifications()
 {
     auto& mixer = audioEngine.getMixer();
 
     for (int i = 0; i < mixer.getNumTracks(); ++i)
         if (auto* track = mixer.getTrack(i))
+        {
             track->onPluginAboutToBeRemoved = [this] (juce::AudioPluginInstance* plugin)
             {
                 closeWindowForProcessor(plugin);
             };
+            track->onPluginChannelCountExceeded = [this] (juce::AudioPluginInstance* plugin, int requiredChannels)
+            {
+                setStatusMessage(plugin->getName() + TRANS(" wants ") + juce::String(requiredChannels)
+                                     + TRANS(" channels, more than this host can feed a plugin (")
+                                     + juce::String(PluginChain::maxPluginChannels)
+                                     + TRANS(") - it is loaded but will stay silent."));
+                Logger::write("Plugin \"" + plugin->getName() + "\" needs "
+                               + juce::String(requiredChannels) + " channels, over the "
+                               + juce::String(PluginChain::maxPluginChannels) + "-channel limit; skipped every block.");
+            };
+        }
 }
 
 void MainComponent::closeEmptyChannelWindow(Track* track)

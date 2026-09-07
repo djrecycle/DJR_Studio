@@ -157,7 +157,7 @@ private:
         re-running whenever the track list changes - a new track starts with
         the callback unset.
     */
-    void wirePluginRemovalNotifications();
+    void wirePluginLifecycleNotifications();
     /** Rebuilds the pitch-preserved copies when the tempo has moved. */
     void prepareWarpedClips();
     /** Stops the arrangement view auto-scrolling while the piano roll has

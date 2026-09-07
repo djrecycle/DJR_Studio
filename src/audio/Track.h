@@ -188,6 +188,15 @@ public:
         its editor), never dereference it afterwards or keep it.
     */
     std::function<void(juce::AudioPluginInstance*)> onPluginAboutToBeRemoved;
+    /** Fired synchronously from addPlugin()/setInstrument(), right after
+        configureAndPrepare() runs, when the plugin's total channel count
+        (enableAllBuses() can make this wider than its main bus) exceeds
+        PluginChain::maxPluginChannels. process() silently skips such a
+        plugin every block since it has nowhere to put the extra channels -
+        without this, it just looks like the plugin does nothing, with no
+        indication why.
+    */
+    std::function<void(juce::AudioPluginInstance*, int requiredChannels)> onPluginChannelCountExceeded;
     bool hasInstrument() const noexcept;
     juce::AudioPluginInstance* getInstrument() noexcept;
     juce::String getInstrumentName() const;
