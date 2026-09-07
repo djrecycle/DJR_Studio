@@ -91,6 +91,52 @@ void PianoRollModel::flamNotes(const juce::Array<int>& indices, double flamOffse
     sendChangeMessage();
 }
 
+void PianoRollModel::arpeggiateNotes(const juce::Array<int>& indices)
+{
+    if (targetClip == nullptr || indices.size() < 2)
+        return;
+
+    if (onBeforeEdit)
+        onBeforeEdit();
+
+    auto notes = targetClip->getNotesSnapshot();
+
+    auto ordered = indices;
+    std::sort(ordered.begin(), ordered.end(), [&notes] (int a, int b)
+    {
+        return notes[a].pitch < notes[b].pitch;
+    });
+
+    auto anchorBeat = std::numeric_limits<double>::max();
+    auto endBeat = -std::numeric_limits<double>::max();
+
+    for (const auto index : ordered)
+        if (juce::isPositiveAndBelow(index, notes.size()))
+        {
+            anchorBeat = juce::jmin(anchorBeat, notes[index].startBeat);
+            endBeat = juce::jmax(endBeat, notes[index].startBeat + notes[index].lengthBeats);
+        }
+
+    // A degenerate span - notes with no real duration between them - still
+    // gets a sensible step rather than dividing the run into nothing.
+    constexpr double fallbackStepBeats = 0.25;
+    const auto span = endBeat > anchorBeat ? endBeat - anchorBeat : ordered.size() * fallbackStepBeats;
+    const auto stepBeats = span / ordered.size();
+
+    for (int i = 0; i < ordered.size(); ++i)
+    {
+        const auto index = ordered[i];
+        if (! juce::isPositiveAndBelow(index, notes.size()))
+            continue;
+
+        notes.getReference(index).startBeat = anchorBeat + i * stepBeats;
+        notes.getReference(index).lengthBeats = stepBeats;
+    }
+
+    targetClip->setNotes(notes);
+    sendChangeMessage();
+}
+
 void PianoRollModel::deleteNoteAt(int index)
 {
     if (targetClip == nullptr)

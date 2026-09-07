@@ -182,6 +182,11 @@ private:
         so it works on a selection of just one.
     */
     void flamSelectedNotes();
+    /** Chops the selection's time span into equal steps, lowest pitch
+        first - a no-op below two selected notes, since there is nothing
+        to sequence.
+    */
+    void arpeggiateSelectedNotes();
 
     Tool activeTool = Tool::draw;
     int draggedNote = -1;

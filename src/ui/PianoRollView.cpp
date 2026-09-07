@@ -889,6 +889,22 @@ void PianoRollView::flamSelectedNotes()
     repaint();
 }
 
+void PianoRollView::arpeggiateSelectedNotes()
+{
+    if (selectedNotes.size() < 2)
+        return;
+
+    if (onEditGesture)
+        onEditGesture(true);
+
+    model.arpeggiateNotes(selectedNotes);
+
+    if (onEditGesture)
+        onEditGesture(false);
+
+    repaint();
+}
+
 bool PianoRollView::applyToolToNote(int noteIndex)
 {
     auto notes = model.getNotes();
@@ -1179,6 +1195,12 @@ bool PianoRollView::keyPressed(const juce::KeyPress& key)
         if (character == 'f')
         {
             flamSelectedNotes();
+            return true;
+        }
+
+        if (character == 'k')
+        {
+            arpeggiateSelectedNotes();
             return true;
         }
 
