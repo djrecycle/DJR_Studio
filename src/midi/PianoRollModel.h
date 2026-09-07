@@ -23,6 +23,8 @@ public:
     bool hasTargetClip() const noexcept;
 
     void addNote(int pitch, double startBeat, double lengthBeats, float velocity);
+    /** Adds several notes as one undo step, e.g. every tone of a chord stamp. */
+    void addNoteGroup(const juce::Array<MidiNote>& newNotes);
     void deleteNoteAt(int index);
     void dragNote(int index, double startBeat, int pitch);
     void setNoteVelocity(int index, float velocity);

@@ -14,6 +14,7 @@
 #include "audio/Mixer.h"
 #include "audio/SimpleSynth.h"
 #include "app/SessionState.h"
+#include "midi/Chord.h"
 #include "midi/MidiEngine.h"
 #include "midi/PianoRollModel.h"
 #include "midi/Scale.h"
@@ -3746,6 +3747,104 @@ int main()
 
         check(releasesPitch60(),
               "switching pattern mid-note releases what the old one left holding");
+    }
+
+    // --- Chord: the intervals the piano roll's chord stamp writes -----------
+    {
+        using namespace djr::Chord;
+        using djr::ChordType;
+
+        const auto contains = [] (const std::vector<int>& intervals, int value)
+        {
+            return std::find(intervals.begin(), intervals.end(), value) != intervals.end();
+        };
+
+        // Spot-check the shapes a reader would actually recognise.
+        {
+            const auto& major = intervalsFor(ChordType::major);
+            check(major.size() == 3 && contains(major, 0) && contains(major, 4) && contains(major, 7),
+                  "major is a plain root-third-fifth triad");
+
+            const auto& minor = intervalsFor(ChordType::minor);
+            check(minor.size() == 3 && contains(minor, 0) && contains(minor, 3) && contains(minor, 7),
+                  "minor flattens only the third");
+
+            const auto& dominant7 = intervalsFor(ChordType::dominant7);
+            check(dominant7.size() == 4 && contains(dominant7, 4) && contains(dominant7, 10),
+                  "a dominant 7th keeps the major third and flattens the seventh");
+
+            check(intervalsFor(ChordType::major) != intervalsFor(ChordType::minor),
+                  "major and minor are not secretly the same shape");
+        }
+
+        // Every chord type: root present, every interval inside an octave and
+        // a bit, and both name functions have something to say.
+        for (int i = 0; i < static_cast<int>(ChordType::count); ++i)
+        {
+            const auto type = static_cast<ChordType>(i);
+            const auto& intervals = intervalsFor(type);
+
+            check(! intervals.empty(), "chord type " + juce::String(i) + " has at least one interval");
+            check(contains(intervals, 0), "chord type " + juce::String(i) + " includes its own root");
+
+            for (const auto interval : intervals)
+                check(interval >= 0 && interval <= 11,
+                      "chord type " + juce::String(i) + " keeps every interval within an octave of the root");
+
+            check(nameFor(type).isNotEmpty(), "chord type " + juce::String(i) + " has a menu name");
+            check(shortNameFor(type).isNotEmpty(), "chord type " + juce::String(i) + " has a badge name");
+        }
+    }
+
+    // --- Chord stamp grouping: notes written together move together --------
+    {
+        djr::Mixer groupMixer;
+        groupMixer.prepare(sampleRate, blockSize);
+
+        auto* track = findFirstMidiTrack(groupMixer);
+        check(track != nullptr, "there is a MIDI track for the chord-group check");
+
+        if (track != nullptr)
+        {
+            djr::PianoRollModel model;
+            model.setTargetClip(&track->getClip());
+
+            juce::Array<djr::MidiNote> chord;
+            for (const auto pitch : { 60, 64, 67 })
+            {
+                djr::MidiNote tone;
+                tone.pitch = pitch;
+                tone.startBeat = 0.0;
+                tone.lengthBeats = 1.0;
+                tone.chordGroupId = 3;
+                chord.add(tone);
+            }
+
+            model.addNoteGroup(chord);
+            check(track->getClip().getNumNotes() == 3, "a chord stamp writes every tone in one call");
+
+            const auto written = model.getNotes();
+            check(written.size() == 3
+                      && written[0].chordGroupId == 3 && written[1].chordGroupId == 3
+                      && written[2].chordGroupId == 3,
+                  "every tone of the stamp shares the same chord group id");
+
+            // The tag survives a save and load, unlike the stamp's own on/off
+            // state, since it describes the notes rather than the tool.
+            const auto restored = djr::MidiNote::fromVar(written[0].toVar());
+            check(restored.chordGroupId == 3, "the chord group id survives a save and load");
+
+            // A file written before grouping existed must still open, with
+            // every note standing alone.
+            auto* legacy = new juce::DynamicObject();
+            legacy->setProperty("pitch", 60);
+            legacy->setProperty("velocity", 0.8);
+            legacy->setProperty("startBeat", 0.0);
+            legacy->setProperty("lengthBeats", 1.0);
+            legacy->setProperty("muted", false);
+            const auto legacyNote = djr::MidiNote::fromVar(juce::var(legacy));
+            check(legacyNote.chordGroupId == -1, "a note saved before chord grouping loads as ungrouped");
+        }
     }
 
     // --- Scale: which piano roll rows the key highlight lights up -----------

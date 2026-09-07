@@ -150,6 +150,10 @@ private:
     juce::Rectangle<int> getPatternNameBounds() const;
     juce::Rectangle<int> getPatternLengthBounds() const;
     juce::Rectangle<int> getInstrumentNameBounds() const;
+    /** Scale + chord stamp badge, sat in the strip level with the Piano Roll
+        tab rather than crammed into one of the roll's own corners.
+    */
+    juce::Rectangle<int> getHelperBadgeBounds() const;
     void showPatternLengthMenu();
     void showTrackMenu();
 
