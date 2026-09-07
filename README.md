@@ -1,5 +1,20 @@
 # DJR_Studio
 
+<p align="center"><i>DAW native Linux, terinspirasi FL Studio</i></p>
+
+<p align="center">
+  <a href="https://github.com/djrecycle/DJR_Studio/releases">Releases</a> •
+  <a href="https://github.com/djrecycle/DJR_Studio/issues">Issues</a> •
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/djrecycle/DJR_Studio/actions/workflows/build-and-test.yml"><img alt="build" src="https://github.com/djrecycle/DJR_Studio/actions/workflows/build-and-test.yml/badge.svg"></a>
+  <a href="https://github.com/djrecycle/DJR_Studio/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/djrecycle/DJR_Studio"></a>
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/github/license/djrecycle/DJR_Studio"></a>
+  <a href="https://github.com/djrecycle/DJR_Studio/releases"><img alt="downloads" src="https://img.shields.io/github/downloads/djrecycle/DJR_Studio/total"></a>
+</p>
+
 DAW native Linux berbasis C++20, JUCE 8, dan CMake. MIDI, audio, VST3, mixer,
 piano roll, dan step sequencer dalam satu shell panel mengambang ala FL Studio.
 
