@@ -123,8 +123,13 @@ void InsertChainPanel::paint(juce::Graphics& g)
             break;
 
         const auto isDropSlot = i >= pluginNames.size();
+        // A bypassed insert stays in the chain but is skipped when it runs -
+        // dimmed here the same way, so the row reads as "off" without
+        // looking like it is missing.
+        const auto bypassed = ! isDropSlot && track->isPluginBypassed(i);
+        const auto dim = bypassed ? 0.45f : 1.0f;
 
-        g.setColour(isDropSlot ? juce::Colours::transparentBlack : Theme::panelAlt());
+        g.setColour(isDropSlot ? juce::Colours::transparentBlack : Theme::panelAlt().withMultipliedAlpha(dim));
         if (! isDropSlot)
             g.fillRoundedRectangle(row.toFloat(), 4.0f);
 
@@ -135,12 +140,14 @@ void InsertChainPanel::paint(juce::Graphics& g)
         const float dashes[] = { 3.0f, 2.5f };
         juce::PathStrokeType(1.0f).createDashedStroke(dashed, outline, dashes, 2);
 
-        g.setColour(isDropSlot ? Theme::outlineStrong().withAlpha(0.8f) : Theme::outlineStrong());
+        g.setColour((isDropSlot ? Theme::outlineStrong().withAlpha(0.8f) : Theme::outlineStrong())
+                        .withMultipliedAlpha(dim));
         g.fillPath(dashed);
 
         auto content = row.reduced(7, 0);
         auto dot = content.removeFromLeft(5).withSizeKeepingCentre(5, 5);
-        g.setColour(isDropSlot ? Theme::outlineStrong().brighter(0.2f) : Theme::trackColour(i));
+        g.setColour((isDropSlot ? Theme::outlineStrong().brighter(0.2f) : Theme::trackColour(i))
+                        .withMultipliedAlpha(dim));
         g.fillEllipse(dot.toFloat());
         content.removeFromLeft(6);
 
@@ -148,15 +155,17 @@ void InsertChainPanel::paint(juce::Graphics& g)
         {
             // The real format, not a fixed label: with LV2 and VST3 side by side
             // it is the difference between a plugin's own editor and a generic one.
-            g.setColour(Theme::faintText());
+            g.setColour(Theme::faintText().withMultipliedAlpha(dim));
             g.setFont(Theme::mono(9.5f));
             g.drawText(i < pluginFormats.size() ? pluginFormats[i] : juce::String(),
                        content.removeFromRight(34), juce::Justification::centredRight, false);
         }
 
-        g.setColour(isDropSlot ? Theme::faintText() : Theme::text());
+        g.setColour((isDropSlot ? Theme::faintText() : Theme::text()).withMultipliedAlpha(dim));
         g.setFont(Theme::ui(11.5f));
-        g.drawText(isDropSlot ? TRANS("Click to load the selected plugin") : pluginNames[i],
+        g.drawText(isDropSlot ? TRANS("Click to load the selected plugin")
+                              : bypassed ? pluginNames[i] + " (" + TRANS("bypassed") + ")"
+                                         : pluginNames[i],
                    content,
                    juce::Justification::centredLeft,
                    true);
@@ -227,6 +236,7 @@ void InsertChainPanel::mouseDown(const juce::MouseEvent& event)
         {
             juce::PopupMenu menu;
             menu.addItem(1, TRANS("Open plugin editor"));
+            menu.addItem(6, TRANS("Bypass"), true, track->isPluginBypassed(i));
             menu.addSeparator();
             menu.addItem(2, TRANS("Remove"));
             menu.addItem(3, TRANS("Move up"), i > 0);
@@ -254,6 +264,8 @@ void InsertChainPanel::mouseDown(const juce::MouseEvent& event)
                         selected->movePlugin(i, i + 1);
                     else if (result == 5)
                         selected->clearPlugins();
+                    else if (result == 6)
+                        selected->setPluginBypassed(i, ! selected->isPluginBypassed(i));
                     else
                         return;
 

@@ -433,6 +433,18 @@ void Track::movePlugin(int fromIndex, int toIndex)
     pluginChain.moveTo(fromIndex, toIndex);
 }
 
+bool Track::isPluginBypassed(int index) const noexcept
+{
+    const juce::SpinLock::ScopedLockType scoped(const_cast<juce::SpinLock&>(pluginLock));
+    return pluginChain.isBypassed(index);
+}
+
+void Track::setPluginBypassed(int index, bool shouldBypass) noexcept
+{
+    const juce::SpinLock::ScopedLockType scoped(pluginLock);
+    pluginChain.setBypassed(index, shouldBypass);
+}
+
 void Track::setInstrument(std::unique_ptr<juce::AudioPluginInstance> plugin)
 {
     std::unique_ptr<juce::AudioPluginInstance> previous;

@@ -16,8 +16,8 @@ void PluginChain::prepare(double sampleRate, int blockSize)
     // Allocated up front so the audio thread never resizes it.
     scratch.setSize(maxPluginChannels, juce::jmax(1, blockSize), false, false, true);
 
-    for (auto& plugin : plugins)
-        plugin->prepareToPlay(currentSampleRate, currentBlockSize);
+    for (auto& slot : plugins)
+        slot.plugin->prepareToPlay(currentSampleRate, currentBlockSize);
 }
 
 void PluginChain::configureAndPrepare(juce::AudioPluginInstance& plugin,
@@ -79,12 +79,17 @@ void PluginChain::adoptPreparedPlugin(std::unique_ptr<juce::AudioPluginInstance>
     if (plugin == nullptr || size() >= maxPlugins)
         return;
 
-    plugins.push_back(std::move(plugin));
+    plugins.push_back(Slot { std::move(plugin), false });
 }
 
 std::vector<std::unique_ptr<juce::AudioPluginInstance>> PluginChain::detachAll()
 {
-    auto detached = std::move(plugins);
+    std::vector<std::unique_ptr<juce::AudioPluginInstance>> detached;
+    detached.reserve(plugins.size());
+
+    for (auto& slot : plugins)
+        detached.push_back(std::move(slot.plugin));
+
     plugins.clear();
     plugins.reserve(static_cast<size_t>(maxPlugins));
     return detached;
@@ -95,7 +100,7 @@ std::unique_ptr<juce::AudioPluginInstance> PluginChain::detachAt(int index)
     if (! juce::isPositiveAndBelow(index, size()))
         return nullptr;
 
-    auto plugin = std::move(plugins[static_cast<size_t>(index)]);
+    auto plugin = std::move(plugins[static_cast<size_t>(index)].plugin);
     plugins.erase(plugins.begin() + index);
     return plugin;
 }
@@ -106,23 +111,24 @@ void PluginChain::moveTo(int fromIndex, int toIndex)
         || fromIndex == toIndex)
         return;
 
-    auto plugin = std::move(plugins[static_cast<size_t>(fromIndex)]);
+    auto slot = std::move(plugins[static_cast<size_t>(fromIndex)]);
     plugins.erase(plugins.begin() + fromIndex);
-    plugins.insert(plugins.begin() + toIndex, std::move(plugin));
+    plugins.insert(plugins.begin() + toIndex, std::move(slot));
 }
 
 void PluginChain::clear()
 {
-    for (auto& plugin : plugins)
-        plugin->releaseResources();
+    for (auto& slot : plugins)
+        slot.plugin->releaseResources();
     plugins.clear();
     plugins.reserve(static_cast<size_t>(maxPlugins));
 }
 
 void PluginChain::process(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
-    for (auto& plugin : plugins)
-        processWithChannelAdaptation(*plugin, buffer, midi, scratch);
+    for (auto& slot : plugins)
+        if (! slot.bypassed)
+            processWithChannelAdaptation(*slot.plugin, buffer, midi, scratch);
 }
 
 int PluginChain::size() const noexcept
@@ -137,28 +143,39 @@ bool PluginChain::isEmpty() const noexcept
 
 juce::AudioPluginInstance* PluginChain::getPlugin(int index) noexcept
 {
-    return juce::isPositiveAndBelow(index, size()) ? plugins[static_cast<size_t>(index)].get() : nullptr;
+    return juce::isPositiveAndBelow(index, size()) ? plugins[static_cast<size_t>(index)].plugin.get() : nullptr;
 }
 
 const juce::AudioPluginInstance* PluginChain::getPlugin(int index) const noexcept
 {
-    return juce::isPositiveAndBelow(index, size()) ? plugins[static_cast<size_t>(index)].get() : nullptr;
+    return juce::isPositiveAndBelow(index, size()) ? plugins[static_cast<size_t>(index)].plugin.get() : nullptr;
 }
 
 juce::StringArray PluginChain::getPluginNames() const
 {
     juce::StringArray names;
-    for (const auto& plugin : plugins)
-        names.add(plugin->getName());
+    for (const auto& slot : plugins)
+        names.add(slot.plugin->getName());
     return names;
 }
 
 juce::StringArray PluginChain::getPluginFormatNames() const
 {
     juce::StringArray formats;
-    for (const auto& plugin : plugins)
-        formats.add(plugin->getPluginDescription().pluginFormatName);
+    for (const auto& slot : plugins)
+        formats.add(slot.plugin->getPluginDescription().pluginFormatName);
     return formats;
+}
+
+bool PluginChain::isBypassed(int index) const noexcept
+{
+    return juce::isPositiveAndBelow(index, size()) && plugins[static_cast<size_t>(index)].bypassed;
+}
+
+void PluginChain::setBypassed(int index, bool shouldBypass) noexcept
+{
+    if (juce::isPositiveAndBelow(index, size()))
+        plugins[static_cast<size_t>(index)].bypassed = shouldBypass;
 }
 
 } // namespace djr
