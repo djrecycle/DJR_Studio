@@ -9,6 +9,7 @@
 #include <juce_core/juce_core.h>
 #include <array>
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -161,10 +162,26 @@ public:
     /** Prepares the plugin on the calling thread, then swaps it in under a short lock. */
     void addPlugin(std::unique_ptr<juce::AudioPluginInstance> plugin);
     void clearPlugins();
+    /** Removes one insert without disturbing the rest of the chain - unlike
+        clearPlugins(), which takes the whole thing. Fires
+        onPluginAboutToBeRemoved before the instance is destroyed, same as
+        clearPlugins() does for each of its plugins. Out of range is a no-op.
+    */
+    void removePlugin(int index);
+    /** Reorders one insert. No plugin is destroyed, so there is nothing to
+        notify. Out of range, or fromIndex == toIndex, is a no-op.
+    */
+    void movePlugin(int fromIndex, int toIndex);
 
     /** The instrument turns this track's MIDI into audio; it runs before the inserts. */
     void setInstrument(std::unique_ptr<juce::AudioPluginInstance> plugin);
     void clearInstrument();
+    /** Fired once per instance, right before clearPlugins()/clearInstrument()/
+        setInstrument() destroys it. The pointer is about to be deleted - a
+        listener may only stop referring to it (e.g. close a window showing
+        its editor), never dereference it afterwards or keep it.
+    */
+    std::function<void(juce::AudioPluginInstance*)> onPluginAboutToBeRemoved;
     bool hasInstrument() const noexcept;
     juce::AudioPluginInstance* getInstrument() noexcept;
     juce::String getInstrumentName() const;

@@ -396,7 +396,41 @@ void Track::clearPlugins()
 
     for (auto& plugin : detached)
         if (plugin != nullptr)
+        {
+            // Told before it is destroyed, not after: a listener needs the
+            // pointer to still be valid to do anything useful with it, such
+            // as closing a window that is showing its editor.
+            if (onPluginAboutToBeRemoved)
+                onPluginAboutToBeRemoved(plugin.get());
+
             plugin->releaseResources();
+        }
+}
+
+void Track::removePlugin(int index)
+{
+    // Same shape as clearPlugins(): detach under the lock, destroy outside
+    // it, notify before the destroy.
+    std::unique_ptr<juce::AudioPluginInstance> detached;
+
+    {
+        const juce::SpinLock::ScopedLockType scoped(pluginLock);
+        detached = pluginChain.detachAt(index);
+    }
+
+    if (detached != nullptr)
+    {
+        if (onPluginAboutToBeRemoved)
+            onPluginAboutToBeRemoved(detached.get());
+
+        detached->releaseResources();
+    }
+}
+
+void Track::movePlugin(int fromIndex, int toIndex)
+{
+    const juce::SpinLock::ScopedLockType scoped(pluginLock);
+    pluginChain.moveTo(fromIndex, toIndex);
 }
 
 void Track::setInstrument(std::unique_ptr<juce::AudioPluginInstance> plugin)
@@ -417,7 +451,12 @@ void Track::setInstrument(std::unique_ptr<juce::AudioPluginInstance> plugin)
     }
 
     if (previous != nullptr)
+    {
+        if (onPluginAboutToBeRemoved)
+            onPluginAboutToBeRemoved(previous.get());
+
         previous->releaseResources();
+    }
 }
 
 void Track::clearInstrument()

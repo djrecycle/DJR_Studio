@@ -182,6 +182,35 @@ namespace
 
         return nullptr;
     }
+
+    /** The plainest possible plugin instance - just enough overrides to
+        satisfy AudioPluginInstance, nothing that does anything. Standing in
+        for a real plugin wherever a test only cares about instance identity
+        (which pointer got added, which one a callback was told about),
+        without depending on a VST3 actually being installed on the machine.
+    */
+    class FakeAudioPluginInstance final : public juce::AudioPluginInstance
+    {
+    public:
+        const juce::String getName() const override { return "Fake Plugin"; }
+        void prepareToPlay(double, int) override {}
+        void releaseResources() override {}
+        void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override {}
+        using juce::AudioProcessor::processBlock;
+        double getTailLengthSeconds() const override { return 0.0; }
+        bool acceptsMidi() const override { return false; }
+        bool producesMidi() const override { return false; }
+        juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+        bool hasEditor() const override { return false; }
+        int getNumPrograms() override { return 0; }
+        int getCurrentProgram() override { return 0; }
+        void setCurrentProgram(int) override {}
+        const juce::String getProgramName(int) override { return {}; }
+        void changeProgramName(int, const juce::String&) override {}
+        void getStateInformation(juce::MemoryBlock&) override {}
+        void setStateInformation(const void*, int) override {}
+        void fillInPluginDescription(juce::PluginDescription&) const override {}
+    };
 }
 
 int main()
@@ -4158,6 +4187,166 @@ int main()
             check(zeroResult.size() == 2 && std::abs(zeroResult[1].startBeat - zeroResult[0].startBeat) > 1.0e-6,
                   "a degenerate zero-length span still fans notes out rather than stacking them");
         }
+    }
+
+    // --- Track::onPluginAboutToBeRemoved: told before the instance is freed -
+    {
+        // clearPlugins(): an insert.
+        {
+            djr::Track track("Insert removal", djr::TrackKind::audio);
+
+            juce::AudioPluginInstance* notified = nullptr;
+            bool aliveWhenNotified = false;
+            track.onPluginAboutToBeRemoved = [&] (juce::AudioPluginInstance* plugin)
+            {
+                notified = plugin;
+                // A freed instance reading garbage for its own name is exactly
+                // the kind of thing that only sometimes crashes - this at
+                // least checks it is not obviously already gone.
+                aliveWhenNotified = plugin != nullptr && plugin->getName() == "Fake Plugin";
+            };
+
+            auto plugin = std::make_unique<FakeAudioPluginInstance>();
+            auto* rawPointer = plugin.get();
+            track.addPlugin(std::move(plugin));
+            check(track.getPluginCount() == 1, "the plugin was added");
+
+            track.clearPlugins();
+
+            check(notified == rawPointer, "clearPlugins tells the callback exactly which instance is going away");
+            check(aliveWhenNotified, "the instance is still alive and usable when the callback runs");
+            check(track.getPluginCount() == 0, "and it is actually gone afterwards");
+        }
+
+        // clearInstrument(): the same hook, the instrument slot instead.
+        {
+            djr::Track track("Instrument removal", djr::TrackKind::instrument);
+
+            juce::AudioPluginInstance* notified = nullptr;
+            track.onPluginAboutToBeRemoved = [&] (juce::AudioPluginInstance* plugin) { notified = plugin; };
+
+            auto plugin = std::make_unique<FakeAudioPluginInstance>();
+            auto* rawPointer = plugin.get();
+            track.setInstrument(std::move(plugin));
+            check(track.hasInstrument(), "the instrument was set");
+
+            track.clearInstrument();
+
+            check(notified == rawPointer, "clearInstrument tells the callback which instance is going away");
+            check(! track.hasInstrument(), "and the instrument is gone afterwards");
+        }
+
+        // setInstrument() replacing one instrument with another also frees
+        // the old one - the callback has to fire for that too, not just for
+        // an explicit clear.
+        {
+            djr::Track track("Instrument replace", djr::TrackKind::instrument);
+
+            juce::AudioPluginInstance* notified = nullptr;
+            track.onPluginAboutToBeRemoved = [&] (juce::AudioPluginInstance* plugin) { notified = plugin; };
+
+            auto first = std::make_unique<FakeAudioPluginInstance>();
+            auto* firstRaw = first.get();
+            track.setInstrument(std::move(first));
+
+            auto second = std::make_unique<FakeAudioPluginInstance>();
+            track.setInstrument(std::move(second));
+
+            check(notified == firstRaw, "swapping in a new instrument notifies about the one it replaced");
+        }
+    }
+
+    // --- PluginChain: remove or reorder one insert without disturbing ------
+    // --- the rest of the chain -----------------------------------------
+    {
+        // detachAt
+        {
+            djr::PluginChain chain;
+
+            auto a = std::make_unique<FakeAudioPluginInstance>();
+            auto b = std::make_unique<FakeAudioPluginInstance>();
+            auto c = std::make_unique<FakeAudioPluginInstance>();
+            auto* aRaw = a.get();
+            auto* bRaw = b.get();
+            auto* cRaw = c.get();
+
+            chain.adoptPreparedPlugin(std::move(a));
+            chain.adoptPreparedPlugin(std::move(b));
+            chain.adoptPreparedPlugin(std::move(c));
+            check(chain.size() == 3, "three plugins adopted");
+
+            auto detached = chain.detachAt(1);
+            check(detached.get() == bRaw, "detachAt returns exactly the instance at that index");
+            check(chain.size() == 2, "the chain is one shorter afterwards");
+            check(chain.getPlugin(0) == aRaw && chain.getPlugin(1) == cRaw,
+                  "the remaining plugins close the gap, keeping their own order");
+
+            check(chain.detachAt(5) == nullptr, "an out-of-range index detaches nothing");
+            check(chain.size() == 2, "and leaves the chain untouched");
+        }
+
+        // moveTo
+        {
+            djr::PluginChain chain;
+
+            auto a = std::make_unique<FakeAudioPluginInstance>();
+            auto b = std::make_unique<FakeAudioPluginInstance>();
+            auto c = std::make_unique<FakeAudioPluginInstance>();
+            auto* aRaw = a.get();
+            auto* bRaw = b.get();
+            auto* cRaw = c.get();
+
+            chain.adoptPreparedPlugin(std::move(a));
+            chain.adoptPreparedPlugin(std::move(b));
+            chain.adoptPreparedPlugin(std::move(c));
+
+            chain.moveTo(0, 2);
+            check(chain.getPlugin(0) == bRaw && chain.getPlugin(1) == cRaw && chain.getPlugin(2) == aRaw,
+                  "moving the first plugin to the last slot shifts the other two up");
+
+            chain.moveTo(2, 0);
+            check(chain.getPlugin(0) == aRaw && chain.getPlugin(1) == bRaw && chain.getPlugin(2) == cRaw,
+                  "moving it back restores the original order");
+
+            chain.moveTo(0, 0);
+            check(chain.getPlugin(0) == aRaw, "moving a plugin to its own slot is a no-op");
+
+            chain.moveTo(-1, 1);
+            chain.moveTo(0, 99);
+            check(chain.getPlugin(0) == aRaw && chain.getPlugin(1) == bRaw && chain.getPlugin(2) == cRaw,
+                  "an out-of-range index leaves the chain untouched");
+        }
+    }
+
+    // --- Track::removePlugin / movePlugin: the same, from the track's own -
+    // --- side, including the removal notification --------------------------
+    {
+        djr::Track track("Insert chain edit", djr::TrackKind::audio);
+
+        auto a = std::make_unique<FakeAudioPluginInstance>();
+        auto b = std::make_unique<FakeAudioPluginInstance>();
+        auto c = std::make_unique<FakeAudioPluginInstance>();
+        auto* aRaw = a.get();
+        auto* bRaw = b.get();
+        auto* cRaw = c.get();
+
+        track.addPlugin(std::move(a));
+        track.addPlugin(std::move(b));
+        track.addPlugin(std::move(c));
+        check(track.getPluginCount() == 3, "three inserts added");
+
+        juce::AudioPluginInstance* notified = nullptr;
+        track.onPluginAboutToBeRemoved = [&] (juce::AudioPluginInstance* plugin) { notified = plugin; };
+
+        track.removePlugin(1);
+
+        check(notified == bRaw, "removePlugin notifies about the exact instance it removed");
+        check(track.getPluginCount() == 2, "only the targeted insert is gone");
+        check(track.getPlugin(0) == aRaw && track.getPlugin(1) == cRaw,
+              "the other two survive, in their original order");
+
+        track.movePlugin(0, 1);
+        check(track.getPlugin(0) == cRaw && track.getPlugin(1) == aRaw, "movePlugin reorders the remaining inserts");
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

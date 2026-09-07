@@ -90,6 +90,27 @@ std::vector<std::unique_ptr<juce::AudioPluginInstance>> PluginChain::detachAll()
     return detached;
 }
 
+std::unique_ptr<juce::AudioPluginInstance> PluginChain::detachAt(int index)
+{
+    if (! juce::isPositiveAndBelow(index, size()))
+        return nullptr;
+
+    auto plugin = std::move(plugins[static_cast<size_t>(index)]);
+    plugins.erase(plugins.begin() + index);
+    return plugin;
+}
+
+void PluginChain::moveTo(int fromIndex, int toIndex)
+{
+    if (! juce::isPositiveAndBelow(fromIndex, size()) || ! juce::isPositiveAndBelow(toIndex, size())
+        || fromIndex == toIndex)
+        return;
+
+    auto plugin = std::move(plugins[static_cast<size_t>(fromIndex)]);
+    plugins.erase(plugins.begin() + fromIndex);
+    plugins.insert(plugins.begin() + toIndex, std::move(plugin));
+}
+
 void PluginChain::clear()
 {
     for (auto& plugin : plugins)
