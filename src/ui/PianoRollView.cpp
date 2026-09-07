@@ -13,6 +13,11 @@ namespace
 {
     constexpr int noteHeightInset = 1;
     constexpr int resizeHandleWidth = 5;
+    /** Delay between successive notes of a strum, in beats. A guitar-ish
+        40ish milliseconds at a typical 120 bpm - felt as a strum, not heard
+        as a separate note landing late.
+    */
+    constexpr double strumStepBeats = 0.06;
 
     /** How much of a note's right edge resizes rather than moves.
 
@@ -852,6 +857,22 @@ void PianoRollView::shiftSelectedNotesByOctave(int direction)
     repaint();
 }
 
+void PianoRollView::strumSelectedNotes()
+{
+    if (selectedNotes.size() < 2)
+        return;
+
+    if (onEditGesture)
+        onEditGesture(true);
+
+    model.strumNotes(selectedNotes, strumStepBeats);
+
+    if (onEditGesture)
+        onEditGesture(false);
+
+    repaint();
+}
+
 void PianoRollView::flamSelectedNotes()
 {
     if (selectedNotes.isEmpty())
@@ -1146,6 +1167,12 @@ bool PianoRollView::keyPressed(const juce::KeyPress& key)
         if (character == 'v')
         {
             pasteNotes();
+            return true;
+        }
+
+        if (character == 'j')
+        {
+            strumSelectedNotes();
             return true;
         }
 

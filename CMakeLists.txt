@@ -4,8 +4,8 @@ cmake_minimum_required(VERSION 3.22)
 # The numeric part is set here; the rest is derived from git so a build can
 # always be traced back to the exact commit it came from. Bump DJR_VERSION_BASE
 # for a release and tag it; everything else follows.
-set(DJR_VERSION_BASE "0.2.1")
-set(DJR_VERSION_STAGE "beta")
+set(DJR_VERSION_BASE "1.0.0")
+set(DJR_VERSION_STAGE "")
 
 # Deliberately the commit hash, not "git describe": once a release is tagged,
 # describe would return the tag itself and the version would repeat itself as
@@ -35,10 +35,14 @@ if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
     endif()
 endif()
 
-if(DJR_GIT_HASH STREQUAL "")
-    set(DJR_VERSION_STRING "${DJR_VERSION_BASE}-${DJR_VERSION_STAGE}")
+if(DJR_VERSION_STAGE STREQUAL "")
+    set(DJR_VERSION_STRING "${DJR_VERSION_BASE}")
 else()
-    set(DJR_VERSION_STRING "${DJR_VERSION_BASE}-${DJR_VERSION_STAGE}+${DJR_GIT_HASH}")
+    set(DJR_VERSION_STRING "${DJR_VERSION_BASE}-${DJR_VERSION_STAGE}")
+endif()
+
+if(NOT DJR_GIT_HASH STREQUAL "")
+    set(DJR_VERSION_STRING "${DJR_VERSION_STRING}+${DJR_GIT_HASH}")
 endif()
 
 message(STATUS "DJR_Studio version: ${DJR_VERSION_STRING}")
@@ -249,12 +253,18 @@ set(CPACK_INSTALL_CMAKE_PROJECTS "${CMAKE_BINARY_DIR};${PROJECT_NAME};runtime;/"
 set(CPACK_PACKAGE_NAME "djr-studio")
 set(CPACK_PACKAGE_VERSION "${DJR_VERSION_BASE}")
 # A tilde sorts *below* the plain version in Debian, which is exactly what a
-# pre-release should do: 0.2.0~beta upgrades cleanly to 0.2.0 later.
-set(CPACK_DEBIAN_PACKAGE_VERSION "${DJR_VERSION_BASE}~${DJR_VERSION_STAGE}")
+# pre-release should do: 0.2.0~beta upgrades cleanly to 0.2.0 later. A stable
+# release (empty stage) uses the plain version - no trailing tilde.
+if(DJR_VERSION_STAGE STREQUAL "")
+    set(CPACK_DEBIAN_PACKAGE_VERSION "${DJR_VERSION_BASE}")
+    set(CPACK_PACKAGE_FILE_NAME "djr-studio-${DJR_VERSION_BASE}-Linux")
+else()
+    set(CPACK_DEBIAN_PACKAGE_VERSION "${DJR_VERSION_BASE}~${DJR_VERSION_STAGE}")
+    set(CPACK_PACKAGE_FILE_NAME "djr-studio-${DJR_VERSION_BASE}-${DJR_VERSION_STAGE}-Linux")
+endif()
 set(CPACK_PACKAGE_VENDOR "DJR Audio Lab")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Linux DAW (beta) - MIDI, audio, VST3, mixer, piano roll")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Linux DAW - MIDI, audio, VST3, mixer, piano roll")
 set(CPACK_PACKAGE_CONTACT "djrecycle <djrecycle@users.noreply.github.com>")
-set(CPACK_PACKAGE_FILE_NAME "djr-studio-${DJR_VERSION_BASE}-${DJR_VERSION_STAGE}-Linux")
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "djrecycle <djrecycle@users.noreply.github.com>")
 set(CPACK_DEBIAN_PACKAGE_SECTION "sound")
 set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
