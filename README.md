@@ -1,5 +1,7 @@
 # DJR_Studio
 
+<p align="center"><img src="docs/branding/logo-dark-bg.png" alt="DJR_Studio logo" width="220"></p>
+
 <p align="center"><i>DAW native Linux, terinspirasi FL Studio</i></p>
 
 <p align="center">

@@ -232,7 +232,7 @@ install(FILES packaging/djr_studio.desktop
     COMPONENT runtime)
 
 install(FILES packaging/icons/djr_studio.png
-    DESTINATION share/icons/hicolor/256x256/apps
+    DESTINATION share/icons/hicolor/512x512/apps
     COMPONENT runtime)
 
 install(DIRECTORY resources/
