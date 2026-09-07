@@ -173,6 +173,10 @@ private:
     */
     void pasteNotes();
     void shiftSelectedNotesByOctave(int direction);
+    /** Fans the selection out in time like a strummed chord - a no-op below
+        two selected notes, since there is nothing to stagger.
+    */
+    void strumSelectedNotes();
 
     Tool activeTool = Tool::draw;
     int draggedNote = -1;
