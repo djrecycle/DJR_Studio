@@ -33,7 +33,10 @@ namespace
         the two read as one timeline seen twice.
     */
     constexpr int rulerHeight = 18;
-    /** The chord badge's own corner, pinned to the ruler's right end. */
+    /** How far ahead of the main note a flam's grace note lands, in beats. */
+    constexpr double flamOffsetBeats = 0.08;
+    /** A flam's grace note is struck softer than the one it leads into. */
+    constexpr float flamVelocityScale = 0.65f;
 }
 
 PianoRollView::PianoRollView(PianoRollModel& modelToUse, Transport& transportToUse)
@@ -870,6 +873,22 @@ void PianoRollView::strumSelectedNotes()
     repaint();
 }
 
+void PianoRollView::flamSelectedNotes()
+{
+    if (selectedNotes.isEmpty())
+        return;
+
+    if (onEditGesture)
+        onEditGesture(true);
+
+    model.flamNotes(selectedNotes, flamOffsetBeats, flamVelocityScale);
+
+    if (onEditGesture)
+        onEditGesture(false);
+
+    repaint();
+}
+
 bool PianoRollView::applyToolToNote(int noteIndex)
 {
     auto notes = model.getNotes();
@@ -1154,6 +1173,12 @@ bool PianoRollView::keyPressed(const juce::KeyPress& key)
         if (character == 'j')
         {
             strumSelectedNotes();
+            return true;
+        }
+
+        if (character == 'f')
+        {
+            flamSelectedNotes();
             return true;
         }
 

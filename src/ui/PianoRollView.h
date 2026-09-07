@@ -177,6 +177,11 @@ private:
         two selected notes, since there is nothing to stagger.
     */
     void strumSelectedNotes();
+    /** Gives each selected note its own grace note just ahead of it - a
+        flam. Unlike a strum this needs no second note to fan out against,
+        so it works on a selection of just one.
+    */
+    void flamSelectedNotes();
 
     Tool activeTool = Tool::draw;
     int draggedNote = -1;
