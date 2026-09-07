@@ -21,6 +21,18 @@ public:
     void adoptPreparedPlugin(std::unique_ptr<juce::AudioPluginInstance> plugin);
     /** Hands the plugins back so the caller can release them outside the lock. */
     std::vector<std::unique_ptr<juce::AudioPluginInstance>> detachAll();
+    /** Detaches just the plugin at `index`, shifting the ones after it down
+        one slot - nullptr, and the chain untouched, if `index` is out of
+        range. Same reason as detachAll(): the caller destroys (and, for a
+        still-audible one, releases) it outside whatever lock protected
+        this call.
+    */
+    std::unique_ptr<juce::AudioPluginInstance> detachAt(int index);
+    /** Moves the plugin at `fromIndex` to sit at `toIndex`, shifting
+        whatever was between them. A no-op if either index is out of range
+        or they are equal - no plugin is destroyed either way.
+    */
+    void moveTo(int fromIndex, int toIndex);
     void clear();
     void process(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi);
 

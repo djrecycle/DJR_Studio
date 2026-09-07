@@ -4256,6 +4256,99 @@ int main()
         }
     }
 
+    // --- PluginChain: remove or reorder one insert without disturbing ------
+    // --- the rest of the chain -----------------------------------------
+    {
+        // detachAt
+        {
+            djr::PluginChain chain;
+
+            auto a = std::make_unique<FakeAudioPluginInstance>();
+            auto b = std::make_unique<FakeAudioPluginInstance>();
+            auto c = std::make_unique<FakeAudioPluginInstance>();
+            auto* aRaw = a.get();
+            auto* bRaw = b.get();
+            auto* cRaw = c.get();
+
+            chain.adoptPreparedPlugin(std::move(a));
+            chain.adoptPreparedPlugin(std::move(b));
+            chain.adoptPreparedPlugin(std::move(c));
+            check(chain.size() == 3, "three plugins adopted");
+
+            auto detached = chain.detachAt(1);
+            check(detached.get() == bRaw, "detachAt returns exactly the instance at that index");
+            check(chain.size() == 2, "the chain is one shorter afterwards");
+            check(chain.getPlugin(0) == aRaw && chain.getPlugin(1) == cRaw,
+                  "the remaining plugins close the gap, keeping their own order");
+
+            check(chain.detachAt(5) == nullptr, "an out-of-range index detaches nothing");
+            check(chain.size() == 2, "and leaves the chain untouched");
+        }
+
+        // moveTo
+        {
+            djr::PluginChain chain;
+
+            auto a = std::make_unique<FakeAudioPluginInstance>();
+            auto b = std::make_unique<FakeAudioPluginInstance>();
+            auto c = std::make_unique<FakeAudioPluginInstance>();
+            auto* aRaw = a.get();
+            auto* bRaw = b.get();
+            auto* cRaw = c.get();
+
+            chain.adoptPreparedPlugin(std::move(a));
+            chain.adoptPreparedPlugin(std::move(b));
+            chain.adoptPreparedPlugin(std::move(c));
+
+            chain.moveTo(0, 2);
+            check(chain.getPlugin(0) == bRaw && chain.getPlugin(1) == cRaw && chain.getPlugin(2) == aRaw,
+                  "moving the first plugin to the last slot shifts the other two up");
+
+            chain.moveTo(2, 0);
+            check(chain.getPlugin(0) == aRaw && chain.getPlugin(1) == bRaw && chain.getPlugin(2) == cRaw,
+                  "moving it back restores the original order");
+
+            chain.moveTo(0, 0);
+            check(chain.getPlugin(0) == aRaw, "moving a plugin to its own slot is a no-op");
+
+            chain.moveTo(-1, 1);
+            chain.moveTo(0, 99);
+            check(chain.getPlugin(0) == aRaw && chain.getPlugin(1) == bRaw && chain.getPlugin(2) == cRaw,
+                  "an out-of-range index leaves the chain untouched");
+        }
+    }
+
+    // --- Track::removePlugin / movePlugin: the same, from the track's own -
+    // --- side, including the removal notification --------------------------
+    {
+        djr::Track track("Insert chain edit", djr::TrackKind::audio);
+
+        auto a = std::make_unique<FakeAudioPluginInstance>();
+        auto b = std::make_unique<FakeAudioPluginInstance>();
+        auto c = std::make_unique<FakeAudioPluginInstance>();
+        auto* aRaw = a.get();
+        auto* bRaw = b.get();
+        auto* cRaw = c.get();
+
+        track.addPlugin(std::move(a));
+        track.addPlugin(std::move(b));
+        track.addPlugin(std::move(c));
+        check(track.getPluginCount() == 3, "three inserts added");
+
+        juce::AudioPluginInstance* notified = nullptr;
+        track.onPluginAboutToBeRemoved = [&] (juce::AudioPluginInstance* plugin) { notified = plugin; };
+
+        track.removePlugin(1);
+
+        check(notified == bRaw, "removePlugin notifies about the exact instance it removed");
+        check(track.getPluginCount() == 2, "only the targeted insert is gone");
+        check(track.getPlugin(0) == aRaw && track.getPlugin(1) == cRaw,
+              "the other two survive, in their original order");
+
+        track.movePlugin(0, 1);
+        check(track.getPlugin(0) == cRaw && track.getPlugin(1) == aRaw, "movePlugin reorders the remaining inserts");
+    }
+
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
                                 : "\n" + std::to_string(failures) + " engine test(s) failed\n");
     return failures == 0 ? 0 : 1;

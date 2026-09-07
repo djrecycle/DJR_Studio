@@ -162,6 +162,16 @@ public:
     /** Prepares the plugin on the calling thread, then swaps it in under a short lock. */
     void addPlugin(std::unique_ptr<juce::AudioPluginInstance> plugin);
     void clearPlugins();
+    /** Removes one insert without disturbing the rest of the chain - unlike
+        clearPlugins(), which takes the whole thing. Fires
+        onPluginAboutToBeRemoved before the instance is destroyed, same as
+        clearPlugins() does for each of its plugins. Out of range is a no-op.
+    */
+    void removePlugin(int index);
+    /** Reorders one insert. No plugin is destroyed, so there is nothing to
+        notify. Out of range, or fromIndex == toIndex, is a no-op.
+    */
+    void movePlugin(int fromIndex, int toIndex);
 
     /** The instrument turns this track's MIDI into audio; it runs before the inserts. */
     void setInstrument(std::unique_ptr<juce::AudioPluginInstance> plugin);

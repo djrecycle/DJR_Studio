@@ -407,6 +407,32 @@ void Track::clearPlugins()
         }
 }
 
+void Track::removePlugin(int index)
+{
+    // Same shape as clearPlugins(): detach under the lock, destroy outside
+    // it, notify before the destroy.
+    std::unique_ptr<juce::AudioPluginInstance> detached;
+
+    {
+        const juce::SpinLock::ScopedLockType scoped(pluginLock);
+        detached = pluginChain.detachAt(index);
+    }
+
+    if (detached != nullptr)
+    {
+        if (onPluginAboutToBeRemoved)
+            onPluginAboutToBeRemoved(detached.get());
+
+        detached->releaseResources();
+    }
+}
+
+void Track::movePlugin(int fromIndex, int toIndex)
+{
+    const juce::SpinLock::ScopedLockType scoped(pluginLock);
+    pluginChain.moveTo(fromIndex, toIndex);
+}
+
 void Track::setInstrument(std::unique_ptr<juce::AudioPluginInstance> plugin)
 {
     std::unique_ptr<juce::AudioPluginInstance> previous;

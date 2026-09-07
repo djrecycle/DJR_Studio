@@ -227,19 +227,37 @@ void InsertChainPanel::mouseDown(const juce::MouseEvent& event)
         {
             juce::PopupMenu menu;
             menu.addItem(1, TRANS("Open plugin editor"));
-            menu.addItem(2, TRANS("Remove all inserts"));
+            menu.addSeparator();
+            menu.addItem(2, TRANS("Remove"));
+            menu.addItem(3, TRANS("Move up"), i > 0);
+            menu.addItem(4, TRANS("Move down"), i < pluginCount - 1);
+            menu.addSeparator();
+            menu.addItem(5, TRANS("Remove all inserts"));
             menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition().withStandardItemHeight(21),
                 [this, i] (int result)
                 {
-                    if (result == 1 && openSlotCallback)
-                        openSlotCallback(selectedTrack, i);
-                    else if (result == 2)
-                    {
-                        if (auto* selected = mixer.getTrack(selectedTrack))
-                            selected->clearPlugins();
+                    auto* selected = mixer.getTrack(selectedTrack);
+                    if (selected == nullptr)
+                        return;
 
-                        repaint();
+                    if (result == 1 && openSlotCallback)
+                    {
+                        openSlotCallback(selectedTrack, i);
+                        return;
                     }
+
+                    if (result == 2)
+                        selected->removePlugin(i);
+                    else if (result == 3)
+                        selected->movePlugin(i, i - 1);
+                    else if (result == 4)
+                        selected->movePlugin(i, i + 1);
+                    else if (result == 5)
+                        selected->clearPlugins();
+                    else
+                        return;
+
+                    repaint();
                 });
 
             return;
