@@ -61,8 +61,28 @@ public:
     */
     juce::StringArray getPluginFormatNames() const;
 
+    /** A bypassed plugin stays in the chain - still prepared, still holding
+        whatever state it remembers (an EQ curve, a wet/dry mix) - but
+        process() skips calling it, so the signal passes through untouched.
+        Silencing it this way rather than removing it is the point: turning
+        it back on picks up exactly where it left off. Out of range answers
+        false / does nothing.
+    */
+    bool isBypassed(int index) const noexcept;
+    void setBypassed(int index, bool shouldBypass) noexcept;
+
 private:
-    std::vector<std::unique_ptr<juce::AudioPluginInstance>> plugins;
+    /** A plugin plus whether process() currently skips it. Kept together so
+        moveTo() carries the bypass state along with the plugin it belongs
+        to, rather than leaving it pinned to a chain position.
+    */
+    struct Slot
+    {
+        std::unique_ptr<juce::AudioPluginInstance> plugin;
+        bool bypassed = false;
+    };
+
+    std::vector<Slot> plugins;
     juce::AudioBuffer<float> scratch;
     double currentSampleRate = 44100.0;
     int currentBlockSize = 512;

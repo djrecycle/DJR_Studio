@@ -172,6 +172,12 @@ public:
         notify. Out of range, or fromIndex == toIndex, is a no-op.
     */
     void movePlugin(int fromIndex, int toIndex);
+    /** A bypassed insert stays loaded - still prepared, still holding its
+        own state - but is skipped when the chain runs, so the signal passes
+        through it untouched. Out of range answers false / does nothing.
+    */
+    bool isPluginBypassed(int index) const noexcept;
+    void setPluginBypassed(int index, bool shouldBypass) noexcept;
 
     /** The instrument turns this track's MIDI into audio; it runs before the inserts. */
     void setInstrument(std::unique_ptr<juce::AudioPluginInstance> plugin);

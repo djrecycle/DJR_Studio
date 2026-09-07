@@ -195,7 +195,12 @@ namespace
         const juce::String getName() const override { return "Fake Plugin"; }
         void prepareToPlay(double, int) override {}
         void releaseResources() override {}
-        void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override {}
+        void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override { wasProcessed = true; }
+        /** Set when processBlock runs - lets a test check whether the chain
+            actually called this instance, e.g. that a bypassed one was
+            skipped rather than merely marked.
+        */
+        bool wasProcessed = false;
         using juce::AudioProcessor::processBlock;
         double getTailLengthSeconds() const override { return 0.0; }
         bool acceptsMidi() const override { return false; }
@@ -4347,6 +4352,75 @@ int main()
 
         track.movePlugin(0, 1);
         check(track.getPlugin(0) == cRaw && track.getPlugin(1) == aRaw, "movePlugin reorders the remaining inserts");
+    }
+
+    // --- PluginChain / Track: bypass skips a plugin without removing it ----
+    {
+        // PluginChain level: process() actually skips the bypassed one.
+        {
+            djr::PluginChain chain;
+            chain.prepare(sampleRate, blockSize);
+
+            auto a = std::make_unique<FakeAudioPluginInstance>();
+            auto b = std::make_unique<FakeAudioPluginInstance>();
+            auto* aRaw = a.get();
+            auto* bRaw = b.get();
+
+            chain.adoptPreparedPlugin(std::move(a));
+            chain.adoptPreparedPlugin(std::move(b));
+
+            check(! chain.isBypassed(0) && ! chain.isBypassed(1), "neither plugin starts bypassed");
+
+            chain.setBypassed(0, true);
+            check(chain.isBypassed(0) && ! chain.isBypassed(1), "only the targeted slot is bypassed");
+
+            juce::AudioBuffer<float> buffer(2, blockSize);
+            juce::MidiBuffer midi;
+            chain.process(buffer, midi);
+
+            check(! aRaw->wasProcessed, "a bypassed plugin's processBlock is not called");
+            check(bRaw->wasProcessed, "the other plugin still runs as normal");
+
+            chain.setBypassed(0, false);
+            aRaw->wasProcessed = false;
+            bRaw->wasProcessed = false;
+            chain.process(buffer, midi);
+
+            check(aRaw->wasProcessed && bRaw->wasProcessed, "un-bypassing it lets it run again");
+
+            check(! chain.isBypassed(5), "an out-of-range index reads as not bypassed rather than crashing");
+            chain.setBypassed(5, true);
+            check(! chain.isBypassed(0) && ! chain.isBypassed(1),
+                  "setting an out-of-range index does not disturb the real slots");
+        }
+
+        // moveTo carries the bypass state along with the plugin.
+        {
+            djr::PluginChain chain;
+
+            auto a = std::make_unique<FakeAudioPluginInstance>();
+            auto b = std::make_unique<FakeAudioPluginInstance>();
+
+            chain.adoptPreparedPlugin(std::move(a));
+            chain.adoptPreparedPlugin(std::move(b));
+            chain.setBypassed(0, true);
+
+            chain.moveTo(0, 1);
+
+            check(! chain.isBypassed(0) && chain.isBypassed(1),
+                  "the bypass flag follows the plugin it belongs to, not the slot position");
+        }
+
+        // Track level: the same, through the wrapper.
+        {
+            djr::Track track("Bypass test", djr::TrackKind::audio);
+
+            track.addPlugin(std::make_unique<FakeAudioPluginInstance>());
+            check(! track.isPluginBypassed(0), "a freshly added insert is not bypassed");
+
+            track.setPluginBypassed(0, true);
+            check(track.isPluginBypassed(0), "Track::setPluginBypassed reaches the chain");
+        }
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
