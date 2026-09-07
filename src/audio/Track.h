@@ -216,6 +216,17 @@ public:
         late against everything else.
     */
     int getPluginLatencySamples() const noexcept;
+    /** The lock only protects this call itself - it is released before the
+        pointer comes back, so nothing stops another message-thread call
+        (removePlugin, clearPlugins, movePlugin, or setInstrument replacing
+        an instrument) from deleting the instance a moment later. Use the
+        result immediately, in the same call that asked for it; never store
+        it, and never use it again after a call back into this Track or
+        after an asynchronous callback runs. Getting this wrong is exactly
+        the use-after-free onPluginAboutToBeRemoved exists to prevent for
+        an open plugin window - the same rule applies to any other pointer
+        pulled out through here.
+    */
     juce::AudioPluginInstance* getPlugin(int index) noexcept;
     const juce::AudioPluginInstance* getPlugin(int index) const noexcept;
     juce::StringArray getPluginNames() const;
