@@ -142,6 +142,17 @@ private:
     void closeEmptyChannelWindow(Track* track);
     /** Drops every window whose track is no longer in the mixer. */
     void closeWindowsForMissingTracks();
+    /** Drops the window open on `processor`, if any - called just before a
+        track destroys a plugin instance, so an open editor never outlives
+        the object it is showing.
+    */
+    void closeWindowForProcessor(juce::AudioProcessor* processor);
+    /** Wires every current track's onPluginAboutToBeRemoved so a plugin or
+        instrument being removed always closes its own window first. Needs
+        re-running whenever the track list changes - a new track starts with
+        the callback unset.
+    */
+    void wirePluginRemovalNotifications();
     /** Rebuilds the pitch-preserved copies when the tempo has moved. */
     void prepareWarpedClips();
     /** Stops the arrangement view auto-scrolling while the piano roll has

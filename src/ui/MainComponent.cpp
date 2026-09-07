@@ -169,12 +169,17 @@ MainComponent::MainComponent()
     arrangementView.setTrackListChangedCallback([this]
     {
         closeWindowsForMissingTracks();
+        wirePluginRemovalNotifications();
         mixerView.refreshStrips();
         insertChainPanel.refresh();
         pluginBrowserView.refreshTrackList();
         selectTrack(arrangementView.getSelectedTrack());
         markDirty();
     });
+
+    // Covers the tracks the mixer already starts with; new ones get the same
+    // wiring above, whenever the track list changes.
+    wirePluginRemovalNotifications();
 
     arrangementView.setClipOpenRequestCallback([this] (int trackIndex, int patternIndex)
     {
@@ -1765,6 +1770,32 @@ void MainComponent::closeWindowsForMissingTracks()
         });
 
     pluginWindows.erase(gone, pluginWindows.end());
+}
+
+void MainComponent::closeWindowForProcessor(juce::AudioProcessor* processor)
+{
+    if (processor == nullptr)
+        return;
+
+    const auto stale = std::remove_if(pluginWindows.begin(), pluginWindows.end(),
+        [processor] (const std::unique_ptr<PluginWindow>& window)
+        {
+            return window != nullptr && window->getProcessor() == processor;
+        });
+
+    pluginWindows.erase(stale, pluginWindows.end());
+}
+
+void MainComponent::wirePluginRemovalNotifications()
+{
+    auto& mixer = audioEngine.getMixer();
+
+    for (int i = 0; i < mixer.getNumTracks(); ++i)
+        if (auto* track = mixer.getTrack(i))
+            track->onPluginAboutToBeRemoved = [this] (juce::AudioPluginInstance* plugin)
+            {
+                closeWindowForProcessor(plugin);
+            };
 }
 
 void MainComponent::closeEmptyChannelWindow(Track* track)
