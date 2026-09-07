@@ -41,8 +41,16 @@ namespace
             // An edit rewrites the clip; the plugin copies the result back over
             // the audio the clip was built from, so a later recording appends
             // to what is on screen.
-            view.setEditCallback([this] (const juce::String&)
+            view.setEditCallback([this] (const juce::String& name)
             {
+                // An empty name is applyEdit()'s way of saying the edit had
+                // nothing to do - Normalize on audio already at full scale,
+                // say. Committing it anyway would copy the untouched region
+                // straight back over itself and still mark the capture as
+                // needing to be written again, for no actual change.
+                if (name.isEmpty())
+                    return;
+
                 processor.commitClipEdits();
                 refreshFromProcessor();
             });
