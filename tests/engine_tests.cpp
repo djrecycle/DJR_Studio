@@ -3931,6 +3931,135 @@ int main()
               "pitch class names wrap the same way the root does");
     }
 
+    // --- Strum: fanning a chord out in time, lowest pitch first ------------
+    {
+        djr::Mixer strumMixer;
+        strumMixer.prepare(sampleRate, blockSize);
+
+        auto* track = findFirstMidiTrack(strumMixer);
+        check(track != nullptr, "there is a MIDI track for the strum check");
+
+        if (track != nullptr)
+        {
+            djr::PianoRollModel model;
+            model.setTargetClip(&track->getClip());
+
+            // Stacked out of pitch order, the way a marquee-selected or
+            // chord-stamped group is not guaranteed to come back indexed.
+            juce::Array<djr::MidiNote> chord;
+            djr::MidiNote high; high.pitch = 67; high.startBeat = 2.0; high.lengthBeats = 1.0;
+            djr::MidiNote low;  low.pitch = 60;  low.startBeat = 2.0; low.lengthBeats = 1.0;
+            djr::MidiNote mid;  mid.pitch = 64;  mid.startBeat = 2.0; mid.lengthBeats = 1.0;
+            chord.add(high);
+            chord.add(low);
+            chord.add(mid);
+            model.setNotes(chord);
+
+            model.strumNotes({ 0, 1, 2 }, 0.05);
+            const auto strummed = model.getNotes();
+
+            check(strummed.size() == 3, "strumming neither adds nor removes notes");
+
+            const auto startOf = [&strummed] (int pitch)
+            {
+                for (const auto& note : strummed)
+                    if (note.pitch == pitch)
+                        return note.startBeat;
+                return -1.0;
+            };
+
+            check(std::abs(startOf(60) - 2.0) < 1.0e-9, "the lowest note keeps the chord's original start");
+            check(std::abs(startOf(64) - 2.05) < 1.0e-9, "the middle note lands one strum step later");
+            check(std::abs(startOf(67) - 2.10) < 1.0e-9, "the highest note lands two strum steps later");
+
+            for (const auto& note : strummed)
+                check(std::abs(note.lengthBeats - 1.0) < 1.0e-9,
+                      "strumming moves a note's start, not its length");
+
+            // Already spread out rather than stacked: strumming fans out
+            // from whichever of them starts earliest, not from beat zero.
+            juce::Array<djr::MidiNote> uneven;
+            djr::MidiNote first;  first.pitch = 60;  first.startBeat = 3.0; first.lengthBeats = 1.0;
+            djr::MidiNote second; second.pitch = 64; second.startBeat = 3.5; second.lengthBeats = 1.0;
+            uneven.add(first);
+            uneven.add(second);
+            model.setNotes(uneven);
+
+            model.strumNotes({ 0, 1 }, 0.05);
+            const auto unevenStrummed = model.getNotes();
+
+            check(unevenStrummed.size() == 2
+                      && std::abs(unevenStrummed[0].startBeat - 3.0) < 1.0e-9
+                      && std::abs(unevenStrummed[1].startBeat - 3.05) < 1.0e-9,
+                  "an already-spread selection fans out from its own earliest note");
+
+            // A single note is not a chord: nothing to stagger against.
+            juce::Array<djr::MidiNote> single;
+            djr::MidiNote lone; lone.pitch = 60; lone.startBeat = 1.0; lone.lengthBeats = 1.0;
+            single.add(lone);
+            model.setNotes(single);
+
+            model.strumNotes({ 0 }, 0.05);
+            check(std::abs(model.getNotes()[0].startBeat - 1.0) < 1.0e-9,
+                  "strumming a single note is a no-op");
+        }
+    }
+
+    // --- Flam: a quieter grace note just ahead of the main hit --------------
+    {
+        djr::Mixer flamMixer;
+        flamMixer.prepare(sampleRate, blockSize);
+
+        auto* track = findFirstMidiTrack(flamMixer);
+        check(track != nullptr, "there is a MIDI track for the flam check");
+
+        if (track != nullptr)
+        {
+            djr::PianoRollModel model;
+            model.setTargetClip(&track->getClip());
+
+            juce::Array<djr::MidiNote> notes;
+            djr::MidiNote main; main.pitch = 64; main.velocity = 1.0f; main.startBeat = 4.0; main.lengthBeats = 1.0;
+            notes.add(main);
+            model.setNotes(notes);
+
+            model.flamNotes({ 0 }, 0.1, 0.5f);
+            const auto flammed = model.getNotes();
+
+            check(flammed.size() == 2, "flamming adds one grace note per note flammed");
+
+            const auto& mainAfter = flammed[0];
+            const auto& grace = flammed[1];
+
+            check(std::abs(mainAfter.startBeat - 4.0) < 1.0e-9 && std::abs(mainAfter.velocity - 1.0f) < 1.0e-6,
+                  "the main note itself is untouched");
+            check(grace.pitch == mainAfter.pitch, "the grace note is the same pitch as the note it leads into");
+            check(std::abs(grace.startBeat - 3.9) < 1.0e-9, "the grace note lands one flam offset ahead");
+            check(std::abs(grace.lengthBeats - 0.1) < 1.0e-9, "the grace note ends exactly where the main note begins");
+            check(std::abs(grace.velocity - 0.5f) < 1.0e-6, "the grace note is quieter by the given scale");
+
+            // A note right at the start of the timeline has no room to spare
+            // ahead of it - the grace note gets whatever is actually there.
+            juce::Array<djr::MidiNote> atStart;
+            djr::MidiNote early; early.pitch = 60; early.velocity = 0.8f; early.startBeat = 0.03; early.lengthBeats = 1.0;
+            atStart.add(early);
+            model.setNotes(atStart);
+
+            model.flamNotes({ 0 }, 0.1, 0.5f);
+            const auto clamped = model.getNotes();
+
+            check(clamped.size() == 2 && std::abs(clamped[1].startBeat) < 1.0e-9,
+                  "a grace note is clamped to beat zero rather than going negative");
+            check(std::abs(clamped[1].lengthBeats - 0.03) < 1.0e-9,
+                  "a clamped grace note is only as long as the room actually available");
+
+            // No selection, nothing to do.
+            model.setNotes(atStart);
+            model.flamNotes({}, 0.1, 0.5f);
+            check(model.getNotes().size() == 1, "flamming an empty selection is a no-op");
+        }
+    }
+
     // --- Arpeggiate: a stacked chord turned into a run --------------------
     {
         djr::Mixer arpMixer;

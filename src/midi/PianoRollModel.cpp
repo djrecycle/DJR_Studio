@@ -58,6 +58,39 @@ void PianoRollModel::addNoteGroup(const juce::Array<MidiNote>& newNotes)
     sendChangeMessage();
 }
 
+void PianoRollModel::flamNotes(const juce::Array<int>& indices, double flamOffsetBeats, float velocityScale)
+{
+    if (targetClip == nullptr || indices.isEmpty())
+        return;
+
+    if (onBeforeEdit)
+        onBeforeEdit();
+
+    auto notes = targetClip->getNotesSnapshot();
+    juce::Array<MidiNote> graceNotes;
+
+    for (const auto index : indices)
+    {
+        if (! juce::isPositiveAndBelow(index, notes.size()))
+            continue;
+
+        const auto& main = notes.getReference(index);
+
+        MidiNote grace;
+        grace.pitch = main.pitch;
+        grace.velocity = juce::jlimit(0.0f, 1.0f, main.velocity * velocityScale);
+        grace.startBeat = juce::jmax(0.0, main.startBeat - flamOffsetBeats);
+        grace.lengthBeats = juce::jmax(0.015625, main.startBeat - grace.startBeat);
+        graceNotes.add(grace);
+    }
+
+    for (const auto& grace : graceNotes)
+        notes.add(grace);
+
+    targetClip->setNotes(notes);
+    sendChangeMessage();
+}
+
 void PianoRollModel::arpeggiateNotes(const juce::Array<int>& indices)
 {
     if (targetClip == nullptr || indices.size() < 2)
@@ -160,6 +193,41 @@ void PianoRollModel::setNoteLength(int index, double lengthBeats)
     // With snapping off a note can be any length, down to a hair.
     const auto shortest = snapBeats > 0.0 ? snapBeats : 0.03125;
     notes.getReference(index).lengthBeats = juce::jmax(shortest, snapToGrid(lengthBeats));
+    targetClip->setNotes(notes);
+    sendChangeMessage();
+}
+
+void PianoRollModel::strumNotes(const juce::Array<int>& indices, double strumStepBeats)
+{
+    if (targetClip == nullptr || indices.size() < 2)
+        return;
+
+    if (onBeforeEdit)
+        onBeforeEdit();
+
+    auto notes = targetClip->getNotesSnapshot();
+
+    auto ordered = indices;
+    std::sort(ordered.begin(), ordered.end(), [&notes] (int a, int b)
+    {
+        return notes[a].pitch < notes[b].pitch;
+    });
+
+    // Fanned out from whichever of them starts earliest, so strumming a
+    // chord that is not already perfectly stacked spreads forward from
+    // where it begins instead of dragging the whole thing later.
+    auto anchorBeat = std::numeric_limits<double>::max();
+    for (const auto index : ordered)
+        if (juce::isPositiveAndBelow(index, notes.size()))
+            anchorBeat = juce::jmin(anchorBeat, notes[index].startBeat);
+
+    for (int i = 0; i < ordered.size(); ++i)
+    {
+        const auto index = ordered[i];
+        if (juce::isPositiveAndBelow(index, notes.size()))
+            notes.getReference(index).startBeat = anchorBeat + i * strumStepBeats;
+    }
+
     targetClip->setNotes(notes);
     sendChangeMessage();
 }

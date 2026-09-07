@@ -25,6 +25,13 @@ public:
     void addNote(int pitch, double startBeat, double lengthBeats, float velocity);
     /** Adds several notes as one undo step, e.g. every tone of a chord stamp. */
     void addNoteGroup(const juce::Array<MidiNote>& newNotes);
+    /** Gives each of the given notes a quieter grace note just before it, at
+        the same pitch, ending exactly where the main note begins - a flam,
+        the way a drummer's off-hand strikes just ahead of the main hit.
+        Clamped so a note already at (or near) beat zero gets whatever room
+        is actually there instead of a grace note landing on top of it.
+    */
+    void flamNotes(const juce::Array<int>& indices, double flamOffsetBeats, float velocityScale);
     /** Chops the given notes' combined time span into equal steps and lines
         them up one after another, lowest pitch first - a stacked chord
         turned into a run rather than played all at once. Permanent, unlike
@@ -37,6 +44,13 @@ public:
     void setNoteVelocity(int index, float velocity);
     void setNoteLength(int index, double lengthBeats);
     void setNotes(const juce::Array<MidiNote>& notes);
+    /** Fans the given notes out in time, lowest pitch first, each one
+        `strumStepBeats` later than the last - a chord struck like a guitar
+        rather than pressed down all at once. Every note keeps its own
+        length, so later notes simply end later too. A no-op below two
+        notes: there is nothing to stagger.
+    */
+    void strumNotes(const juce::Array<int>& indices, double strumStepBeats);
     /** Called just before any change to the notes, so the host can record an
         undo point. Every editor - piano roll, velocity lane, step sequencer -
         goes through this model, so one hook here catches all of them.

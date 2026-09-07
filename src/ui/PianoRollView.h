@@ -173,6 +173,15 @@ private:
     */
     void pasteNotes();
     void shiftSelectedNotesByOctave(int direction);
+    /** Fans the selection out in time like a strummed chord - a no-op below
+        two selected notes, since there is nothing to stagger.
+    */
+    void strumSelectedNotes();
+    /** Gives each selected note its own grace note just ahead of it - a
+        flam. Unlike a strum this needs no second note to fan out against,
+        so it works on a selection of just one.
+    */
+    void flamSelectedNotes();
     /** Chops the selection's time span into equal steps, lowest pitch
         first - a no-op below two selected notes, since there is nothing
         to sequence.
