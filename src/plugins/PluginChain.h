@@ -53,6 +53,13 @@ public:
 
     int size() const noexcept;
     bool isEmpty() const noexcept;
+    /** This class takes no lock of its own - Track's pluginLock is what
+        makes a call in here safe, and it only covers the call itself. The
+        pointer stays valid only until whatever next changes this chain
+        (detachAt, moveTo, clear, detachAll, or a fresh adopt): use it
+        immediately, never store it, and re-ask rather than reuse it after
+        any of those.
+    */
     juce::AudioPluginInstance* getPlugin(int index) noexcept;
     const juce::AudioPluginInstance* getPlugin(int index) const noexcept;
     juce::StringArray getPluginNames() const;
