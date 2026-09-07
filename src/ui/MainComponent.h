@@ -113,6 +113,11 @@ private:
     AudioEditorProcessor* findBuiltInEditor(int trackIndex);
     /** Hands a clip's audio to the editor and brings its window up. */
     void openClipInBuiltInEditor(AudioEditorProcessor& editor, int trackIndex, int clipIndex);
+    /** "New audio track" hands this the track it just created, so it starts
+        with the built-in editor already inserted instead of the user having
+        to add it by hand.
+    */
+    void autoAddBuiltInEditorToTrack(int trackIndex);
     /** First audio track at or after the selection, so takes land somewhere sensible. */
     int findAudioTrackForRecording();
     void newProject();
