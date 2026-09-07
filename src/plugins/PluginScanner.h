@@ -53,6 +53,18 @@ public:
     /** Names of the formats this build can host, for the UI to describe itself. */
     static juce::StringArray getHostedFormatNames();
 
+    /** Files that crashed the whole app during a previous scan. run() skips
+        these from then on, on every launch - a crashing file does not fix
+        itself just because the app restarted, and without this a rescan
+        would only crash again on the same one, never reaching whatever came
+        after it in the list.
+    */
+    static juce::StringArray getCrashedPluginBlacklist();
+    /** Lets a blacklisted file be tried again, e.g. after the user updates
+        or replaces whatever was crashing. A no-op if it was never listed.
+    */
+    static void clearCrashedPluginBlacklist(const juce::String& identifier);
+
 private:
     void run() override;
     void reportProgress(const juce::String& what);
