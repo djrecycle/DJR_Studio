@@ -214,6 +214,13 @@ private:
     bool drawing = false;
     double lastDrawnBeat = -1.0;
     int lastDrawnPitch = -1;
+    /** The length new notes are drawn with. Sticky: resizing a note, or just
+        clicking one, sets this so the next note drawn matches it too,
+        rather than resetting to the snap-derived default every time.
+        Negative means "not set yet" - follow the snap grid, the tool's
+        original behaviour.
+    */
+    double stickyNoteLengthBeats = -1.0;
     /** The chord stamp: off by default, so the draw tool writes single notes
         until it is turned on from its own badge.
     */

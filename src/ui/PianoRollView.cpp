@@ -446,6 +446,14 @@ void PianoRollView::mouseDown(const juce::MouseEvent& event)
 
     if (noteIndex >= 0)
     {
+        // Clicking any note - not only resizing it - picks up its length as
+        // the sticky draw length, so the next note drawn matches it.
+        {
+            const auto clickedNotes = model.getNotes();
+            if (juce::isPositiveAndBelow(noteIndex, clickedNotes.size()))
+                stickyNoteLengthBeats = clickedNotes[noteIndex].lengthBeats;
+        }
+
         // Ctrl/shift click adds or removes one note from the selection.
         if (activeTool == Tool::select && (event.mods.isCtrlDown() || event.mods.isShiftDown()))
         {
@@ -575,7 +583,15 @@ void PianoRollView::mouseDrag(const juce::MouseEvent& event)
         const auto notes = model.getNotes();
 
         if (juce::isPositiveAndBelow(draggedNote, notes.size()))
+        {
             model.setNoteLength(draggedNote, xToBeat(event.x) - notes[draggedNote].startBeat);
+
+            // Whatever length that actually landed on - setNoteLength snaps
+            // and clamps it - becomes the sticky draw length.
+            const auto resized = model.getNotes();
+            if (juce::isPositiveAndBelow(draggedNote, resized.size()))
+                stickyNoteLengthBeats = resized[draggedNote].lengthBeats;
+        }
 
         return;
     }
@@ -968,7 +984,8 @@ bool PianoRollView::drawNoteAt(juce::Point<int> position)
     if (pitch == lastDrawnPitch && std::abs(beat - lastDrawnBeat) < 1.0e-6)
         return false;
 
-    const auto length = juce::jmax(0.25, model.getSnapBeats() * 4.0);
+    const auto length = stickyNoteLengthBeats > 0.0 ? stickyNoteLengthBeats
+                                                    : juce::jmax(0.25, model.getSnapBeats() * 4.0);
     auto wroteAny = false;
 
     if (chordModeEnabled)
