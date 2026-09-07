@@ -1374,8 +1374,13 @@ void ArrangementView::showAddTrackMenu()
             if (added == nullptr)
                 return;
 
+            const auto addedIndex = mixer.getNumTracks() - 1;
+
             notifyTrackListChanged();
-            setSelectedTrack(mixer.getNumTracks() - 1);
+            setSelectedTrack(addedIndex);
+
+            if (result == 2 && audioTrackAddedCallback)
+                audioTrackAddedCallback(addedIndex);
         });
 }
 
@@ -1676,6 +1681,11 @@ void ArrangementView::notifyTrackListChanged()
 void ArrangementView::setTrackListChangedCallback(std::function<void()> callback)
 {
     trackListChangedCallback = std::move(callback);
+}
+
+void ArrangementView::setAudioTrackAddedCallback(std::function<void(int)> callback)
+{
+    audioTrackAddedCallback = std::move(callback);
 }
 
 void ArrangementView::sliderValueChanged(juce::Slider* slider)

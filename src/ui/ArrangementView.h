@@ -148,6 +148,12 @@ public:
     void setTrackSelectedCallback(std::function<void(int)> callback);
     /** Fired after a track is added or removed so the mixer can rebuild. */
     void setTrackListChangedCallback(std::function<void()> callback);
+    /** Fired with the new track's index right after "New audio track" creates
+        one - lets the host attach whatever a fresh audio track should start
+        with (the built-in editor), without this view needing to know what
+        that is.
+    */
+    void setAudioTrackAddedCallback(std::function<void(int)> callback);
     /** Re-reads the mixer's tracks. Public because the track list also changes
         from outside this view: opening a project replaces the whole of it.
     */
@@ -448,6 +454,7 @@ private:
 
     std::function<void(int)> trackSelectedCallback;
     std::function<void()> trackListChangedCallback;
+    std::function<void(int)> audioTrackAddedCallback;
     std::function<void()> clipEditedCallback;
     std::function<void(int, int)> clipOpenRequestCallback;
     std::function<void(int, int)> audioClipOpenRequestCallback;

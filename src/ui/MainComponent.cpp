@@ -176,6 +176,10 @@ MainComponent::MainComponent()
         selectTrack(arrangementView.getSelectedTrack());
         markDirty();
     });
+    arrangementView.setAudioTrackAddedCallback([this] (int trackIndex)
+    {
+        autoAddBuiltInEditorToTrack(trackIndex);
+    });
 
     // Covers the tracks the mixer already starts with; new ones get the same
     // wiring above, whenever the track list changes.
@@ -2345,6 +2349,40 @@ void MainComponent::openClipInBuiltInEditor(AudioEditorProcessor& editor, int tr
     showPluginWindow(&editor, getTrack(trackIndex));
 
     setStatusMessage(clip->getName() + TRANS(" opened in the audio editor - send it back when you are done."));
+}
+
+void MainComponent::autoAddBuiltInEditorToTrack(int trackIndex)
+{
+    // Should never already be there on a track that was just created, but the
+    // check is free and matches the guard the double-click path relies on.
+    if (findBuiltInEditor(trackIndex) != nullptr)
+        return;
+
+    pluginManager.createPluginAsync(AudioEditorProcessor::getDescription(),
+                                    audioEngine.getCurrentSampleRate(),
+                                    audioEngine.getCurrentBufferSize(),
+        [this, trackIndex] (std::unique_ptr<juce::AudioPluginInstance> instance, juce::String error)
+        {
+            if (instance == nullptr)
+            {
+                setStatusMessage(error.isNotEmpty() ? error : TRANS("The audio editor could not be created."));
+                return;
+            }
+
+            // The track may have been removed while creation was in flight.
+            auto* target = getTrack(trackIndex);
+
+            if (target == nullptr)
+                return;
+
+            prepareBuiltInEditor(*instance, trackIndex);
+            target->addPlugin(std::move(instance));
+
+            mixerView.repaint();
+            insertChainPanel.refresh();
+            markDirty();
+            synchroniseProjectState();
+        });
 }
 
 void MainComponent::restorePluginsForTrack(int trackIndex, const juce::Array<juce::var>& pluginStates)
