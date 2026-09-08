@@ -247,6 +247,13 @@ private:
     LayoutHost workspace;
     PanelHost panelHost;
 
+    /** Drawn once, then reused every repaint - decoding the embedded PNG
+        again per frame would be wasted work for an image that never
+        changes. Painted behind workspace (and everything docked inside
+        it), so it only shows through the gaps between panels.
+    */
+    juce::Image watermarkImage;
+
     MenuBarView menuBar;
     TransportBar transportBar;
     BrowserPanel browserPanel;

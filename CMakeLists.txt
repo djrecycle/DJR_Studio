@@ -158,6 +158,13 @@ set(DJR_STUDIO_SOURCES
     src/ui/Theme.cpp
     src/utils/FileUtils.cpp)
 
+# Compiled into the binary rather than loaded from disk at runtime: a
+# watermark is small, never changes, and this way it works identically
+# whether the app is run from the build directory or installed - no
+# resource-path resolution to get right for it.
+juce_add_binary_data(djr_studio_binary_data
+    SOURCES docs/branding/watermark.png)
+
 juce_add_gui_app(djr_studio
     PRODUCT_NAME "DJR_Studio"
     VERSION ${PROJECT_VERSION}
@@ -199,6 +206,7 @@ target_compile_options(djr_studio PRIVATE
 
 target_link_libraries(djr_studio
     PRIVATE
+        djr_studio_binary_data
         juce::juce_core
         juce::juce_data_structures
         juce::juce_events
