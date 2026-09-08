@@ -2,6 +2,7 @@
 
 #include "PluginScanner.h"
 #include "AudioEditorProcessor.h"
+#include "MidiSamplerProcessor.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_events/juce_events.h>

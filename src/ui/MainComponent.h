@@ -9,6 +9,7 @@
 #include "SampleEditorView.h"
 
 #include "plugins/AudioEditorProcessor.h"
+#include "plugins/MidiSamplerProcessor.h"
 #include "MenuBarView.h"
 #include "MixerView.h"
 #include "PanelHost.h"
@@ -118,6 +119,20 @@ private:
         to add it by hand.
     */
     void autoAddBuiltInEditorToTrack(int trackIndex);
+    /** Gives a MIDI track the built-in sampler as its instrument, unless it
+        already has one - "New MIDI track" hands this the track it just
+        created, and it also runs once at startup over every MIDI track the
+        mixer already has, so a fresh project never has a track that
+        answers with nothing but the tonal preview voice.
+    */
+    void autoAddMidiSamplerToTrack(int trackIndex);
+    /** Loads a starter sound onto pad 0 (kit-appropriate pads for a track
+        named "Drums") of a freshly created sampler, keyed on `trackName` -
+        "Drums" gets a small kit, "Bass"/"Pad"/"Keys" (and anything else)
+        get a single pluck/swell suited to that name, so a track answers a
+        note before the user has loaded a real sample into it.
+    */
+    void populateStarterKit(MidiSamplerProcessor& sampler, const juce::String& trackName);
     /** First audio track at or after the selection, so takes land somewhere sensible. */
     int findAudioTrackForRecording();
     void newProject();

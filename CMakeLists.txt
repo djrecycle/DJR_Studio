@@ -106,6 +106,7 @@ set(DJR_ENGINE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/midi/Scale.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/PluginChain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/Lv2TtlInspector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins/StarterKitSamples.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/project/Project.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/project/ProjectTrackLayout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/recording/Recorder.cpp
@@ -126,6 +127,7 @@ set(DJR_STUDIO_SOURCES
     src/audio/AudioEngine.cpp
     src/plugins/PluginManager.cpp
     src/plugins/AudioEditorProcessor.cpp
+    src/plugins/MidiSamplerProcessor.cpp
     src/plugins/PluginScanner.cpp
     src/plugins/PluginWindow.cpp
     src/project/ProjectManager.cpp

@@ -154,6 +154,11 @@ public:
         that is.
     */
     void setAudioTrackAddedCallback(std::function<void(int)> callback);
+    /** Fired with the new track's index right after "New MIDI track"
+        creates one - same reason as setAudioTrackAddedCallback, for the
+        instrument a fresh MIDI track should start with instead.
+    */
+    void setMidiTrackAddedCallback(std::function<void(int)> callback);
     /** Re-reads the mixer's tracks. Public because the track list also changes
         from outside this view: opening a project replaces the whole of it.
     */
@@ -462,6 +467,7 @@ private:
     std::function<void(int)> trackSelectedCallback;
     std::function<void()> trackListChangedCallback;
     std::function<void(int)> audioTrackAddedCallback;
+    std::function<void(int)> midiTrackAddedCallback;
     std::function<void()> clipEditedCallback;
     std::function<void(int, int)> clipOpenRequestCallback;
     std::function<void(int, int)> audioClipOpenRequestCallback;

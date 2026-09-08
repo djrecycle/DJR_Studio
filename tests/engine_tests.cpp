@@ -28,6 +28,8 @@
 #include "recording/Recorder.h"
 #include "recording/SampleCapture.h"
 #include "plugins/Lv2TtlInspector.h"
+#include "plugins/MidiSamplerProcessor.h"
+#include "plugins/StarterKitSamples.h"
 
 #include <algorithm>
 #include <iostream>
@@ -4660,6 +4662,299 @@ int main()
               "findFlaggedPluginUris follows manifest.ttl's rdfs:seeAlso to find the range declared in a separate file");
 
         tempRoot.deleteRecursively();
+    }
+
+    // --- MidiSamplerProcessor: pad trigger, gain, note reassignment ---------
+    // Exercises the real class directly (no plugin format manager needed,
+    // it is our own): a real WAV on disk, loaded into a pad, triggered by
+    // MIDI the way Track's own instrument slot would, checked for actual
+    // audio out. Unlike AudioEditorProcessor (timer-driven, async capture -
+    // not worth pulling into the headless suite for that reason), this
+    // class's whole engine is synchronous and deterministic, so it is.
+    {
+        const auto wav = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                             .getChildFile("djr_sampler_diag.wav");
+        wav.deleteFile();
+
+        {
+            juce::WavAudioFormat wavFormat;
+            std::unique_ptr<juce::FileOutputStream> stream(wav.createOutputStream());
+            std::unique_ptr<juce::AudioFormatWriter> writer(
+                wavFormat.createWriterFor(stream.get(), sampleRate, 1, 16, {}, 0));
+
+            if (writer != nullptr)
+            {
+                stream.release();
+                const auto totalSamples = static_cast<int>(sampleRate * 0.3);
+                juce::AudioBuffer<float> tone(1, totalSamples);
+
+                for (int i = 0; i < totalSamples; ++i)
+                    tone.setSample(0, i, 0.8f * std::sin(2.0 * juce::MathConstants<double>::pi * 440.0 * i / sampleRate));
+
+                writer->writeFromAudioSampleBuffer(tone, 0, totalSamples);
+            }
+        }
+
+        djr::MidiSamplerProcessor sampler;
+        sampler.setPlayConfigDetails(0, 2, sampleRate, blockSize);
+        sampler.prepareToPlay(sampleRate, blockSize);
+
+        check(! sampler.getPad(0).hasSample(), "a fresh pad starts empty");
+
+        const auto loadError = sampler.loadSampleIntoPad(0, wav);
+        std::cout << "DIAG sampler load error: [" << loadError << "]\n";
+        check(loadError.isEmpty(), "loading a real WAV into pad 0 succeeds");
+        check(sampler.getPad(0).hasSample(), "pad 0 reports a sample after loading");
+
+        const auto renderNote = [&] (int note) -> float
+        {
+            // releaseResources() stops every voice first - each call starts
+            // clean, or a voice still finishing from the PREVIOUS call (the
+            // sample is 0.3s = ~26 blocks, longer than one render below)
+            // would bleed into this one's measurement.
+            sampler.releaseResources();
+
+            juce::AudioBuffer<float> buffer(2, blockSize);
+            float peak = 0.0f;
+
+            for (int block = 0; block < 30; ++block)
+            {
+                juce::MidiBuffer midi;
+
+                if (block == 0)
+                    midi.addEvent(juce::MidiMessage::noteOn(1, note, (juce::uint8) 100), 0);
+
+                sampler.processBlock(buffer, midi);
+                peak = juce::jmax(peak, buffer.getMagnitude(0, blockSize));
+            }
+
+            return peak;
+        };
+
+        const auto peakOnPadNote = renderNote(djr::MidiSamplerProcessor::firstPadNote);
+        std::cout << "DIAG peak triggering pad 0's own note: " << peakOnPadNote << "\n";
+        check(peakOnPadNote > 0.1f, "triggering pad 0's own MIDI note produces real audio output");
+
+        const auto peakOnOtherNote = renderNote(djr::MidiSamplerProcessor::firstPadNote + 5);
+        std::cout << "DIAG peak triggering an unmapped note: " << peakOnOtherNote << "\n";
+        check(peakOnOtherNote < 0.01f, "a note with no pad mapped to it stays silent");
+
+        sampler.setPadGain(0, 0.1f);
+        const auto peakLowGain = renderNote(djr::MidiSamplerProcessor::firstPadNote);
+        std::cout << "DIAG peak at gain 0.1: " << peakLowGain << "\n";
+        check(peakLowGain < peakOnPadNote * 0.3f, "lowering the pad's gain measurably lowers the output");
+
+        // Note 40 is pad 4's own default note (firstPadNote + 4) - moving pad
+        // 0 onto it is a swap, not a steal: pad 4 should land on pad 0's old
+        // note rather than losing its own trigger silently.
+        sampler.setPadMidiNote(0, 40);
+        check(sampler.findPadForNote(40) == 0, "moving a pad's note is reflected by findPadForNote");
+        check(sampler.findPadForNote(djr::MidiSamplerProcessor::firstPadNote) == 4,
+              "the pad that used to sit on note 40 was swapped onto the note pad 0 gave up, not left without one");
+
+        sampler.clearPad(0);
+        check(! sampler.getPad(0).hasSample(), "clearPad empties the pad");
+
+        wav.deleteFile();
+    }
+
+    // --- StarterKitSamples: generated pad content ---------------------------
+    // Every generator should hand back plausible, audible mono audio - not a
+    // claim about how musical it sounds, just that it is not empty or
+    // silent, which an app-level screenshot cannot check.
+    {
+        const auto checkGenerated = [&] (const juce::AudioBuffer<float>& buffer, double minSeconds, const juce::String& label)
+        {
+            check(buffer.getNumChannels() == 1, label + ": is mono");
+            check(buffer.getNumSamples() > static_cast<int>(minSeconds * sampleRate),
+                  label + ": is at least " + juce::String(minSeconds) + "s long");
+            check(buffer.getMagnitude(0, buffer.getNumSamples()) > 0.05f, label + ": is not silent");
+        };
+
+        checkGenerated(djr::StarterKitSamples::makeKick(sampleRate), 0.1, "makeKick");
+        checkGenerated(djr::StarterKitSamples::makeSnare(sampleRate), 0.05, "makeSnare");
+        checkGenerated(djr::StarterKitSamples::makeClosedHihat(sampleRate), 0.02, "makeClosedHihat");
+        checkGenerated(djr::StarterKitSamples::makeOpenHihat(sampleRate), 0.1, "makeOpenHihat");
+        checkGenerated(djr::StarterKitSamples::makeClap(sampleRate), 0.05, "makeClap");
+        checkGenerated(djr::StarterKitSamples::makeBassPluck(sampleRate), 0.3, "makeBassPluck");
+        checkGenerated(djr::StarterKitSamples::makePadSwell(sampleRate), 1.0, "makePadSwell");
+        checkGenerated(djr::StarterKitSamples::makeKeysPluck(sampleRate), 0.2, "makeKeysPluck");
+
+        // The one audible difference between the two hats that a peak check
+        // alone would not catch: the closed hat decays much faster, so it
+        // should come out shorter than the open one.
+        const auto closed = djr::StarterKitSamples::makeClosedHihat(sampleRate);
+        const auto open = djr::StarterKitSamples::makeOpenHihat(sampleRate);
+        check(closed.getNumSamples() < open.getNumSamples(), "the closed hat is shorter than the open hat");
+    }
+
+    // --- MidiSamplerProcessor: generated pad content + persistence ---------
+    // loadGeneratedSampleIntoPad() is what gives a fresh track a sound before
+    // the user has loaded anything - it needs to (a) actually make the pad
+    // playable, and (b) survive a save/reload, since a generated pad starts
+    // with no file behind it at all.
+    {
+        djr::MidiSamplerProcessor sampler;
+        sampler.setPlayConfigDetails(0, 2, sampleRate, blockSize);
+        sampler.prepareToPlay(sampleRate, blockSize);
+
+        auto kick = djr::StarterKitSamples::makeKick(sampleRate);
+        sampler.loadGeneratedSampleIntoPad(0, kick, sampleRate, "Kick");
+        check(sampler.getPad(0).hasSample(), "a generated buffer loaded into a pad reports a sample");
+        check(sampler.getPad(0).name == "Kick", "the pad takes the name it was given");
+
+        check(! sampler.getPad(0).keyboardMode, "a pad starts in plain (non-keyboard) mode");
+        sampler.setPadKeyboardMode(0, true);
+        check(sampler.getPad(0).keyboardMode, "setPadKeyboardMode() turns keyboard mode on");
+
+        const auto renderFirstPad = [&] (djr::MidiSamplerProcessor& target) -> float
+        {
+            target.releaseResources();
+            juce::AudioBuffer<float> buffer(2, blockSize);
+            float peak = 0.0f;
+
+            for (int block = 0; block < 40; ++block)
+            {
+                juce::MidiBuffer midi;
+
+                if (block == 0)
+                    midi.addEvent(juce::MidiMessage::noteOn(1, djr::MidiSamplerProcessor::firstPadNote, (juce::uint8) 100), 0);
+
+                target.processBlock(buffer, midi);
+                peak = juce::jmax(peak, buffer.getMagnitude(0, blockSize));
+            }
+
+            return peak;
+        };
+
+        check(renderFirstPad(sampler) > 0.1f, "a pad filled with a generated sample is actually triggerable");
+
+        // getStateInformation() should write the generated pad's audio out
+        // to a real file (it starts with none), and a fresh instance
+        // restoring that state should end up with the same pad playable
+        // again - not empty, the way it would be if the audio were silently
+        // dropped on save.
+        const auto workingFolder = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                       .getChildFile("djr_sampler_starter_kit_test");
+        workingFolder.deleteRecursively();
+        sampler.setWorkingFolder(workingFolder);
+
+        juce::MemoryBlock state;
+        sampler.getStateInformation(state);
+
+        check(sampler.getPad(0).sourceFile != juce::File(),
+              "getStateInformation() writes a real file behind a generated pad");
+        check(sampler.getPad(0).sourceFile.existsAsFile(), "the file it wrote actually exists on disk");
+
+        djr::MidiSamplerProcessor reloaded;
+        reloaded.setPlayConfigDetails(0, 2, sampleRate, blockSize);
+        reloaded.prepareToPlay(sampleRate, blockSize);
+        reloaded.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+
+        check(reloaded.getPad(0).hasSample(), "a fresh instance restoring that state has the pad back, not empty");
+        check(renderFirstPad(reloaded) > 0.1f, "the reloaded pad is actually triggerable, not just present in name");
+        check(reloaded.getPad(0).keyboardMode, "keyboard mode survives a save/reload too");
+
+        workingFolder.deleteRecursively();
+    }
+
+    // --- MidiSamplerProcessor: keyboard mode re-pitches, exact match wins --
+    // A keyboard-mode pad is what lets a single bass/pad/keys sample answer
+    // the whole piano roll (the feature the user asked for after finding the
+    // Bass track only ever answered one note) - it needs to actually
+    // re-pitch by the played note's distance from the pad's root, and an
+    // exact-note pad must still win its own note even when a keyboard-mode
+    // pad could also have answered it.
+    {
+        // Counts blocks until the voice's output drops to silence - a pad
+        // played faster (pitched up) empties its buffer, and so goes quiet,
+        // sooner than one played at its own pitch; slower (pitched down)
+        // takes longer. Direct evidence of re-pitching without needing a
+        // pitch detector.
+        const auto blocksUntilSilent = [&] (djr::MidiSamplerProcessor& target, int note) -> int
+        {
+            target.releaseResources();
+            juce::AudioBuffer<float> buffer(2, blockSize);
+            int block = 0;
+
+            for (; block < 300; ++block)
+            {
+                juce::MidiBuffer midi;
+
+                if (block == 0)
+                    midi.addEvent(juce::MidiMessage::noteOn(1, note, (juce::uint8) 100), 0);
+
+                target.processBlock(buffer, midi);
+
+                if (block > 0 && buffer.getMagnitude(0, blockSize) < 0.001f)
+                    break;
+            }
+
+            return block;
+        };
+
+        djr::MidiSamplerProcessor keyboardSampler;
+        keyboardSampler.setPlayConfigDetails(0, 2, sampleRate, blockSize);
+        keyboardSampler.prepareToPlay(sampleRate, blockSize);
+
+        auto pluck = djr::StarterKitSamples::makeKeysPluck(sampleRate);
+        keyboardSampler.loadGeneratedSampleIntoPad(0, pluck, sampleRate, "Keys");
+        keyboardSampler.setPadMidiNote(0, 60);
+        keyboardSampler.setPadKeyboardMode(0, true);
+
+        const auto blocksAtRoot = blocksUntilSilent(keyboardSampler, 60);
+        const auto blocksOctaveUp = blocksUntilSilent(keyboardSampler, 72);
+        const auto blocksOctaveDown = blocksUntilSilent(keyboardSampler, 48);
+
+        std::cout << "DIAG keyboard-mode blocks at root/+12/-12: "
+                  << blocksAtRoot << "/" << blocksOctaveUp << "/" << blocksOctaveDown << "\n";
+
+        check(blocksAtRoot > 0, "a keyboard-mode pad answers its own root note");
+        check(blocksOctaveUp > 0 && blocksOctaveUp < blocksAtRoot,
+              "an octave above the root plays back faster (pitched up), finishing sooner");
+        check(blocksOctaveDown > blocksAtRoot,
+              "an octave below the root plays back slower (pitched down), taking longer");
+        // Playback rate scales exactly with the pitch ratio, so these should
+        // land close to 2x/0.5x - generous tolerance for the silence-
+        // threshold cutoff rather than a precise sample count.
+        check(blocksAtRoot > blocksOctaveUp * 1.5,
+              "the octave-up timing is in the right ballpark for a 2x speed-up");
+        check(blocksOctaveDown > blocksAtRoot * 1.5,
+              "the octave-down timing is in the right ballpark for a 0.5x slow-down");
+
+        // Exact match priority: a kit pad sitting on the played note must
+        // answer it itself, even when a keyboard-mode pad elsewhere in the
+        // same instrument could also have claimed the note.
+        const auto makeKitPadOnNote40 = [&] (std::unique_ptr<djr::MidiSamplerProcessor>& target)
+        {
+            target = std::make_unique<djr::MidiSamplerProcessor>();
+            target->setPlayConfigDetails(0, 2, sampleRate, blockSize);
+            target->prepareToPlay(sampleRate, blockSize);
+            auto kick = djr::StarterKitSamples::makeKick(sampleRate);
+            target->loadGeneratedSampleIntoPad(0, kick, sampleRate, "Kick");
+            target->setPadMidiNote(0, 40);
+        };
+
+        std::unique_ptr<djr::MidiSamplerProcessor> kitOnly;
+        makeKitPadOnNote40(kitOnly);
+        const auto naturalBlocks = blocksUntilSilent(*kitOnly, 40);
+        check(naturalBlocks > 0, "the kit pad alone answers its own note");
+
+        std::unique_ptr<djr::MidiSamplerProcessor> kitPlusKeyboard;
+        makeKitPadOnNote40(kitPlusKeyboard);
+        auto anotherKick = djr::StarterKitSamples::makeKick(sampleRate);
+        kitPlusKeyboard->loadGeneratedSampleIntoPad(1, anotherKick, sampleRate, "Fallback");
+        // 12 semitones below the played note - if this pad wrongly answered
+        // note 40 instead of the exact-match pad, it would play back at 2x
+        // speed and finish in roughly half the blocks.
+        kitPlusKeyboard->setPadMidiNote(1, 28);
+        kitPlusKeyboard->setPadKeyboardMode(1, true);
+
+        const auto withFallbackPresent = blocksUntilSilent(*kitPlusKeyboard, 40);
+        std::cout << "DIAG exact-match priority, natural/withFallbackPresent blocks: "
+                  << naturalBlocks << "/" << withFallbackPresent << "\n";
+        check(withFallbackPresent >= naturalBlocks - 2 && withFallbackPresent <= naturalBlocks + 2,
+              "the exact-match pad still answers its own note, unaffected by a keyboard-mode pad that could also claim it");
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

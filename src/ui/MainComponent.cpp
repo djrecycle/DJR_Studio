@@ -1,6 +1,8 @@
 #include "MainComponent.h"
 
 #include "Theme.h"
+#include "plugins/MidiSamplerProcessor.h"
+#include "plugins/StarterKitSamples.h"
 #include "project/ProjectTrackLayout.h"
 #include "utils/FileUtils.h"
 #include "utils/Logger.h"
@@ -180,10 +182,20 @@ MainComponent::MainComponent()
     {
         autoAddBuiltInEditorToTrack(trackIndex);
     });
+    arrangementView.setMidiTrackAddedCallback([this] (int trackIndex)
+    {
+        autoAddMidiSamplerToTrack(trackIndex);
+    });
 
     // Covers the tracks the mixer already starts with; new ones get the same
     // wiring above, whenever the track list changes.
     wirePluginLifecycleNotifications();
+
+    // The mixer's own starting tracks never go through "New MIDI track", so
+    // nothing above would ever give them an instrument - caught up once
+    // here instead, the same call a fresh MIDI track gets either way.
+    for (int i = 0; i < audioEngine.getMixer().getNumTracks(); ++i)
+        autoAddMidiSamplerToTrack(i);
 
     arrangementView.setClipOpenRequestCallback([this] (int trackIndex, int patternIndex)
     {
@@ -1668,6 +1680,16 @@ void MainComponent::openTrackPlugin(int trackIndex, PluginSlot slot, int insertI
 
 void MainComponent::prepareBuiltInEditor(juce::AudioPluginInstance& plugin, int trackIndex)
 {
+    if (auto* sampler = dynamic_cast<MidiSamplerProcessor*>(&plugin))
+    {
+        // Same folder as the audio editor below: a starter sound this
+        // sampler generates for itself needs somewhere to be written once
+        // the project is saved, and the project's own Samples folder is
+        // where every other piece of this project's audio already lives.
+        sampler->setWorkingFolder(projectManager.getProject().samplesFolder);
+        return;
+    }
+
     auto* editor = dynamic_cast<AudioEditorProcessor*>(&plugin);
 
     if (editor == nullptr)
@@ -2397,13 +2419,126 @@ void MainComponent::autoAddBuiltInEditorToTrack(int trackIndex)
         });
 }
 
+void MainComponent::autoAddMidiSamplerToTrack(int trackIndex)
+{
+    auto* track = getTrack(trackIndex);
+
+    // Only a MIDI track has any use for an instrument at all, and only one
+    // that does not already have one - the tonal preview voice is not a
+    // signal that a track is "empty", a plugin loaded on it (by the user,
+    // or by this same call already having run) is.
+    if (track == nullptr || track->getKind() != TrackKind::midi || track->hasInstrument())
+        return;
+
+    pluginManager.createPluginAsync(MidiSamplerProcessor::getDescription(),
+                                    audioEngine.getCurrentSampleRate(),
+                                    audioEngine.getCurrentBufferSize(),
+        [this, trackIndex] (std::unique_ptr<juce::AudioPluginInstance> instance, juce::String error)
+        {
+            if (instance == nullptr)
+            {
+                setStatusMessage(error.isNotEmpty() ? error : TRANS("The MIDI sampler could not be created."));
+                return;
+            }
+
+            // The track may have been removed, or already given an
+            // instrument some other way, while creation was in flight.
+            auto* target = getTrack(trackIndex);
+
+            if (target == nullptr || target->hasInstrument())
+                return;
+
+            prepareBuiltInEditor(*instance, trackIndex);
+
+            // A silent 16-pad kit is not what "gives the track a sound"
+            // means - fill in a starter sound matching the track's own
+            // name, synthesised in code rather than any bundled recording,
+            // so the track answers a note before the user has loaded
+            // anything at all.
+            if (auto* sampler = dynamic_cast<MidiSamplerProcessor*>(instance.get()))
+                populateStarterKit(*sampler, target->getName());
+
+            target->setInstrument(std::move(instance));
+
+            mixerView.repaint();
+            insertChainPanel.refresh();
+            markDirty();
+            synchroniseProjectState();
+        });
+}
+
+void MainComponent::populateStarterKit(MidiSamplerProcessor& sampler, const juce::String& trackName)
+{
+    const auto sampleRate = audioEngine.getCurrentSampleRate() > 0.0
+                                 ? audioEngine.getCurrentSampleRate() : 44100.0;
+
+    auto load = [&sampler, sampleRate] (int padIndex, juce::AudioBuffer<float> audio, const juce::String& name)
+    {
+        sampler.loadGeneratedSampleIntoPad(padIndex, std::move(audio), sampleRate, name);
+    };
+
+    // Bass/Pad/Keys are melodic, not a kit - one sample answering only its
+    // own note would leave the rest of the piano roll silent. Keyboard mode
+    // spreads it across every note instead, re-pitched from `rootNote` - the
+    // pitch the sample was actually synthesised at, so that note plays back
+    // unshifted and every other note is a real transposition of it, not an
+    // arbitrary one from note 36.
+    auto loadKeyboardPad = [&sampler, sampleRate] (int padIndex, juce::AudioBuffer<float> audio,
+                                                   const juce::String& name, int rootNote)
+    {
+        sampler.loadGeneratedSampleIntoPad(padIndex, std::move(audio), sampleRate, name);
+        sampler.setPadMidiNote(padIndex, rootNote);
+        sampler.setPadKeyboardMode(padIndex, true);
+    };
+
+    if (trackName.equalsIgnoreCase("Drums"))
+    {
+        // Pad index = note - firstPadNote, matching the GM notes a real kit
+        // uses for each piece - familiar even before anyone has renamed a
+        // pad. Left in plain (non-keyboard) mode: a kick should sound like a
+        // kick on every note it is given, not re-pitch into a different drum.
+        load(0, StarterKitSamples::makeKick(sampleRate), "Kick");
+        load(2, StarterKitSamples::makeSnare(sampleRate), "Snare");
+        load(3, StarterKitSamples::makeClap(sampleRate), "Clap");
+        load(6, StarterKitSamples::makeClosedHihat(sampleRate), "Closed Hat");
+        load(10, StarterKitSamples::makeOpenHihat(sampleRate), "Open Hat");
+        return;
+    }
+
+    if (trackName.equalsIgnoreCase("Bass"))
+    {
+        // A1 - the pitch makeBassPluck() actually synthesises at.
+        loadKeyboardPad(0, StarterKitSamples::makeBassPluck(sampleRate), "Bass", 33);
+        return;
+    }
+
+    if (trackName.equalsIgnoreCase("Pad"))
+    {
+        // A3 - makePadSwell()'s own base frequency.
+        loadKeyboardPad(0, StarterKitSamples::makePadSwell(sampleRate), "Pad", 57);
+        return;
+    }
+
+    // "Keys" and any other MIDI track's own name: the same general-purpose
+    // pluck, so a track nobody thought to special-case still answers a note
+    // rather than staying silent. C4 - makeKeysPluck()'s own base frequency.
+    loadKeyboardPad(0, StarterKitSamples::makeKeysPluck(sampleRate), "Keys", 60);
+}
+
 void MainComponent::restorePluginsForTrack(int trackIndex, const juce::Array<juce::var>& pluginStates)
 {
     auto* track = getTrack(trackIndex);
 
-    if (track == nullptr || pluginStates.isEmpty())
+    if (track == nullptr)
         return;
 
+    // Cleared unconditionally, even when pluginStates is empty: this call is
+    // what the project file says belongs on this track, and skipping the
+    // clear on an empty list used to leave whatever was already there
+    // sitting on a track the project itself never gave a plugin - harmless
+    // before autoAddMidiSamplerToTrack() existed (nothing was ever there to
+    // leave behind on a first open), not harmless now that a MIDI track can
+    // pick up an instrument before a project is opened over it.
     track->clearInstrument();
     track->clearPlugins();
 
