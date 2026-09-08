@@ -272,6 +272,24 @@ int main()
     if (midiTrack == nullptr)
         return 1;
 
+    // --- A fresh mixer's default tracks each sound like what they are -------
+    // named, not all the same plain sine tone (the previous default) - see
+    // Mixer's constructor.
+    {
+        auto* drums = dynamic_cast<djr::MidiTrack*>(mixer.getTrack(0));
+        auto* bass = dynamic_cast<djr::MidiTrack*>(mixer.getTrack(1));
+        auto* pad = dynamic_cast<djr::MidiTrack*>(mixer.getTrack(2));
+
+        check(drums != nullptr && drums->isPreviewDrumKit(),
+              "the default Drums track answers with the drum kit, not the tonal preview voice");
+        check(bass != nullptr && bass->getPreviewSynth().getWaveform() == djr::SimpleSynth::Waveform::saw,
+              "the default Bass track's preview voice is a saw, not the generic sine");
+        check(pad != nullptr && pad->getPreviewSynth().getWaveform() == djr::SimpleSynth::Waveform::triangle,
+              "the default Pad track's preview voice is a triangle, not the generic sine");
+        check(pad != nullptr && pad->getPreviewSynth().getEnvelope().attack > bass->getPreviewSynth().getEnvelope().attack,
+              "Pad's envelope swells in slower than Bass's, the way an actual pad and an actual bass would differ");
+    }
+
     midiTrack->setClipNotes(makeFourBarChord());
 
     // --- The graph runs whether or not the transport does -------------------
