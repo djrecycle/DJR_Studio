@@ -4803,6 +4803,10 @@ int main()
         check(sampler.getPad(0).hasSample(), "a generated buffer loaded into a pad reports a sample");
         check(sampler.getPad(0).name == "Kick", "the pad takes the name it was given");
 
+        check(! sampler.getPad(0).keyboardMode, "a pad starts in plain (non-keyboard) mode");
+        sampler.setPadKeyboardMode(0, true);
+        check(sampler.getPad(0).keyboardMode, "setPadKeyboardMode() turns keyboard mode on");
+
         const auto renderFirstPad = [&] (djr::MidiSamplerProcessor& target) -> float
         {
             target.releaseResources();
@@ -4849,8 +4853,108 @@ int main()
 
         check(reloaded.getPad(0).hasSample(), "a fresh instance restoring that state has the pad back, not empty");
         check(renderFirstPad(reloaded) > 0.1f, "the reloaded pad is actually triggerable, not just present in name");
+        check(reloaded.getPad(0).keyboardMode, "keyboard mode survives a save/reload too");
 
         workingFolder.deleteRecursively();
+    }
+
+    // --- MidiSamplerProcessor: keyboard mode re-pitches, exact match wins --
+    // A keyboard-mode pad is what lets a single bass/pad/keys sample answer
+    // the whole piano roll (the feature the user asked for after finding the
+    // Bass track only ever answered one note) - it needs to actually
+    // re-pitch by the played note's distance from the pad's root, and an
+    // exact-note pad must still win its own note even when a keyboard-mode
+    // pad could also have answered it.
+    {
+        // Counts blocks until the voice's output drops to silence - a pad
+        // played faster (pitched up) empties its buffer, and so goes quiet,
+        // sooner than one played at its own pitch; slower (pitched down)
+        // takes longer. Direct evidence of re-pitching without needing a
+        // pitch detector.
+        const auto blocksUntilSilent = [&] (djr::MidiSamplerProcessor& target, int note) -> int
+        {
+            target.releaseResources();
+            juce::AudioBuffer<float> buffer(2, blockSize);
+            int block = 0;
+
+            for (; block < 300; ++block)
+            {
+                juce::MidiBuffer midi;
+
+                if (block == 0)
+                    midi.addEvent(juce::MidiMessage::noteOn(1, note, (juce::uint8) 100), 0);
+
+                target.processBlock(buffer, midi);
+
+                if (block > 0 && buffer.getMagnitude(0, blockSize) < 0.001f)
+                    break;
+            }
+
+            return block;
+        };
+
+        djr::MidiSamplerProcessor keyboardSampler;
+        keyboardSampler.setPlayConfigDetails(0, 2, sampleRate, blockSize);
+        keyboardSampler.prepareToPlay(sampleRate, blockSize);
+
+        auto pluck = djr::StarterKitSamples::makeKeysPluck(sampleRate);
+        keyboardSampler.loadGeneratedSampleIntoPad(0, pluck, sampleRate, "Keys");
+        keyboardSampler.setPadMidiNote(0, 60);
+        keyboardSampler.setPadKeyboardMode(0, true);
+
+        const auto blocksAtRoot = blocksUntilSilent(keyboardSampler, 60);
+        const auto blocksOctaveUp = blocksUntilSilent(keyboardSampler, 72);
+        const auto blocksOctaveDown = blocksUntilSilent(keyboardSampler, 48);
+
+        std::cout << "DIAG keyboard-mode blocks at root/+12/-12: "
+                  << blocksAtRoot << "/" << blocksOctaveUp << "/" << blocksOctaveDown << "\n";
+
+        check(blocksAtRoot > 0, "a keyboard-mode pad answers its own root note");
+        check(blocksOctaveUp > 0 && blocksOctaveUp < blocksAtRoot,
+              "an octave above the root plays back faster (pitched up), finishing sooner");
+        check(blocksOctaveDown > blocksAtRoot,
+              "an octave below the root plays back slower (pitched down), taking longer");
+        // Playback rate scales exactly with the pitch ratio, so these should
+        // land close to 2x/0.5x - generous tolerance for the silence-
+        // threshold cutoff rather than a precise sample count.
+        check(blocksAtRoot > blocksOctaveUp * 1.5,
+              "the octave-up timing is in the right ballpark for a 2x speed-up");
+        check(blocksOctaveDown > blocksAtRoot * 1.5,
+              "the octave-down timing is in the right ballpark for a 0.5x slow-down");
+
+        // Exact match priority: a kit pad sitting on the played note must
+        // answer it itself, even when a keyboard-mode pad elsewhere in the
+        // same instrument could also have claimed the note.
+        const auto makeKitPadOnNote40 = [&] (std::unique_ptr<djr::MidiSamplerProcessor>& target)
+        {
+            target = std::make_unique<djr::MidiSamplerProcessor>();
+            target->setPlayConfigDetails(0, 2, sampleRate, blockSize);
+            target->prepareToPlay(sampleRate, blockSize);
+            auto kick = djr::StarterKitSamples::makeKick(sampleRate);
+            target->loadGeneratedSampleIntoPad(0, kick, sampleRate, "Kick");
+            target->setPadMidiNote(0, 40);
+        };
+
+        std::unique_ptr<djr::MidiSamplerProcessor> kitOnly;
+        makeKitPadOnNote40(kitOnly);
+        const auto naturalBlocks = blocksUntilSilent(*kitOnly, 40);
+        check(naturalBlocks > 0, "the kit pad alone answers its own note");
+
+        std::unique_ptr<djr::MidiSamplerProcessor> kitPlusKeyboard;
+        makeKitPadOnNote40(kitPlusKeyboard);
+        auto anotherKick = djr::StarterKitSamples::makeKick(sampleRate);
+        kitPlusKeyboard->loadGeneratedSampleIntoPad(1, anotherKick, sampleRate, "Fallback");
+        // 12 semitones below the played note - if this pad wrongly answered
+        // note 40 instead of the exact-match pad, it would play back at 2x
+        // speed and finish in roughly half the blocks.
+        kitPlusKeyboard->setPadMidiNote(1, 28);
+        kitPlusKeyboard->setPadKeyboardMode(1, true);
+
+        const auto withFallbackPresent = blocksUntilSilent(*kitPlusKeyboard, 40);
+        std::cout << "DIAG exact-match priority, natural/withFallbackPresent blocks: "
+                  << naturalBlocks << "/" << withFallbackPresent << "\n";
+        check(withFallbackPresent >= naturalBlocks - 2 && withFallbackPresent <= naturalBlocks + 2,
+              "the exact-match pad still answers its own note, unaffected by a keyboard-mode pad that could also claim it");
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

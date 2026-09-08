@@ -3,6 +3,7 @@
 #include "ui/Theme.h"
 #include "ui/UiControls.h"
 
+#include <cmath>
 #include <limits>
 
 namespace djr
@@ -55,7 +56,11 @@ namespace
             noteUpButton.addListener(this);
             addAndMakeVisible(noteUpButton);
 
-            setSize(560, 420);
+            keyboardModeToggle.setColour(juce::ToggleButton::textColourId, Theme::text());
+            keyboardModeToggle.addListener(this);
+            addAndMakeVisible(keyboardModeToggle);
+
+            setSize(560, 446);
             refreshSelection();
         }
 
@@ -75,7 +80,7 @@ namespace
             area.removeFromTop(headerHeight);
             area = area.reduced(12);
 
-            auto controls = area.removeFromBottom(96);
+            auto controls = area.removeFromBottom(122);
             area.removeFromBottom(8);
 
             padList.setBounds(area);
@@ -98,6 +103,9 @@ namespace
             noteUpButton.setBounds(noteRow.removeFromLeft(24));
             noteRow.removeFromLeft(8);
             noteLabel.setBounds(noteRow);
+
+            controls.removeFromTop(8);
+            keyboardModeToggle.setBounds(controls.removeFromTop(24));
         }
 
         int getNumRows() override { return processor.numPads; }
@@ -118,9 +126,14 @@ namespace
             g.drawText(juce::MidiMessage::getMidiNoteName(pad.midiNote, true, true, 3),
                        bounds.removeFromLeft(56).reduced(8, 0), juce::Justification::centredLeft, false);
 
+            // A keyboard-mode pad answers every note nothing else claims, not
+            // just its own - worth flagging in the list, since it otherwise
+            // looks like any other single-note pad.
+            const juce::String keyboardTag = pad.keyboardMode ? TRANS(" (keyboard)") : juce::String();
+
             g.setColour(pad.hasSample() ? Theme::text() : Theme::faintText());
             g.setFont(Theme::ui(12.5f));
-            g.drawText(pad.hasSample() ? pad.name : TRANS("(empty)"),
+            g.drawText((pad.hasSample() ? pad.name : TRANS("(empty)")) + keyboardTag,
                        bounds.reduced(4, 0), juce::Justification::centredLeft, true);
         }
 
@@ -170,6 +183,13 @@ namespace
                 processor.setPadMidiNote(selected, juce::jlimit(0, 127, pad.midiNote + delta));
                 padList.updateContent();
                 refreshSelection();
+                return;
+            }
+
+            if (button == &keyboardModeToggle)
+            {
+                processor.setPadKeyboardMode(selected, keyboardModeToggle.getToggleState());
+                padList.updateContent();
             }
         }
 
@@ -216,6 +236,7 @@ namespace
             gainSlider.setEnabled(hasSelection);
             noteDownButton.setEnabled(hasSelection);
             noteUpButton.setEnabled(hasSelection);
+            keyboardModeToggle.setEnabled(hasSelection);
 
             if (! hasSelection)
             {
@@ -228,6 +249,7 @@ namespace
             gainSlider.setValue(pad.gain, juce::dontSendNotification);
             noteLabel.setText(juce::MidiMessage::getMidiNoteName(pad.midiNote, true, true, 3),
                               juce::dontSendNotification);
+            keyboardModeToggle.setToggleState(pad.keyboardMode, juce::dontSendNotification);
         }
 
         static constexpr int headerHeight = 34;
@@ -241,6 +263,7 @@ namespace
         juce::Label noteLabel;
         juce::TextButton noteDownButton;
         juce::TextButton noteUpButton;
+        juce::ToggleButton keyboardModeToggle { "Track pitch to key" };
         std::unique_ptr<juce::FileChooser> fileChooser;
     };
 
@@ -384,6 +407,12 @@ void MidiSamplerProcessor::setPadGain(int padIndex, float gain) noexcept
         pads[static_cast<size_t>(padIndex)].gain = juce::jlimit(0.0f, 4.0f, gain);
 }
 
+void MidiSamplerProcessor::setPadKeyboardMode(int padIndex, bool enabled) noexcept
+{
+    if (juce::isPositiveAndBelow(padIndex, numPads))
+        pads[static_cast<size_t>(padIndex)].keyboardMode = enabled;
+}
+
 void MidiSamplerProcessor::setPadMidiNote(int padIndex, int midiNote) noexcept
 {
     if (! juce::isPositiveAndBelow(padIndex, numPads) || ! juce::isPositiveAndBelow(midiNote, 128))
@@ -410,21 +439,44 @@ int MidiSamplerProcessor::findPadForNote(int midiNote) const noexcept
     return -1;
 }
 
+int MidiSamplerProcessor::findKeyboardModePad() const noexcept
+{
+    for (int i = 0; i < numPads; ++i)
+    {
+        const auto& pad = pads[static_cast<size_t>(i)];
+
+        if (pad.keyboardMode && pad.hasSample())
+            return i;
+    }
+
+    return -1;
+}
+
 void MidiSamplerProcessor::previewPad(int padIndex) noexcept
 {
     if (juce::isPositiveAndBelow(padIndex, numPads))
         pendingPreviews[static_cast<size_t>(padIndex)].store(true, std::memory_order_release);
 }
 
-void MidiSamplerProcessor::triggerPad(int padIndex) noexcept
+void MidiSamplerProcessor::triggerPad(int padIndex, int playedNote) noexcept
 {
     if (! juce::isPositiveAndBelow(padIndex, numPads))
         return;
 
+    auto& pad = pads[static_cast<size_t>(padIndex)];
+
     // Triggering an empty pad would still spend a voice rendering silence -
     // free that slot for a pad that actually has something to play.
-    if (! pads[static_cast<size_t>(padIndex)].hasSample())
+    if (! pad.hasSample())
         return;
+
+    // A kit pad always plays at its own recorded pitch, whatever note asked
+    // for it (previewPad() passes the pad's own note, so this is 1.0 there
+    // too). A keyboard-mode pad re-pitches by how far the played note sits
+    // from its own note, treated as the sample's root.
+    const auto pitchRatio = pad.keyboardMode
+                                 ? std::pow(2.0f, static_cast<float>(playedNote - pad.midiNote) / 12.0f)
+                                 : 1.0f;
 
     for (auto& voice : voices)
     {
@@ -433,6 +485,7 @@ void MidiSamplerProcessor::triggerPad(int padIndex) noexcept
             voice.padIndex = padIndex;
             voice.readPosition = 0.0;
             voice.active = true;
+            voice.pitchRatio = pitchRatio;
             return;
         }
     }
@@ -443,6 +496,7 @@ void MidiSamplerProcessor::triggerPad(int padIndex) noexcept
     stolen.padIndex = padIndex;
     stolen.readPosition = 0.0;
     stolen.active = true;
+    stolen.pitchRatio = pitchRatio;
     nextVoiceToSteal = (nextVoiceToSteal + 1) % maxVoices;
 }
 
@@ -488,15 +542,30 @@ void MidiSamplerProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
     {
         const auto message = metadata.getMessage();
 
-        if (message.isNoteOn())
-            triggerPad(findPadForNote(message.getNoteNumber()));
+        if (! message.isNoteOn())
+            continue;
+
+        const auto note = message.getNoteNumber();
+
+        // An exact-note pad wins the note it owns, but only when it actually
+        // has something to play - every pad defaults to its own note whether
+        // loaded or not, so an untouched empty pad sitting on this note must
+        // not block a keyboard-mode pad elsewhere from catching it.
+        const auto exactPad = findPadForNote(note);
+
+        if (exactPad >= 0 && pads[static_cast<size_t>(exactPad)].hasSample())
+            triggerPad(exactPad, note);
+        else if (const auto keyboardPad = findKeyboardModePad(); keyboardPad >= 0)
+            triggerPad(keyboardPad, note);
     }
 
     // The UI's own preview button is not on the audio thread - picked up
-    // here, once, rather than reaching into voices from outside it.
+    // here, once, rather than reaching into voices from outside it. Always
+    // sounds at the pad's own note, whatever mode it is in - an audition is
+    // "what does this pad sound like", not a played note.
     for (int i = 0; i < numPads; ++i)
         if (pendingPreviews[static_cast<size_t>(i)].exchange(false, std::memory_order_acquire))
-            triggerPad(i);
+            triggerPad(i, pads[static_cast<size_t>(i)].midiNote);
 
     const auto numSamples = buffer.getNumSamples();
     const auto numOutChannels = buffer.getNumChannels();
@@ -509,7 +578,7 @@ void MidiSamplerProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         auto& pad = pads[static_cast<size_t>(voice.padIndex)];
         const auto sampleChannels = pad.sample.getNumChannels();
         const auto sampleLength = pad.sample.getNumSamples();
-        const auto ratio = pad.sampleRate / engineSampleRate;
+        const auto ratio = (pad.sampleRate / engineSampleRate) * static_cast<double>(voice.pitchRatio);
 
         for (int i = 0; i < numSamples; ++i)
         {
@@ -611,6 +680,7 @@ void MidiSamplerProcessor::getStateInformation(juce::MemoryBlock& destination)
         padXml->setAttribute("index", i);
         padXml->setAttribute("midiNote", pad.midiNote);
         padXml->setAttribute("gain", static_cast<double>(pad.gain));
+        padXml->setAttribute("keyboardMode", pad.keyboardMode);
 
         if (pad.sourceFile != juce::File())
             padXml->setAttribute("file", pad.sourceFile.getFullPathName());
@@ -639,6 +709,7 @@ void MidiSamplerProcessor::setStateInformation(const void* data, int sizeInBytes
         auto& pad = pads[static_cast<size_t>(index)];
         pad.midiNote = padXml->getIntAttribute("midiNote", pad.midiNote);
         pad.gain = static_cast<float>(padXml->getDoubleAttribute("gain", 1.0));
+        pad.keyboardMode = padXml->getBoolAttribute("keyboardMode", pad.keyboardMode);
 
         const auto filePath = padXml->getStringAttribute("file");
 

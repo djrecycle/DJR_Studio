@@ -20,9 +20,15 @@ namespace djr
     enough for a one-shot hit, and small enough to own outright rather than
     reach for a general pitch-shifting library for it.
 
-    No release/looping/pitch controls in this first cut - a pad plays the
-    whole file it was given, once, at the pitch it was recorded at, the way
-    a drum machine's factory kit works before anyone starts tuning pads.
+    A pad normally only answers its own exact note, unlooped, at the
+    pitch it was recorded at - a drum machine's factory kit, where playing
+    a different note should never re-pitch the kick. A pad can opt into
+    "keyboard mode" instead (Pad::keyboardMode): it then catches every note
+    nothing else claims and re-pitches its sample by the distance from its
+    own note - a single bass or lead sample spread across the whole piano
+    roll rather than answering to one key alone. An exact-note match always
+    takes priority over a keyboard-mode pad, so a kit and a keyboard-style
+    pad can share one instrument without the kit's own notes getting stolen.
 */
 class MidiSamplerProcessor final : public juce::AudioPluginInstance
 {
@@ -53,6 +59,12 @@ public:
         double sampleRate = 44100.0;
         float gain = 1.0f;
         int midiNote = 0;
+        /** When true, this pad also answers any note no other pad claims
+            exactly, pitched up or down from `midiNote` (its root note in
+            this mode) by the played note's distance from it - a keyboard
+            spread from one sample rather than one fixed hit.
+        */
+        bool keyboardMode = false;
 
         bool hasSample() const noexcept { return sample.getNumSamples() > 0; }
     };
@@ -79,7 +91,12 @@ public:
         silently stealing it.
     */
     void setPadMidiNote(int padIndex, int midiNote) noexcept;
-    /** The pad a given MIDI note triggers, or -1. */
+    /** Turns keyboard mode on or off for a pad - see the class comment. */
+    void setPadKeyboardMode(int padIndex, bool enabled) noexcept;
+    /** The pad whose own note exactly matches, or -1. Keyboard-mode pads are
+        not considered here - they are the fallback processBlock() reaches
+        for once no exact match exists, not a competing exact match.
+    */
     int findPadForNote(int midiNote) const noexcept;
     /** Triggers a pad the way a MIDI note would, from the UI's own preview
         button - audio-thread safe the same way processBlock's own note
@@ -128,9 +145,17 @@ private:
         int padIndex = -1;
         double readPosition = 0.0;
         bool active = false;
+        /** 1.0 for a normal exact-note hit; set away from 1.0 only when a
+            keyboard-mode pad is answering a note other than its own root.
+        */
+        float pitchRatio = 1.0f;
     };
 
-    void triggerPad(int padIndex) noexcept;
+    void triggerPad(int padIndex, int playedNote) noexcept;
+    /** The first keyboard-mode pad with a sample loaded, or -1 - what a note
+        with no exact pad match falls back to.
+    */
+    int findKeyboardModePad() const noexcept;
     /** The project's Samples folder when the host has said where that is,
         falling back to the music folder - same fallback as
         AudioEditorProcessor::getWorkingFolder, for the same reason.

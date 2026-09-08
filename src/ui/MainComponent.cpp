@@ -2477,10 +2477,26 @@ void MainComponent::populateStarterKit(MidiSamplerProcessor& sampler, const juce
         sampler.loadGeneratedSampleIntoPad(padIndex, std::move(audio), sampleRate, name);
     };
 
+    // Bass/Pad/Keys are melodic, not a kit - one sample answering only its
+    // own note would leave the rest of the piano roll silent. Keyboard mode
+    // spreads it across every note instead, re-pitched from `rootNote` - the
+    // pitch the sample was actually synthesised at, so that note plays back
+    // unshifted and every other note is a real transposition of it, not an
+    // arbitrary one from note 36.
+    auto loadKeyboardPad = [&sampler, sampleRate] (int padIndex, juce::AudioBuffer<float> audio,
+                                                   const juce::String& name, int rootNote)
+    {
+        sampler.loadGeneratedSampleIntoPad(padIndex, std::move(audio), sampleRate, name);
+        sampler.setPadMidiNote(padIndex, rootNote);
+        sampler.setPadKeyboardMode(padIndex, true);
+    };
+
     if (trackName.equalsIgnoreCase("Drums"))
     {
         // Pad index = note - firstPadNote, matching the GM notes a real kit
-        // uses for each piece - familiar even before anyone has renamed a pad.
+        // uses for each piece - familiar even before anyone has renamed a
+        // pad. Left in plain (non-keyboard) mode: a kick should sound like a
+        // kick on every note it is given, not re-pitch into a different drum.
         load(0, StarterKitSamples::makeKick(sampleRate), "Kick");
         load(2, StarterKitSamples::makeSnare(sampleRate), "Snare");
         load(3, StarterKitSamples::makeClap(sampleRate), "Clap");
@@ -2491,20 +2507,22 @@ void MainComponent::populateStarterKit(MidiSamplerProcessor& sampler, const juce
 
     if (trackName.equalsIgnoreCase("Bass"))
     {
-        load(0, StarterKitSamples::makeBassPluck(sampleRate), "Bass");
+        // A1 - the pitch makeBassPluck() actually synthesises at.
+        loadKeyboardPad(0, StarterKitSamples::makeBassPluck(sampleRate), "Bass", 33);
         return;
     }
 
     if (trackName.equalsIgnoreCase("Pad"))
     {
-        load(0, StarterKitSamples::makePadSwell(sampleRate), "Pad");
+        // A3 - makePadSwell()'s own base frequency.
+        loadKeyboardPad(0, StarterKitSamples::makePadSwell(sampleRate), "Pad", 57);
         return;
     }
 
     // "Keys" and any other MIDI track's own name: the same general-purpose
     // pluck, so a track nobody thought to special-case still answers a note
-    // rather than staying silent.
-    load(0, StarterKitSamples::makeKeysPluck(sampleRate), "Keys");
+    // rather than staying silent. C4 - makeKeysPluck()'s own base frequency.
+    loadKeyboardPad(0, StarterKitSamples::makeKeysPluck(sampleRate), "Keys", 60);
 }
 
 void MainComponent::restorePluginsForTrack(int trackIndex, const juce::Array<juce::var>& pluginStates)
