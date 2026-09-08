@@ -1,5 +1,6 @@
 #include "ArrangementView.h"
 
+#include "BinaryData.h"
 #include "BrowserPanel.h"
 #include "Theme.h"
 #include "audio/AudioTrack.h"
@@ -45,6 +46,8 @@ namespace
 ArrangementView::ArrangementView(Mixer& mixerToUse, Transport& transportToUse)
     : mixer(mixerToUse), transport(transportToUse)
 {
+    watermarkImage = juce::ImageCache::getFromMemory(BinaryData::watermark_png, BinaryData::watermark_pngSize);
+
     buildToolButtons();
 
     snapButton.setIconInset(3.5f);
@@ -130,6 +133,21 @@ void ArrangementView::paint(juce::Graphics& g)
     g.setColour(Theme::divider());
     g.fillRect(juce::Rectangle<int>(grid.getX() - 1, lanes.getY(), 1, lanes.getHeight()));
     g.fillRect(juce::Rectangle<int>(grid.getX(), grid.getY() - 1, grid.getWidth(), 1));
+
+    // Watermark --------------------------------------------------------------
+    // Drawn on the grid itself, after its background but before the ruler,
+    // gridlines and clips that follow - MainComponent's own background sits
+    // behind every panel this app docks, including this one, so it never
+    // actually showed; the grid is the one area guaranteed to stay mostly
+    // empty regardless of layout.
+    if (watermarkImage.isValid())
+    {
+        const auto side = juce::jmin(grid.getWidth(), grid.getHeight()) * 0.6f;
+        const auto imageBounds = juce::Rectangle<float>(side, side).withCentre(grid.toFloat().getCentre());
+
+        g.setOpacity(0.18f);
+        g.drawImage(watermarkImage, imageBounds, juce::RectanglePlacement::centred);
+    }
 
     // Bar ruler + vertical grid ---------------------------------------------
     {

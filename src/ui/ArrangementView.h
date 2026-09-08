@@ -452,6 +452,13 @@ private:
     ZoomScrollBar horizontalBar { ZoomScrollBar::Orientation::horizontal };
     ZoomScrollBar verticalBar { ZoomScrollBar::Orientation::vertical };
 
+    /** Decoded once (the constructor), then reused every repaint - drawn
+        faintly on the grid itself in paint(), the one area of the app
+        guaranteed to stay mostly empty regardless of what else is docked
+        around it.
+    */
+    juce::Image watermarkImage;
+
     std::function<void(int)> trackSelectedCallback;
     std::function<void()> trackListChangedCallback;
     std::function<void(int)> audioTrackAddedCallback;

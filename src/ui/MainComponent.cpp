@@ -1,6 +1,5 @@
 #include "MainComponent.h"
 
-#include "BinaryData.h"
 #include "Theme.h"
 #include "project/ProjectTrackLayout.h"
 #include "utils/FileUtils.h"
@@ -41,8 +40,6 @@ MainComponent::MainComponent()
     juce::LookAndFeel::setDefaultLookAndFeel(&lookAndFeel);
     tooltipWindow = std::make_unique<juce::TooltipWindow>(this, 600);
     audioFormats.registerBasicFormats();
-
-    watermarkImage = juce::ImageCache::getFromMemory(BinaryData::watermark_png, BinaryData::watermark_pngSize);
 
     workspace.onResized = [this] { layoutWorkspace(); };
 
@@ -420,19 +417,6 @@ MainComponent::~MainComponent()
 void MainComponent::paint(juce::Graphics& g)
 {
     g.fillAll(Theme::windowBackground());
-
-    // Drawn before workspace (added as a child, so JUCE paints it next) -
-    // faint enough not to compete with the panels docked on top of it, and
-    // only actually seen through the gaps between them.
-    if (watermarkImage.isValid())
-    {
-        const auto bounds = getLocalBounds().toFloat();
-        const auto side = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.5f;
-        const auto imageBounds = juce::Rectangle<float>(side, side).withCentre(bounds.getCentre());
-
-        g.setOpacity(0.05f);
-        g.drawImage(watermarkImage, imageBounds, juce::RectanglePlacement::centred);
-    }
 }
 
 void MainComponent::resized()
