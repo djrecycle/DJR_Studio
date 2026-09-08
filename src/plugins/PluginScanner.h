@@ -65,6 +65,15 @@ public:
     */
     static void clearCrashedPluginBlacklist(const juce::String& identifier);
 
+    /** LV2 plugins whose own Turtle files declare a patch:writable property
+        JUCE's LV2 hosting cannot read as a parameter (Lv2TtlInspector) -
+        loads and runs fine, but has a control (a file to load, in every
+        known case so far) with no way to be set from this host. Refreshed
+        by every run(), so a plugin update that fixes this - or one that
+        introduces it - is picked up by the next scan.
+    */
+    static juce::StringArray getPluginsWithLimitedFeatures();
+
 private:
     void run() override;
     void reportProgress(const juce::String& what);

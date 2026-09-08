@@ -1,6 +1,7 @@
 #include "PluginScanner.h"
 
 #include "app/Settings.h"
+#include "plugins/Lv2TtlInspector.h"
 
 #include "utils/Logger.h"
 
@@ -187,6 +188,11 @@ void PluginScanner::clearCrashedPluginBlacklist(const juce::String& identifier)
     saveScanState(state);
 }
 
+juce::StringArray PluginScanner::getPluginsWithLimitedFeatures()
+{
+    return juce::StringArray::fromLines(loadScanState().getValue("limitedFeatures"));
+}
+
 juce::FileSearchPath PluginScanner::getUserPathsFor(const juce::String& formatName)
 {
     // FileSearchPath round-trips through a semicolon-separated string, which is
@@ -342,6 +348,17 @@ void PluginScanner::run()
 
         Logger::write(format->getName() + " scan: " + juce::String(identifiers.size())
                       + " file(s) searched.");
+
+        // Independent of the loop above: not about any one identifier, but
+        // about what each LV2 bundle's own Turtle files declare. Refreshed
+        // on every scan of this format, not accumulated, so a plugin that
+        // no longer has the problem (an update, a removal) drops off too.
+        if (format->getName() == "LV2" && ! threadShouldExit())
+        {
+            auto state = loadScanState();
+            state.setValue("limitedFeatures", Lv2TtlInspector::findFlaggedPluginUris(paths).joinIntoString("\n"));
+            saveScanState(state);
+        }
     }
 
     scanning.store(false, std::memory_order_release);
