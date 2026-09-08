@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 
 #include "Theme.h"
+#include "plugins/MidiSamplerProcessor.h"
 #include "project/ProjectTrackLayout.h"
 #include "utils/FileUtils.h"
 #include "utils/Logger.h"
@@ -180,10 +181,20 @@ MainComponent::MainComponent()
     {
         autoAddBuiltInEditorToTrack(trackIndex);
     });
+    arrangementView.setMidiTrackAddedCallback([this] (int trackIndex)
+    {
+        autoAddMidiSamplerToTrack(trackIndex);
+    });
 
     // Covers the tracks the mixer already starts with; new ones get the same
     // wiring above, whenever the track list changes.
     wirePluginLifecycleNotifications();
+
+    // The mixer's own starting tracks never go through "New MIDI track", so
+    // nothing above would ever give them an instrument - caught up once
+    // here instead, the same call a fresh MIDI track gets either way.
+    for (int i = 0; i < audioEngine.getMixer().getNumTracks(); ++i)
+        autoAddMidiSamplerToTrack(i);
 
     arrangementView.setClipOpenRequestCallback([this] (int trackIndex, int patternIndex)
     {
@@ -2397,13 +2408,58 @@ void MainComponent::autoAddBuiltInEditorToTrack(int trackIndex)
         });
 }
 
+void MainComponent::autoAddMidiSamplerToTrack(int trackIndex)
+{
+    auto* track = getTrack(trackIndex);
+
+    // Only a MIDI track has any use for an instrument at all, and only one
+    // that does not already have one - the tonal preview voice is not a
+    // signal that a track is "empty", a plugin loaded on it (by the user,
+    // or by this same call already having run) is.
+    if (track == nullptr || track->getKind() != TrackKind::midi || track->hasInstrument())
+        return;
+
+    pluginManager.createPluginAsync(MidiSamplerProcessor::getDescription(),
+                                    audioEngine.getCurrentSampleRate(),
+                                    audioEngine.getCurrentBufferSize(),
+        [this, trackIndex] (std::unique_ptr<juce::AudioPluginInstance> instance, juce::String error)
+        {
+            if (instance == nullptr)
+            {
+                setStatusMessage(error.isNotEmpty() ? error : TRANS("The MIDI sampler could not be created."));
+                return;
+            }
+
+            // The track may have been removed, or already given an
+            // instrument some other way, while creation was in flight.
+            auto* target = getTrack(trackIndex);
+
+            if (target == nullptr || target->hasInstrument())
+                return;
+
+            target->setInstrument(std::move(instance));
+
+            mixerView.repaint();
+            insertChainPanel.refresh();
+            markDirty();
+            synchroniseProjectState();
+        });
+}
+
 void MainComponent::restorePluginsForTrack(int trackIndex, const juce::Array<juce::var>& pluginStates)
 {
     auto* track = getTrack(trackIndex);
 
-    if (track == nullptr || pluginStates.isEmpty())
+    if (track == nullptr)
         return;
 
+    // Cleared unconditionally, even when pluginStates is empty: this call is
+    // what the project file says belongs on this track, and skipping the
+    // clear on an empty list used to leave whatever was already there
+    // sitting on a track the project itself never gave a plugin - harmless
+    // before autoAddMidiSamplerToTrack() existed (nothing was ever there to
+    // leave behind on a first open), not harmless now that a MIDI track can
+    // pick up an instrument before a project is opened over it.
     track->clearInstrument();
     track->clearPlugins();
 

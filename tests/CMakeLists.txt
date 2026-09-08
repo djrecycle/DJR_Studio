@@ -13,7 +13,7 @@ target_sources(djr_studio_engine_tests PRIVATE
     # meter reading is arithmetic, and getting it wrong is not visible in a
     # screenshot until someone plays something at a normal level.
     ${CMAKE_SOURCE_DIR}/src/ui/Theme.cpp
-    # DrumSamplerProcessor's own engine is synchronous and deterministic (see
+    # MidiSamplerProcessor's own engine is synchronous and deterministic (see
     # its test block in engine_tests.cpp) - worth the extra couple of files
     # to headless-test, unlike AudioEditorProcessor (timer-driven, async
     # capture, deliberately left untested here). UiControls.cpp/Icons.cpp
@@ -21,7 +21,7 @@ target_sources(djr_studio_engine_tests PRIVATE
     # editor itself is never instantiated by the test.
     ${CMAKE_SOURCE_DIR}/src/ui/UiControls.cpp
     ${CMAKE_SOURCE_DIR}/src/ui/Icons.cpp
-    ${CMAKE_SOURCE_DIR}/src/plugins/DrumSamplerProcessor.cpp)
+    ${CMAKE_SOURCE_DIR}/src/plugins/MidiSamplerProcessor.cpp)
 
 target_include_directories(djr_studio_engine_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 

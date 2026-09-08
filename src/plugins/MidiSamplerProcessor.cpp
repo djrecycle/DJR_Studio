@@ -1,4 +1,4 @@
-#include "DrumSamplerProcessor.h"
+#include "MidiSamplerProcessor.h"
 
 #include "ui/Theme.h"
 #include "ui/UiControls.h"
@@ -14,13 +14,13 @@ namespace
         whichever pad is selected, and just enough per-pad controls (gain,
         trigger note) to make a kit usable without leaving this window.
     */
-    class DrumSamplerGui final : public juce::AudioProcessorEditor,
+    class MidiSamplerGui final : public juce::AudioProcessorEditor,
                                  private juce::Button::Listener,
                                  private juce::Slider::Listener,
                                  private juce::ListBoxModel
     {
     public:
-        explicit DrumSamplerGui(DrumSamplerProcessor& processorToUse)
+        explicit MidiSamplerGui(MidiSamplerProcessor& processorToUse)
             : juce::AudioProcessorEditor(processorToUse), processor(processorToUse)
         {
             padList.setModel(this);
@@ -66,7 +66,7 @@ namespace
             auto header = getLocalBounds().removeFromTop(headerHeight).reduced(12, 0);
             g.setColour(Theme::text());
             g.setFont(Theme::display(15.0f));
-            g.drawText("DJR Drum Sampler", header, juce::Justification::centredLeft, false);
+            g.drawText("DJR MIDI Sampler", header, juce::Justification::centredLeft, false);
         }
 
         void resized() override
@@ -232,7 +232,7 @@ namespace
 
         static constexpr int headerHeight = 34;
 
-        DrumSamplerProcessor& processor;
+        MidiSamplerProcessor& processor;
         juce::ListBox padList { "Pads" };
         PillButton loadButton { "Load Sample...", Icon::folder };
         PillButton clearButton { "Clear", Icon::close };
@@ -245,12 +245,12 @@ namespace
     };
 }
 
-const char* const DrumSamplerProcessor::identifier = "djr:builtin:drum-sampler";
+const char* const MidiSamplerProcessor::identifier = "djr:builtin:midi-sampler";
 
-juce::PluginDescription DrumSamplerProcessor::getDescription()
+juce::PluginDescription MidiSamplerProcessor::getDescription()
 {
     juce::PluginDescription description;
-    description.name = "DJR Drum Sampler";
+    description.name = "DJR MIDI Sampler";
     description.descriptiveName = "Multi-pad one-shot sampler";
     description.pluginFormatName = "DJR";
     description.category = "Built-in";
@@ -266,12 +266,12 @@ juce::PluginDescription DrumSamplerProcessor::getDescription()
     return description;
 }
 
-bool DrumSamplerProcessor::matches(const juce::PluginDescription& description)
+bool MidiSamplerProcessor::matches(const juce::PluginDescription& description)
 {
     return description.fileOrIdentifier == identifier;
 }
 
-DrumSamplerProcessor::DrumSamplerProcessor()
+MidiSamplerProcessor::MidiSamplerProcessor()
     : juce::AudioPluginInstance(BusesProperties()
                                     .withOutput("Output", juce::AudioChannelSet::stereo(), true))
 {
@@ -287,13 +287,13 @@ DrumSamplerProcessor::DrumSamplerProcessor()
         pending.store(false, std::memory_order_relaxed);
 }
 
-const DrumSamplerProcessor::Pad& DrumSamplerProcessor::getPad(int index) const noexcept
+const MidiSamplerProcessor::Pad& MidiSamplerProcessor::getPad(int index) const noexcept
 {
     static const Pad empty;
     return juce::isPositiveAndBelow(index, numPads) ? pads[static_cast<size_t>(index)] : empty;
 }
 
-juce::String DrumSamplerProcessor::loadSampleIntoPad(int padIndex, const juce::File& file)
+juce::String MidiSamplerProcessor::loadSampleIntoPad(int padIndex, const juce::File& file)
 {
     if (! juce::isPositiveAndBelow(padIndex, numPads))
         return TRANS("No such pad.");
@@ -329,7 +329,7 @@ juce::String DrumSamplerProcessor::loadSampleIntoPad(int padIndex, const juce::F
     return {};
 }
 
-void DrumSamplerProcessor::clearPad(int padIndex) noexcept
+void MidiSamplerProcessor::clearPad(int padIndex) noexcept
 {
     if (! juce::isPositiveAndBelow(padIndex, numPads))
         return;
@@ -340,13 +340,13 @@ void DrumSamplerProcessor::clearPad(int padIndex) noexcept
     pad.name = "Empty";
 }
 
-void DrumSamplerProcessor::setPadGain(int padIndex, float gain) noexcept
+void MidiSamplerProcessor::setPadGain(int padIndex, float gain) noexcept
 {
     if (juce::isPositiveAndBelow(padIndex, numPads))
         pads[static_cast<size_t>(padIndex)].gain = juce::jlimit(0.0f, 4.0f, gain);
 }
 
-void DrumSamplerProcessor::setPadMidiNote(int padIndex, int midiNote) noexcept
+void MidiSamplerProcessor::setPadMidiNote(int padIndex, int midiNote) noexcept
 {
     if (! juce::isPositiveAndBelow(padIndex, numPads) || ! juce::isPositiveAndBelow(midiNote, 128))
         return;
@@ -363,7 +363,7 @@ void DrumSamplerProcessor::setPadMidiNote(int padIndex, int midiNote) noexcept
     pad.midiNote = midiNote;
 }
 
-int DrumSamplerProcessor::findPadForNote(int midiNote) const noexcept
+int MidiSamplerProcessor::findPadForNote(int midiNote) const noexcept
 {
     for (int i = 0; i < numPads; ++i)
         if (pads[static_cast<size_t>(i)].midiNote == midiNote)
@@ -372,13 +372,13 @@ int DrumSamplerProcessor::findPadForNote(int midiNote) const noexcept
     return -1;
 }
 
-void DrumSamplerProcessor::previewPad(int padIndex) noexcept
+void MidiSamplerProcessor::previewPad(int padIndex) noexcept
 {
     if (juce::isPositiveAndBelow(padIndex, numPads))
         pendingPreviews[static_cast<size_t>(padIndex)].store(true, std::memory_order_release);
 }
 
-void DrumSamplerProcessor::triggerPad(int padIndex) noexcept
+void MidiSamplerProcessor::triggerPad(int padIndex) noexcept
 {
     if (! juce::isPositiveAndBelow(padIndex, numPads))
         return;
@@ -408,28 +408,28 @@ void DrumSamplerProcessor::triggerPad(int padIndex) noexcept
     nextVoiceToSteal = (nextVoiceToSteal + 1) % maxVoices;
 }
 
-void DrumSamplerProcessor::fillInPluginDescription(juce::PluginDescription& description) const
+void MidiSamplerProcessor::fillInPluginDescription(juce::PluginDescription& description) const
 {
     description = getDescription();
 }
 
-const juce::String DrumSamplerProcessor::getName() const
+const juce::String MidiSamplerProcessor::getName() const
 {
-    return "DJR Drum Sampler";
+    return "DJR MIDI Sampler";
 }
 
-void DrumSamplerProcessor::prepareToPlay(double sampleRate, int)
+void MidiSamplerProcessor::prepareToPlay(double sampleRate, int)
 {
     engineSampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
 }
 
-void DrumSamplerProcessor::releaseResources()
+void MidiSamplerProcessor::releaseResources()
 {
     for (auto& voice : voices)
         voice.active = false;
 }
 
-void DrumSamplerProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+void MidiSamplerProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     buffer.clear();
 
@@ -486,57 +486,57 @@ void DrumSamplerProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
     }
 }
 
-double DrumSamplerProcessor::getTailLengthSeconds() const
+double MidiSamplerProcessor::getTailLengthSeconds() const
 {
     return 0.0;
 }
 
-bool DrumSamplerProcessor::acceptsMidi() const
+bool MidiSamplerProcessor::acceptsMidi() const
 {
     return true;
 }
 
-bool DrumSamplerProcessor::producesMidi() const
+bool MidiSamplerProcessor::producesMidi() const
 {
     return false;
 }
 
-juce::AudioProcessorEditor* DrumSamplerProcessor::createEditor()
+juce::AudioProcessorEditor* MidiSamplerProcessor::createEditor()
 {
-    return new DrumSamplerGui(*this);
+    return new MidiSamplerGui(*this);
 }
 
-bool DrumSamplerProcessor::hasEditor() const
+bool MidiSamplerProcessor::hasEditor() const
 {
     return true;
 }
 
-int DrumSamplerProcessor::getNumPrograms()
+int MidiSamplerProcessor::getNumPrograms()
 {
     return 1;
 }
 
-int DrumSamplerProcessor::getCurrentProgram()
+int MidiSamplerProcessor::getCurrentProgram()
 {
     return 0;
 }
 
-void DrumSamplerProcessor::setCurrentProgram(int)
+void MidiSamplerProcessor::setCurrentProgram(int)
 {
 }
 
-const juce::String DrumSamplerProcessor::getProgramName(int)
+const juce::String MidiSamplerProcessor::getProgramName(int)
 {
     return {};
 }
 
-void DrumSamplerProcessor::changeProgramName(int, const juce::String&)
+void MidiSamplerProcessor::changeProgramName(int, const juce::String&)
 {
 }
 
-void DrumSamplerProcessor::getStateInformation(juce::MemoryBlock& destination)
+void MidiSamplerProcessor::getStateInformation(juce::MemoryBlock& destination)
 {
-    juce::XmlElement state("DJRDrumSampler");
+    juce::XmlElement state("DJRMidiSampler");
 
     for (int i = 0; i < numPads; ++i)
     {
@@ -553,11 +553,11 @@ void DrumSamplerProcessor::getStateInformation(juce::MemoryBlock& destination)
     copyXmlToBinary(state, destination);
 }
 
-void DrumSamplerProcessor::setStateInformation(const void* data, int sizeInBytes)
+void MidiSamplerProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
     auto state = getXmlFromBinary(data, sizeInBytes);
 
-    if (state == nullptr || ! state->hasTagName("DJRDrumSampler"))
+    if (state == nullptr || ! state->hasTagName("DJRMidiSampler"))
         return;
 
     for (auto* padXml : state->getChildIterator())

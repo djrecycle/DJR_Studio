@@ -87,13 +87,13 @@ juce::Array<juce::PluginDescription> PluginManager::getBuiltInPlugins()
 {
     juce::Array<juce::PluginDescription> builtIns;
     builtIns.add(AudioEditorProcessor::getDescription());
-    builtIns.add(DrumSamplerProcessor::getDescription());
+    builtIns.add(MidiSamplerProcessor::getDescription());
     return builtIns;
 }
 
 bool PluginManager::isBuiltIn(const juce::PluginDescription& description)
 {
-    return AudioEditorProcessor::matches(description) || DrumSamplerProcessor::matches(description);
+    return AudioEditorProcessor::matches(description) || MidiSamplerProcessor::matches(description);
 }
 
 std::unique_ptr<juce::AudioPluginInstance> PluginManager::createBuiltIn(const juce::PluginDescription& description)
@@ -101,8 +101,8 @@ std::unique_ptr<juce::AudioPluginInstance> PluginManager::createBuiltIn(const ju
     if (AudioEditorProcessor::matches(description))
         return std::make_unique<AudioEditorProcessor>();
 
-    if (DrumSamplerProcessor::matches(description))
-        return std::make_unique<DrumSamplerProcessor>();
+    if (MidiSamplerProcessor::matches(description))
+        return std::make_unique<MidiSamplerProcessor>();
 
     return nullptr;
 }
@@ -134,7 +134,7 @@ void PluginManager::createPluginAsync(const juce::PluginDescription& description
             {
                 auto instance = createBuiltIn(description);
 
-                // An instrument built-in (DrumSamplerProcessor) declares no
+                // An instrument built-in (MidiSamplerProcessor) declares no
                 // input bus at all - asking it for 2 input channels anyway
                 // would try to configure a bus that does not exist.
                 if (instance != nullptr)

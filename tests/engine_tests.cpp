@@ -28,7 +28,7 @@
 #include "recording/Recorder.h"
 #include "recording/SampleCapture.h"
 #include "plugins/Lv2TtlInspector.h"
-#include "plugins/DrumSamplerProcessor.h"
+#include "plugins/MidiSamplerProcessor.h"
 
 #include <algorithm>
 #include <iostream>
@@ -4663,7 +4663,7 @@ int main()
         tempRoot.deleteRecursively();
     }
 
-    // --- DrumSamplerProcessor: pad trigger, gain, note reassignment ---------
+    // --- MidiSamplerProcessor: pad trigger, gain, note reassignment ---------
     // Exercises the real class directly (no plugin format manager needed,
     // it is our own): a real WAV on disk, loaded into a pad, triggered by
     // MIDI the way Track's own instrument slot would, checked for actual
@@ -4694,7 +4694,7 @@ int main()
             }
         }
 
-        djr::DrumSamplerProcessor sampler;
+        djr::MidiSamplerProcessor sampler;
         sampler.setPlayConfigDetails(0, 2, sampleRate, blockSize);
         sampler.prepareToPlay(sampleRate, blockSize);
 
@@ -4730,16 +4730,16 @@ int main()
             return peak;
         };
 
-        const auto peakOnPadNote = renderNote(djr::DrumSamplerProcessor::firstPadNote);
+        const auto peakOnPadNote = renderNote(djr::MidiSamplerProcessor::firstPadNote);
         std::cout << "DIAG peak triggering pad 0's own note: " << peakOnPadNote << "\n";
         check(peakOnPadNote > 0.1f, "triggering pad 0's own MIDI note produces real audio output");
 
-        const auto peakOnOtherNote = renderNote(djr::DrumSamplerProcessor::firstPadNote + 5);
+        const auto peakOnOtherNote = renderNote(djr::MidiSamplerProcessor::firstPadNote + 5);
         std::cout << "DIAG peak triggering an unmapped note: " << peakOnOtherNote << "\n";
         check(peakOnOtherNote < 0.01f, "a note with no pad mapped to it stays silent");
 
         sampler.setPadGain(0, 0.1f);
-        const auto peakLowGain = renderNote(djr::DrumSamplerProcessor::firstPadNote);
+        const auto peakLowGain = renderNote(djr::MidiSamplerProcessor::firstPadNote);
         std::cout << "DIAG peak at gain 0.1: " << peakLowGain << "\n";
         check(peakLowGain < peakOnPadNote * 0.3f, "lowering the pad's gain measurably lowers the output");
 
@@ -4748,7 +4748,7 @@ int main()
         // note rather than losing its own trigger silently.
         sampler.setPadMidiNote(0, 40);
         check(sampler.findPadForNote(40) == 0, "moving a pad's note is reflected by findPadForNote");
-        check(sampler.findPadForNote(djr::DrumSamplerProcessor::firstPadNote) == 4,
+        check(sampler.findPadForNote(djr::MidiSamplerProcessor::firstPadNote) == 4,
               "the pad that used to sit on note 40 was swapped onto the note pad 0 gave up, not left without one");
 
         sampler.clearPad(0);

@@ -118,6 +118,13 @@ private:
         to add it by hand.
     */
     void autoAddBuiltInEditorToTrack(int trackIndex);
+    /** Gives a MIDI track the built-in sampler as its instrument, unless it
+        already has one - "New MIDI track" hands this the track it just
+        created, and it also runs once at startup over every MIDI track the
+        mixer already has, so a fresh project never has a track that
+        answers with nothing but the tonal preview voice.
+    */
+    void autoAddMidiSamplerToTrack(int trackIndex);
     /** First audio track at or after the selection, so takes land somewhere sensible. */
     int findAudioTrackForRecording();
     void newProject();

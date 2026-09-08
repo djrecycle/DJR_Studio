@@ -12,24 +12,26 @@ namespace djr
 /** A built-in multi-pad sampler: a fixed number of independent one-shot
     slots, each triggered by its own MIDI note - a kit built from whatever
     WAV/AIFF/FLAC/OGG files the user loads into it, not a fixed factory kit.
+    General-purpose rather than drum-specific - a kick on one pad, a vocal
+    chop on the next, whatever the track actually needs.
 
     Each pad plays back at its own file's native sample rate and channel
     count, resampled to the host's rate by plain linear interpolation - good
-    enough for a one-shot drum hit, and small enough to own outright rather
-    than reach for a general pitch-shifting library for it.
+    enough for a one-shot hit, and small enough to own outright rather than
+    reach for a general pitch-shifting library for it.
 
     No release/looping/pitch controls in this first cut - a pad plays the
     whole file it was given, once, at the pitch it was recorded at, the way
     a drum machine's factory kit works before anyone starts tuning pads.
 */
-class DrumSamplerProcessor final : public juce::AudioPluginInstance
+class MidiSamplerProcessor final : public juce::AudioPluginInstance
 {
 public:
     static const char* const identifier;
     static constexpr int numPads = 16;
-    /** Pad 0 sits on MIDI note 36 (C1 in most GM maps, the usual kick
-        drum note) and each pad after it on the next note up - a familiar
-        starting layout, not a fixed one: every pad's note can be moved.
+    /** Pad 0 sits on MIDI note 36 (C1 in most GM maps, the usual kick drum
+        note - a familiar starting point for a kit, not a requirement) and
+        each pad after it on the next note up. Every pad's note can be moved.
     */
     static constexpr int firstPadNote = 36;
     static constexpr int maxVoices = 32;
@@ -41,7 +43,7 @@ public:
     */
     static bool matches(const juce::PluginDescription& description);
 
-    DrumSamplerProcessor();
+    MidiSamplerProcessor();
 
     struct Pad
     {
@@ -126,7 +128,7 @@ private:
     juce::AudioFormatManager audioFormats;
     double engineSampleRate = 44100.0;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DrumSamplerProcessor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MidiSamplerProcessor)
 };
 
 } // namespace djr
