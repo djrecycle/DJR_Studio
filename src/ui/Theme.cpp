@@ -21,8 +21,14 @@ namespace
         {
             case ThemeVariant::amberStudio: return base.interpolatedWith(hex("ffc857"), 0.055f);
             case ThemeVariant::iceGrey:     return base.interpolatedWith(hex("8fb8ff"), 0.05f);
+            // The default variant's own base hexes were near-neutral dark
+            // grey - blue enough to justify "Neon Dark" in a colour picker,
+            // not enough to read as navy against a real screen. Blended
+            // harder than the two variants above (0.3 rather than ~0.05):
+            // this is the one meant to look like a colour choice on its
+            // own, not a faint studio-lighting shift over black.
             case ThemeVariant::neonDark:
-            default:                        return base;
+            default:                        return base.interpolatedWith(hex("1e3a70"), 0.3f);
         }
     }
 
