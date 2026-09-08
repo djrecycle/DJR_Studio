@@ -217,6 +217,46 @@ namespace
         void setStateInformation(const void*, int) override {}
         void fillInPluginDescription(juce::PluginDescription&) const override {}
     };
+
+    /** Doubles every sample of every channel it is actually given -
+        deliberately not bus-aware the way a real plugin's processBlock is
+        (a real one would restrict itself to its own bus width via
+        getBusBuffer even if handed a wider buffer). That is the point: it
+        lets a test see exactly how many channels, and which ones,
+        processWithChannelAdaptation decided to hand over, by checking the
+        result against a value only that channel count could produce.
+    */
+    class FakeDoublingPluginInstance final : public juce::AudioPluginInstance
+    {
+    public:
+        const juce::String getName() const override { return "Fake Doubling Plugin"; }
+        void prepareToPlay(double, int) override {}
+        void releaseResources() override {}
+
+        void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
+        {
+            channelsSeen = buffer.getNumChannels();
+
+            for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+                buffer.applyGain(channel, 0, buffer.getNumSamples(), 2.0f);
+        }
+
+        int channelsSeen = -1;
+        using juce::AudioProcessor::processBlock;
+        double getTailLengthSeconds() const override { return 0.0; }
+        bool acceptsMidi() const override { return false; }
+        bool producesMidi() const override { return false; }
+        juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+        bool hasEditor() const override { return false; }
+        int getNumPrograms() override { return 0; }
+        int getCurrentProgram() override { return 0; }
+        void setCurrentProgram(int) override {}
+        const juce::String getProgramName(int) override { return {}; }
+        void changeProgramName(int, const juce::String&) override {}
+        void getStateInformation(juce::MemoryBlock&) override {}
+        void setStateInformation(const void*, int) override {}
+        void fillInPluginDescription(juce::PluginDescription&) const override {}
+    };
 }
 
 int main()
@@ -4422,6 +4462,45 @@ int main()
             track.setPluginBypassed(0, true);
             check(track.isPluginBypassed(0), "Track::setPluginBypassed reaches the chain");
         }
+    }
+
+    // --- processWithChannelAdaptation: a plugin narrower than the track ---
+    // (a mono effect on a stereo track, in practice - every track buffer in
+    // this app is stereo) gets every buffer channel downmixed into its own,
+    // and its result spread back across every buffer channel. The bug this
+    // guards against: passing the full-width buffer straight through, which
+    // only ever processes the first channel(s) a plugin's own bus width
+    // covers and leaves the rest sitting there unprocessed, next to a
+    // channel that was.
+    {
+        FakeDoublingPluginInstance mono;
+        mono.setPlayConfigDetails(1, 1, sampleRate, blockSize);
+        mono.prepareToPlay(sampleRate, blockSize);
+
+        check(mono.getTotalNumInputChannels() == 1 && mono.getTotalNumOutputChannels() == 1,
+              "the fake reports the mono layout it was configured with");
+
+        juce::AudioBuffer<float> buffer(2, blockSize);
+        buffer.clear();
+        buffer.setSample(0, 0, 1.0f);
+        buffer.setSample(1, 0, 3.0f);
+
+        // A real chain's own scratch buffer, sized the way PluginChain
+        // actually allocates it - not the track buffer itself, since the
+        // narrower-than-buffer path needs somewhere of its own to build the
+        // downmixed view before spreading the result back.
+        juce::AudioBuffer<float> scratch(djr::PluginChain::maxPluginChannels, blockSize);
+        juce::MidiBuffer midi;
+
+        djr::PluginChain::processWithChannelAdaptation(mono, buffer, midi, scratch);
+
+        check(mono.channelsSeen == 1, "the mono plugin's processBlock only ever saw 1 channel, not the track's 2");
+
+        // Downmix of 1.0 and 3.0 is 2.0; the fake doubles whatever it sees.
+        check(std::abs(buffer.getSample(0, 0) - 4.0f) < 1.0e-4f,
+              "the left channel carries the plugin's processed result (downmix then double)");
+        check(std::abs(buffer.getSample(1, 0) - 4.0f) < 1.0e-4f,
+              "the right channel carries the SAME processed result - not the original, untouched signal sitting next to a processed left");
     }
 
     // --- Lv2TtlInspector: flags plugins whose patch:writable file/string ---

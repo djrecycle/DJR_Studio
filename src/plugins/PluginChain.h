@@ -45,7 +45,12 @@ public:
                                     double sampleRate,
                                     int blockSize);
 
-    /** Runs a plugin that may want more channels than the track buffer carries. */
+    /** Runs a plugin whose own channel count does not match the track
+        buffer's - wider (lent the scratch buffer and copied back) or
+        narrower (every buffer channel downmixed into what the plugin has,
+        its result spread back across every buffer channel - a mono effect
+        on a stereo track being the case this matters for).
+    */
     static void processWithChannelAdaptation(juce::AudioPluginInstance& plugin,
                                              juce::AudioBuffer<float>& buffer,
                                              juce::MidiBuffer& midi,
