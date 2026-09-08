@@ -2,6 +2,7 @@
 
 #include "Theme.h"
 #include "plugins/MidiSamplerProcessor.h"
+#include "plugins/StarterKitSamples.h"
 #include "project/ProjectTrackLayout.h"
 #include "utils/FileUtils.h"
 #include "utils/Logger.h"
@@ -1679,6 +1680,16 @@ void MainComponent::openTrackPlugin(int trackIndex, PluginSlot slot, int insertI
 
 void MainComponent::prepareBuiltInEditor(juce::AudioPluginInstance& plugin, int trackIndex)
 {
+    if (auto* sampler = dynamic_cast<MidiSamplerProcessor*>(&plugin))
+    {
+        // Same folder as the audio editor below: a starter sound this
+        // sampler generates for itself needs somewhere to be written once
+        // the project is saved, and the project's own Samples folder is
+        // where every other piece of this project's audio already lives.
+        sampler->setWorkingFolder(projectManager.getProject().samplesFolder);
+        return;
+    }
+
     auto* editor = dynamic_cast<AudioEditorProcessor*>(&plugin);
 
     if (editor == nullptr)
@@ -2437,6 +2448,16 @@ void MainComponent::autoAddMidiSamplerToTrack(int trackIndex)
             if (target == nullptr || target->hasInstrument())
                 return;
 
+            prepareBuiltInEditor(*instance, trackIndex);
+
+            // A silent 16-pad kit is not what "gives the track a sound"
+            // means - fill in a starter sound matching the track's own
+            // name, synthesised in code rather than any bundled recording,
+            // so the track answers a note before the user has loaded
+            // anything at all.
+            if (auto* sampler = dynamic_cast<MidiSamplerProcessor*>(instance.get()))
+                populateStarterKit(*sampler, target->getName());
+
             target->setInstrument(std::move(instance));
 
             mixerView.repaint();
@@ -2444,6 +2465,46 @@ void MainComponent::autoAddMidiSamplerToTrack(int trackIndex)
             markDirty();
             synchroniseProjectState();
         });
+}
+
+void MainComponent::populateStarterKit(MidiSamplerProcessor& sampler, const juce::String& trackName)
+{
+    const auto sampleRate = audioEngine.getCurrentSampleRate() > 0.0
+                                 ? audioEngine.getCurrentSampleRate() : 44100.0;
+
+    auto load = [&sampler, sampleRate] (int padIndex, juce::AudioBuffer<float> audio, const juce::String& name)
+    {
+        sampler.loadGeneratedSampleIntoPad(padIndex, std::move(audio), sampleRate, name);
+    };
+
+    if (trackName.equalsIgnoreCase("Drums"))
+    {
+        // Pad index = note - firstPadNote, matching the GM notes a real kit
+        // uses for each piece - familiar even before anyone has renamed a pad.
+        load(0, StarterKitSamples::makeKick(sampleRate), "Kick");
+        load(2, StarterKitSamples::makeSnare(sampleRate), "Snare");
+        load(3, StarterKitSamples::makeClap(sampleRate), "Clap");
+        load(6, StarterKitSamples::makeClosedHihat(sampleRate), "Closed Hat");
+        load(10, StarterKitSamples::makeOpenHihat(sampleRate), "Open Hat");
+        return;
+    }
+
+    if (trackName.equalsIgnoreCase("Bass"))
+    {
+        load(0, StarterKitSamples::makeBassPluck(sampleRate), "Bass");
+        return;
+    }
+
+    if (trackName.equalsIgnoreCase("Pad"))
+    {
+        load(0, StarterKitSamples::makePadSwell(sampleRate), "Pad");
+        return;
+    }
+
+    // "Keys" and any other MIDI track's own name: the same general-purpose
+    // pluck, so a track nobody thought to special-case still answers a note
+    // rather than staying silent.
+    load(0, StarterKitSamples::makeKeysPluck(sampleRate), "Keys");
 }
 
 void MainComponent::restorePluginsForTrack(int trackIndex, const juce::Array<juce::var>& pluginStates)

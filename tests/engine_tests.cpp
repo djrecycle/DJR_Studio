@@ -29,6 +29,7 @@
 #include "recording/SampleCapture.h"
 #include "plugins/Lv2TtlInspector.h"
 #include "plugins/MidiSamplerProcessor.h"
+#include "plugins/StarterKitSamples.h"
 
 #include <algorithm>
 #include <iostream>
@@ -4755,6 +4756,101 @@ int main()
         check(! sampler.getPad(0).hasSample(), "clearPad empties the pad");
 
         wav.deleteFile();
+    }
+
+    // --- StarterKitSamples: generated pad content ---------------------------
+    // Every generator should hand back plausible, audible mono audio - not a
+    // claim about how musical it sounds, just that it is not empty or
+    // silent, which an app-level screenshot cannot check.
+    {
+        const auto checkGenerated = [&] (const juce::AudioBuffer<float>& buffer, double minSeconds, const juce::String& label)
+        {
+            check(buffer.getNumChannels() == 1, label + ": is mono");
+            check(buffer.getNumSamples() > static_cast<int>(minSeconds * sampleRate),
+                  label + ": is at least " + juce::String(minSeconds) + "s long");
+            check(buffer.getMagnitude(0, buffer.getNumSamples()) > 0.05f, label + ": is not silent");
+        };
+
+        checkGenerated(djr::StarterKitSamples::makeKick(sampleRate), 0.1, "makeKick");
+        checkGenerated(djr::StarterKitSamples::makeSnare(sampleRate), 0.05, "makeSnare");
+        checkGenerated(djr::StarterKitSamples::makeClosedHihat(sampleRate), 0.02, "makeClosedHihat");
+        checkGenerated(djr::StarterKitSamples::makeOpenHihat(sampleRate), 0.1, "makeOpenHihat");
+        checkGenerated(djr::StarterKitSamples::makeClap(sampleRate), 0.05, "makeClap");
+        checkGenerated(djr::StarterKitSamples::makeBassPluck(sampleRate), 0.3, "makeBassPluck");
+        checkGenerated(djr::StarterKitSamples::makePadSwell(sampleRate), 1.0, "makePadSwell");
+        checkGenerated(djr::StarterKitSamples::makeKeysPluck(sampleRate), 0.2, "makeKeysPluck");
+
+        // The one audible difference between the two hats that a peak check
+        // alone would not catch: the closed hat decays much faster, so it
+        // should come out shorter than the open one.
+        const auto closed = djr::StarterKitSamples::makeClosedHihat(sampleRate);
+        const auto open = djr::StarterKitSamples::makeOpenHihat(sampleRate);
+        check(closed.getNumSamples() < open.getNumSamples(), "the closed hat is shorter than the open hat");
+    }
+
+    // --- MidiSamplerProcessor: generated pad content + persistence ---------
+    // loadGeneratedSampleIntoPad() is what gives a fresh track a sound before
+    // the user has loaded anything - it needs to (a) actually make the pad
+    // playable, and (b) survive a save/reload, since a generated pad starts
+    // with no file behind it at all.
+    {
+        djr::MidiSamplerProcessor sampler;
+        sampler.setPlayConfigDetails(0, 2, sampleRate, blockSize);
+        sampler.prepareToPlay(sampleRate, blockSize);
+
+        auto kick = djr::StarterKitSamples::makeKick(sampleRate);
+        sampler.loadGeneratedSampleIntoPad(0, kick, sampleRate, "Kick");
+        check(sampler.getPad(0).hasSample(), "a generated buffer loaded into a pad reports a sample");
+        check(sampler.getPad(0).name == "Kick", "the pad takes the name it was given");
+
+        const auto renderFirstPad = [&] (djr::MidiSamplerProcessor& target) -> float
+        {
+            target.releaseResources();
+            juce::AudioBuffer<float> buffer(2, blockSize);
+            float peak = 0.0f;
+
+            for (int block = 0; block < 40; ++block)
+            {
+                juce::MidiBuffer midi;
+
+                if (block == 0)
+                    midi.addEvent(juce::MidiMessage::noteOn(1, djr::MidiSamplerProcessor::firstPadNote, (juce::uint8) 100), 0);
+
+                target.processBlock(buffer, midi);
+                peak = juce::jmax(peak, buffer.getMagnitude(0, blockSize));
+            }
+
+            return peak;
+        };
+
+        check(renderFirstPad(sampler) > 0.1f, "a pad filled with a generated sample is actually triggerable");
+
+        // getStateInformation() should write the generated pad's audio out
+        // to a real file (it starts with none), and a fresh instance
+        // restoring that state should end up with the same pad playable
+        // again - not empty, the way it would be if the audio were silently
+        // dropped on save.
+        const auto workingFolder = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                       .getChildFile("djr_sampler_starter_kit_test");
+        workingFolder.deleteRecursively();
+        sampler.setWorkingFolder(workingFolder);
+
+        juce::MemoryBlock state;
+        sampler.getStateInformation(state);
+
+        check(sampler.getPad(0).sourceFile != juce::File(),
+              "getStateInformation() writes a real file behind a generated pad");
+        check(sampler.getPad(0).sourceFile.existsAsFile(), "the file it wrote actually exists on disk");
+
+        djr::MidiSamplerProcessor reloaded;
+        reloaded.setPlayConfigDetails(0, 2, sampleRate, blockSize);
+        reloaded.prepareToPlay(sampleRate, blockSize);
+        reloaded.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+
+        check(reloaded.getPad(0).hasSample(), "a fresh instance restoring that state has the pad back, not empty");
+        check(renderFirstPad(reloaded) > 0.1f, "the reloaded pad is actually triggerable, not just present in name");
+
+        workingFolder.deleteRecursively();
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

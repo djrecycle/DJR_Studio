@@ -62,6 +62,15 @@ public:
         there before. Returns why it failed, or an empty string on success.
     */
     juce::String loadSampleIntoPad(int padIndex, const juce::File& file);
+    /** Takes an already-decoded buffer straight into a pad, bypassing file
+        I/O - what a procedurally generated starter sound uses, and
+        available to anything else that already has audio in memory rather
+        than a file on disk to read. `sourceFile` stays empty, so this pad
+        is not written into the project's saved state as a file reference -
+        there is no file to point back to.
+    */
+    void loadGeneratedSampleIntoPad(int padIndex, juce::AudioBuffer<float> audio,
+                                    double sourceSampleRate, const juce::String& name);
     void clearPad(int padIndex) noexcept;
     void setPadGain(int padIndex, float gain) noexcept;
     /** Moves the pad to a different trigger note. Two pads may not share a
@@ -78,6 +87,13 @@ public:
         the audio thread reads).
     */
     void previewPad(int padIndex) noexcept;
+
+    /** Where a save writes the audio behind a pad that has none on disk yet
+        (a starter sound generated in code, not loaded from a file) - mirrors
+        AudioEditorProcessor::setWorkingFolder, so the host can point both at
+        the same project Samples folder.
+    */
+    void setWorkingFolder(const juce::File& folder);
 
     void fillInPluginDescription(juce::PluginDescription& description) const override;
 
@@ -115,6 +131,11 @@ private:
     };
 
     void triggerPad(int padIndex) noexcept;
+    /** The project's Samples folder when the host has said where that is,
+        falling back to the music folder - same fallback as
+        AudioEditorProcessor::getWorkingFolder, for the same reason.
+    */
+    juce::File getWorkingFolder() const;
 
     std::array<Pad, numPads> pads;
     std::array<Voice, maxVoices> voices;
@@ -127,6 +148,7 @@ private:
     std::array<std::atomic<bool>, numPads> pendingPreviews;
     juce::AudioFormatManager audioFormats;
     double engineSampleRate = 44100.0;
+    juce::File workingFolder;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MidiSamplerProcessor)
 };

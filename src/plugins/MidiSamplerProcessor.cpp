@@ -243,6 +243,31 @@ namespace
         juce::TextButton noteUpButton;
         std::unique_ptr<juce::FileChooser> fileChooser;
     };
+
+    /** Writes `buffer` out as a 16-bit WAV. Used to give a pad filled by
+        loadGeneratedSampleIntoPad() a real file to persist through, the same
+        way a loaded-from-disk pad already has one.
+    */
+    bool writeBufferToWavFile(const juce::AudioBuffer<float>& buffer, double sampleRate, const juce::File& file)
+    {
+        file.deleteFile();
+        std::unique_ptr<juce::FileOutputStream> stream(file.createOutputStream());
+
+        if (stream == nullptr)
+            return false;
+
+        juce::WavAudioFormat wavFormat;
+        std::unique_ptr<juce::AudioFormatWriter> writer(
+            wavFormat.createWriterFor(stream.get(), sampleRate,
+                                      static_cast<unsigned int>(buffer.getNumChannels()), 16, {}, 0));
+
+        if (writer == nullptr)
+            return false;
+
+        // The writer owns the stream from here on.
+        stream.release();
+        return writer->writeFromAudioSampleBuffer(buffer, 0, buffer.getNumSamples());
+    }
 }
 
 const char* const MidiSamplerProcessor::identifier = "djr:builtin:midi-sampler";
@@ -329,6 +354,19 @@ juce::String MidiSamplerProcessor::loadSampleIntoPad(int padIndex, const juce::F
     return {};
 }
 
+void MidiSamplerProcessor::loadGeneratedSampleIntoPad(int padIndex, juce::AudioBuffer<float> audio,
+                                                       double sourceSampleRate, const juce::String& name)
+{
+    if (! juce::isPositiveAndBelow(padIndex, numPads))
+        return;
+
+    auto& pad = pads[static_cast<size_t>(padIndex)];
+    pad.sample = std::move(audio);
+    pad.sampleRate = sourceSampleRate > 0.0 ? sourceSampleRate : 44100.0;
+    pad.sourceFile = juce::File();
+    pad.name = name;
+}
+
 void MidiSamplerProcessor::clearPad(int padIndex) noexcept
 {
     if (! juce::isPositiveAndBelow(padIndex, numPads))
@@ -406,6 +444,19 @@ void MidiSamplerProcessor::triggerPad(int padIndex) noexcept
     stolen.readPosition = 0.0;
     stolen.active = true;
     nextVoiceToSteal = (nextVoiceToSteal + 1) % maxVoices;
+}
+
+void MidiSamplerProcessor::setWorkingFolder(const juce::File& folder)
+{
+    workingFolder = folder;
+}
+
+juce::File MidiSamplerProcessor::getWorkingFolder() const
+{
+    if (workingFolder != juce::File() && workingFolder.createDirectory())
+        return workingFolder;
+
+    return juce::File::getSpecialLocation(juce::File::userMusicDirectory);
 }
 
 void MidiSamplerProcessor::fillInPluginDescription(juce::PluginDescription& description) const
@@ -540,7 +591,22 @@ void MidiSamplerProcessor::getStateInformation(juce::MemoryBlock& destination)
 
     for (int i = 0; i < numPads; ++i)
     {
-        const auto& pad = pads[static_cast<size_t>(i)];
+        auto& pad = pads[static_cast<size_t>(i)];
+
+        // A pad filled by loadGeneratedSampleIntoPad() has audio but no file
+        // behind it - write one now, once, so the starter sound this track
+        // was given survives a reload instead of coming back empty. From
+        // here on this pad is written and restored exactly like one the user
+        // loaded from disk themselves.
+        if (pad.sourceFile == juce::File() && pad.hasSample())
+        {
+            const auto file = getWorkingFolder().getChildFile(
+                "midi-sampler-pad-" + juce::Uuid().toDashedString().substring(0, 8) + ".wav");
+
+            if (writeBufferToWavFile(pad.sample, pad.sampleRate, file))
+                pad.sourceFile = file;
+        }
+
         auto* padXml = state.createNewChildElement("Pad");
         padXml->setAttribute("index", i);
         padXml->setAttribute("midiNote", pad.midiNote);
