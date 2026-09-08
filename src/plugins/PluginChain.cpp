@@ -40,15 +40,59 @@ void PluginChain::processWithChannelAdaptation(juce::AudioPluginInstance& plugin
 {
     const auto required = juce::jmax(plugin.getTotalNumInputChannels(),
                                      plugin.getTotalNumOutputChannels());
+    const auto bufferChannels = buffer.getNumChannels();
 
-    if (required <= buffer.getNumChannels())
+    if (required == bufferChannels)
     {
         plugin.processBlock(buffer, midi);
         return;
     }
 
-    // The plugin wants a wider buffer than the track carries; lend it the
-    // pre-allocated scratch and copy the first channels back.
+    if (required > bufferChannels)
+    {
+        // The plugin wants a wider buffer than the track carries; lend it the
+        // pre-allocated scratch and copy the first channels back.
+        if (required > scratchBuffer.getNumChannels() || buffer.getNumSamples() > scratchBuffer.getNumSamples())
+            return;
+
+        const auto numSamples = buffer.getNumSamples();
+        juce::AudioBuffer<float> view(scratchBuffer.getArrayOfWritePointers(), required, numSamples);
+        view.clear();
+
+        for (int channel = 0; channel < bufferChannels; ++channel)
+            view.copyFrom(channel, 0, buffer, channel, 0, numSamples);
+
+        plugin.processBlock(view, midi);
+
+        for (int channel = 0; channel < bufferChannels; ++channel)
+            buffer.copyFrom(channel, 0, view, channel, 0, numSamples);
+
+        return;
+    }
+
+    // The plugin is narrower than the track - a mono effect (or a mono-only
+    // instrument) sitting on a stereo track is the real case, since every
+    // track buffer in this app is stereo. Passing the buffer through
+    // unmodified here, the way the required == bufferChannels branch does,
+    // would only be half right: a plugin's processBlock only reads and
+    // writes the channels its own buses actually have, via getBusBuffer, so
+    // channel 0 would be processed and every channel after it would pass
+    // through completely untouched - an unprocessed channel sitting next to
+    // a processed one, not a plugin that quietly does nothing. Downmixing
+    // every buffer channel into what the plugin has, then spreading its
+    // result back across every buffer channel, is what a mono insert on a
+    // stereo channel is supposed to sound like.
+    //
+    // A plugin reporting 0 channels either way (a MIDI-only effect with no
+    // audio ports at all) has nothing to downmix into or spread back out of
+    // - call it with the buffer unchanged, same as the equal-channels case
+    // above, so it still gets a chance to process MIDI.
+    if (required <= 0)
+    {
+        plugin.processBlock(buffer, midi);
+        return;
+    }
+
     if (required > scratchBuffer.getNumChannels() || buffer.getNumSamples() > scratchBuffer.getNumSamples())
         return;
 
@@ -56,13 +100,15 @@ void PluginChain::processWithChannelAdaptation(juce::AudioPluginInstance& plugin
     juce::AudioBuffer<float> view(scratchBuffer.getArrayOfWritePointers(), required, numSamples);
     view.clear();
 
-    for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
-        view.copyFrom(channel, 0, buffer, channel, 0, numSamples);
+    const auto downmixScale = 1.0f / (float) bufferChannels;
+
+    for (int channel = 0; channel < bufferChannels; ++channel)
+        view.addFrom(channel % required, 0, buffer, channel, 0, numSamples, downmixScale);
 
     plugin.processBlock(view, midi);
 
-    for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
-        buffer.copyFrom(channel, 0, view, channel, 0, numSamples);
+    for (int channel = 0; channel < bufferChannels; ++channel)
+        buffer.copyFrom(channel, 0, view, channel % required, 0, numSamples);
 }
 
 void PluginChain::addPlugin(std::unique_ptr<juce::AudioPluginInstance> plugin)
