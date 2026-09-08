@@ -53,6 +53,27 @@ public:
     /** Names of the formats this build can host, for the UI to describe itself. */
     static juce::StringArray getHostedFormatNames();
 
+    /** Files that crashed the whole app during a previous scan. run() skips
+        these from then on, on every launch - a crashing file does not fix
+        itself just because the app restarted, and without this a rescan
+        would only crash again on the same one, never reaching whatever came
+        after it in the list.
+    */
+    static juce::StringArray getCrashedPluginBlacklist();
+    /** Lets a blacklisted file be tried again, e.g. after the user updates
+        or replaces whatever was crashing. A no-op if it was never listed.
+    */
+    static void clearCrashedPluginBlacklist(const juce::String& identifier);
+
+    /** LV2 plugins whose own Turtle files declare a patch:writable property
+        JUCE's LV2 hosting cannot read as a parameter (Lv2TtlInspector) -
+        loads and runs fine, but has a control (a file to load, in every
+        known case so far) with no way to be set from this host. Refreshed
+        by every run(), so a plugin update that fixes this - or one that
+        introduces it - is picked up by the next scan.
+    */
+    static juce::StringArray getPluginsWithLimitedFeatures();
+
 private:
     void run() override;
     void reportProgress(const juce::String& what);

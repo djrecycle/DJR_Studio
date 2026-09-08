@@ -93,6 +93,13 @@ private:
         the insert slot loads by library index.
     */
     juce::Array<juce::PluginDescription> plugins;
+    /** LV2 plugins the last scan found with a control JUCE's LV2 hosting
+        cannot read as a parameter (PluginScanner::getPluginsWithLimitedFeatures) -
+        loads and runs fine, but something in it - a file to load, in every
+        known case so far - has no way to be set from this host. Refreshed
+        alongside `plugins`, keyed the same way (fileOrIdentifier).
+    */
+    juce::StringArray limitedFeatureUris;
     juce::Array<int> visibleIndices;
     Group group = Group::all;
     juce::String categoryFilter;

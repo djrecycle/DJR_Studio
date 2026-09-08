@@ -47,6 +47,7 @@ void PluginBrowserView::Model::paintListBoxItem(int row, juce::Graphics& g, int 
     const auto& plugin = owner.plugins.getReference(libraryIndex);
     const auto isInstrument = plugin.isInstrument;
     const auto accent = isInstrument ? Theme::purple() : Theme::cyan();
+    const auto hasLimitedFeatures = owner.limitedFeatureUris.contains(plugin.fileOrIdentifier);
 
     Theme::drawCard(g, bounds,
                     rowIsSelected ? accent.withAlpha(0.14f) : Theme::panelAlt(),
@@ -76,9 +77,14 @@ void PluginBrowserView::Model::paintListBoxItem(int row, juce::Graphics& g, int 
     g.setColour(Theme::text());
     g.setFont(Theme::ui(12.0f, true));
     g.drawText(plugin.name, content.removeFromTop(height / 2).withTrimmedTop(2), juce::Justification::bottomLeft, true);
-    g.setColour(Theme::mutedText());
+    g.setColour(hasLimitedFeatures ? Theme::amber() : Theme::mutedText());
     g.setFont(Theme::ui(10.0f));
-    g.drawText(plugin.manufacturerName, content, juce::Justification::topLeft, true);
+    // A control this host cannot reach - a file to load, in every known
+    // case - is not the same as the plugin being broken, so this says so
+    // right where the manufacturer name already draws attention, rather
+    // than hiding it in a tooltip nobody hovers for long enough to read.
+    g.drawText(plugin.manufacturerName + (hasLimitedFeatures ? TRANS(" - some controls will not work here") : juce::String()),
+               content, juce::Justification::topLeft, true);
 }
 
 void PluginBrowserView::Model::listBoxItemDoubleClicked(int row, const juce::MouseEvent&)
@@ -350,6 +356,7 @@ void PluginBrowserView::showCategoryMenu()
 void PluginBrowserView::refreshList()
 {
     plugins = pluginManager.getKnownPlugins();
+    limitedFeatureUris = PluginScanner::getPluginsWithLimitedFeatures();
 
     // A category that no longer exists after a rescan would hide everything
     // with nothing on screen explaining why.

@@ -1,6 +1,7 @@
 #include "PluginScanner.h"
 
 #include "app/Settings.h"
+#include "plugins/Lv2TtlInspector.h"
 
 #include "utils/Logger.h"
 
@@ -87,6 +88,109 @@ namespace
     {
         return "pluginPaths." + formatName;
     }
+
+    /** A file of its own rather than a couple of Settings keys: run() rewrites
+        this on every single plugin file it scans, and the shared settings
+        file is not the place for that much churn.
+    */
+    juce::File getScanStateFile()
+    {
+        return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+            .getChildFile("DJR_Studio")
+            .getChildFile("plugin-scan-state.xml");
+    }
+
+    juce::PropertySet loadScanState()
+    {
+        juce::PropertySet state;
+        const auto file = getScanStateFile();
+
+        if (! file.existsAsFile())
+            return state;
+
+        if (auto xml = juce::parseXML(file))
+            state.restoreFromXml(*xml);
+
+        return state;
+    }
+
+    void saveScanState(const juce::PropertySet& state)
+    {
+        const auto file = getScanStateFile();
+        file.getParentDirectory().createDirectory();
+
+        if (auto xml = state.createXml("PluginScanState"))
+            xml->writeTo(file);
+    }
+
+    void addToCrashedPluginBlacklist(const juce::String& identifier)
+    {
+        auto state = loadScanState();
+        auto blacklist = juce::StringArray::fromLines(state.getValue("blacklist"));
+
+        if (! blacklist.contains(identifier))
+        {
+            blacklist.add(identifier);
+            state.setValue("blacklist", blacklist.joinIntoString("\n"));
+            saveScanState(state);
+        }
+    }
+
+    /** Marks `identifier` as the one about to go through the one call in the
+        scan loop that can crash the whole app - or, called with an empty
+        string, clears that mark once the call returns safely. Written
+        before the risky call and read back at the very top of the next
+        run(), a crash on this exact identifier is the only way the mark can
+        still be set when that happens - every other exit from run() (finishing,
+        threadShouldExit()) clears it first.
+    */
+    void setInProgressMarker(const juce::String& identifier)
+    {
+        auto state = loadScanState();
+        state.setValue("inProgress", identifier);
+        saveScanState(state);
+    }
+
+    /** Reads the mark left behind by a scan that never came back to clear
+        it, and clears it in the same call so a later crash elsewhere (not
+        while scanning a plugin) cannot be mistaken for this one again.
+    */
+    juce::String takeInProgressMarker()
+    {
+        auto state = loadScanState();
+        const auto identifier = state.getValue("inProgress");
+
+        if (identifier.isNotEmpty())
+        {
+            state.setValue("inProgress", {});
+            saveScanState(state);
+        }
+
+        return identifier;
+    }
+}
+
+juce::StringArray PluginScanner::getCrashedPluginBlacklist()
+{
+    return juce::StringArray::fromLines(loadScanState().getValue("blacklist"));
+}
+
+void PluginScanner::clearCrashedPluginBlacklist(const juce::String& identifier)
+{
+    auto state = loadScanState();
+    auto blacklist = juce::StringArray::fromLines(state.getValue("blacklist"));
+
+    if (! blacklist.contains(identifier))
+        return;
+
+    blacklist.removeString(identifier);
+    state.setValue("blacklist", blacklist.joinIntoString("\n"));
+    saveScanState(state);
+}
+
+juce::StringArray PluginScanner::getPluginsWithLimitedFeatures()
+{
+    return juce::StringArray::fromLines(loadScanState().getValue("limitedFeatures"));
 }
 
 juce::FileSearchPath PluginScanner::getUserPathsFor(const juce::String& formatName)
@@ -181,6 +285,21 @@ void PluginScanner::reportProgress(const juce::String& what)
 
 void PluginScanner::run()
 {
+    // If the last scan never got back here to clear this, this exact file
+    // took the whole app down last time - blacklist it before touching
+    // anything else, or this attempt just crashes on it again too, without
+    // ever reaching whatever came after it in the list.
+    const auto crashedLastTime = takeInProgressMarker();
+
+    if (crashedLastTime.isNotEmpty())
+    {
+        addToCrashedPluginBlacklist(crashedLastTime);
+        Logger::write("Plugin scan: \"" + crashedLastTime
+                      + "\" crashed the previous scan - skipping it from now on.");
+    }
+
+    const auto blacklist = getCrashedPluginBlacklist();
+    juce::StringArray skipped;
     juce::Array<juce::PluginDescription> found;
 
     // Every format the build can host, not a hard coded one. Each format knows
@@ -201,12 +320,26 @@ void PluginScanner::run()
             if (threadShouldExit())
                 break;
 
+            if (blacklist.contains(identifier))
+            {
+                skipped.add(identifier);
+                continue;
+            }
+
             reportProgress(identifier);
 
             // Reads the plugin's metadata; for LV2 that is its manifest rather
-            // than loading any code, so a broken plugin cannot take us with it.
+            // than loading any code, so a broken plugin cannot take us with
+            // it - but for a binary format this can mean dlopen-ing and
+            // running the plugin's own code, which is the one place left
+            // that can bring the whole app down. Marked before the call, not
+            // after: the mark surviving a crash is the whole point of it.
+            setInProgressMarker(identifier);
+
             juce::OwnedArray<juce::PluginDescription> descriptions;
             format->findAllTypesForFile(descriptions, identifier);
+
+            setInProgressMarker({});
 
             for (auto* description : descriptions)
                 if (description != nullptr)
@@ -215,9 +348,25 @@ void PluginScanner::run()
 
         Logger::write(format->getName() + " scan: " + juce::String(identifiers.size())
                       + " file(s) searched.");
+
+        // Independent of the loop above: not about any one identifier, but
+        // about what each LV2 bundle's own Turtle files declare. Refreshed
+        // on every scan of this format, not accumulated, so a plugin that
+        // no longer has the problem (an update, a removal) drops off too.
+        if (format->getName() == "LV2" && ! threadShouldExit())
+        {
+            auto state = loadScanState();
+            state.setValue("limitedFeatures", Lv2TtlInspector::findFlaggedPluginUris(paths).joinIntoString("\n"));
+            saveScanState(state);
+        }
     }
 
     scanning.store(false, std::memory_order_release);
+
+    if (! skipped.isEmpty())
+        Logger::write("Plugin scan: skipped " + juce::String(skipped.size())
+                      + " file(s) that crashed a previous scan: " + skipped.joinIntoString("; "));
+
     Logger::write("Plugin scan complete. Found " + juce::String(found.size()) + " plugin(s).");
 
     ResultCallback callback;

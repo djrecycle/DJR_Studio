@@ -27,6 +27,7 @@
 #include "audio/Metronome.h"
 #include "recording/Recorder.h"
 #include "recording/SampleCapture.h"
+#include "plugins/Lv2TtlInspector.h"
 
 #include <algorithm>
 #include <iostream>
@@ -4421,6 +4422,147 @@ int main()
             track.setPluginBypassed(0, true);
             check(track.isPluginBypassed(0), "Track::setPluginBypassed reaches the chain");
         }
+    }
+
+    // --- Lv2TtlInspector: flags plugins whose patch:writable file/string ---
+    // parameters JUCE's LV2 hosting silently drops, so a plugin like
+    // drumkv1 (which loads and runs fine, but has no way to be given a
+    // sample from this host) can be marked instead of just looking broken.
+    {
+        // The actual shape of drumkv1.ttl's declaration (P101_SAMPLE_FILE),
+        // trimmed to what the parser looks at - a real-world case, not a
+        // synthetic one, since that is the plugin this was written for.
+        const juce::String drumkv1Shaped = R"(
+            @prefix lv2:      <http://lv2plug.in/ns/lv2core#> .
+            @prefix rdfs:     <http://www.w3.org/2000/01/rdf-schema#> .
+            @prefix lv2atom:  <http://lv2plug.in/ns/ext/atom#> .
+            @prefix lv2patch: <http://lv2plug.in/ns/ext/patch#> .
+            @prefix drumkv1_lv2: <http://drumkv1.sourceforge.net/lv2#> .
+
+            <http://drumkv1.sourceforge.net/lv2>
+                a lv2:Plugin, lv2:InstrumentPlugin ;
+                lv2patch:writable drumkv1_lv2:P101_SAMPLE_FILE,
+                    drumkv1_lv2:P102_OFFSET_START ;
+                lv2:port [ a lv2:InputPort ] .
+
+            drumkv1_lv2:P101_SAMPLE_FILE
+                a lv2:Parameter ;
+                rdfs:label "P101 Sample File" ;
+                rdfs:range lv2atom:Path .
+
+            drumkv1_lv2:P102_OFFSET_START
+                a lv2:Parameter ;
+                rdfs:label "P102 Offset Start" ;
+                rdfs:range lv2atom:Long .
+        )";
+
+        check(djr::Lv2TtlInspector::declaresUnsupportedPatchParameter(drumkv1Shaped),
+              "a patch:writable parameter ranged atom:Path is flagged, even with the odd \"lv2atom\"/\"lv2patch\" aliases drumkv1 actually uses");
+
+        const juce::String allNumeric = R"(
+            @prefix lv2:    <http://lv2plug.in/ns/lv2core#> .
+            @prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
+            @prefix atom:   <http://lv2plug.in/ns/ext/atom#> .
+            @prefix patch:  <http://lv2plug.in/ns/ext/patch#> .
+            @prefix eg:     <http://example.org/eg#> .
+
+            <http://example.org/plugin>
+                a lv2:Plugin ;
+                patch:writable eg:gain, eg:enabled .
+
+            eg:gain
+                a lv2:Parameter ;
+                rdfs:range atom:Float .
+
+            eg:enabled
+                a lv2:Parameter ;
+                rdfs:range atom:Bool .
+        )";
+
+        check(! djr::Lv2TtlInspector::declaresUnsupportedPatchParameter(allNumeric),
+              "a plugin whose patch:writable parameters are all numeric is not flagged");
+
+        const juce::String fullUriRange = R"(
+            @prefix lv2:   <http://lv2plug.in/ns/lv2core#> .
+            @prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+            @prefix patch: <http://lv2plug.in/ns/ext/patch#> .
+            @prefix eg:    <http://example.org/eg#> .
+
+            <http://example.org/plugin>
+                a lv2:Plugin ;
+                patch:writable eg:gain .
+
+            eg:gain
+                a lv2:Parameter ;
+                rdfs:range <http://lv2plug.in/ns/ext/atom#Float> .
+        )";
+
+        check(! djr::Lv2TtlInspector::declaresUnsupportedPatchParameter(fullUriRange),
+              "a range spelled as a full <...#Float> URI is recognised as the same safe type");
+
+        const juce::String noPatchAtAll = R"(
+            @prefix lv2: <http://lv2plug.in/ns/lv2core#> .
+            <http://example.org/plugin> a lv2:Plugin .
+        )";
+
+        check(! djr::Lv2TtlInspector::declaresUnsupportedPatchParameter(noPatchAtAll),
+              "a plugin with no patch:writable properties at all is not flagged");
+
+        const juce::String undeclaredRange = R"(
+            @prefix lv2:   <http://lv2plug.in/ns/lv2core#> .
+            @prefix patch: <http://lv2plug.in/ns/ext/patch#> .
+            @prefix eg:    <http://example.org/eg#> .
+
+            <http://example.org/plugin>
+                a lv2:Plugin ;
+                patch:writable eg:mystery .
+        )";
+
+        check(! djr::Lv2TtlInspector::declaresUnsupportedPatchParameter(undeclaredRange),
+              "a writable property with no discoverable range is not flagged - only a confirmed unsupported type is");
+
+        // End to end: a bundle written to a temp folder, manifest.ttl
+        // pointing at a separate file the way real bundles almost always
+        // do, exercising the seeAlso-following and directory walk that the
+        // pure-text checks above do not touch.
+        const auto tempRoot = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                  .getChildFile("djr_lv2_inspector_test");
+        tempRoot.deleteRecursively();
+        const auto bundle = tempRoot.getChildFile("fake.lv2");
+        bundle.createDirectory();
+
+        bundle.getChildFile("manifest.ttl").replaceWithText(R"(
+            @prefix lv2:  <http://lv2plug.in/ns/lv2core#> .
+            @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+            <http://example.org/fake>
+                a lv2:Plugin ;
+                lv2:binary <fake.so> ;
+                rdfs:seeAlso <fake.ttl> .
+        )");
+
+        bundle.getChildFile("fake.ttl").replaceWithText(R"(
+            @prefix lv2:   <http://lv2plug.in/ns/lv2core#> .
+            @prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+            @prefix atom:  <http://lv2plug.in/ns/ext/atom#> .
+            @prefix patch: <http://lv2plug.in/ns/ext/patch#> .
+            @prefix eg:    <http://example.org/eg#> .
+
+            <http://example.org/fake>
+                patch:writable eg:sampleFile .
+
+            eg:sampleFile
+                a lv2:Parameter ;
+                rdfs:range atom:Path .
+        )");
+
+        const juce::FileSearchPath searchPaths(tempRoot.getFullPathName());
+        const auto flagged = djr::Lv2TtlInspector::findFlaggedPluginUris(searchPaths);
+
+        check(flagged.contains("http://example.org/fake"),
+              "findFlaggedPluginUris follows manifest.ttl's rdfs:seeAlso to find the range declared in a separate file");
+
+        tempRoot.deleteRecursively();
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
