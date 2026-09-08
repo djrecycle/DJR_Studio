@@ -28,6 +28,7 @@
 #include "recording/Recorder.h"
 #include "recording/SampleCapture.h"
 #include "plugins/Lv2TtlInspector.h"
+#include "plugins/DrumSamplerProcessor.h"
 
 #include <algorithm>
 #include <iostream>
@@ -4660,6 +4661,100 @@ int main()
               "findFlaggedPluginUris follows manifest.ttl's rdfs:seeAlso to find the range declared in a separate file");
 
         tempRoot.deleteRecursively();
+    }
+
+    // --- DrumSamplerProcessor: pad trigger, gain, note reassignment ---------
+    // Exercises the real class directly (no plugin format manager needed,
+    // it is our own): a real WAV on disk, loaded into a pad, triggered by
+    // MIDI the way Track's own instrument slot would, checked for actual
+    // audio out. Unlike AudioEditorProcessor (timer-driven, async capture -
+    // not worth pulling into the headless suite for that reason), this
+    // class's whole engine is synchronous and deterministic, so it is.
+    {
+        const auto wav = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                             .getChildFile("djr_sampler_diag.wav");
+        wav.deleteFile();
+
+        {
+            juce::WavAudioFormat wavFormat;
+            std::unique_ptr<juce::FileOutputStream> stream(wav.createOutputStream());
+            std::unique_ptr<juce::AudioFormatWriter> writer(
+                wavFormat.createWriterFor(stream.get(), sampleRate, 1, 16, {}, 0));
+
+            if (writer != nullptr)
+            {
+                stream.release();
+                const auto totalSamples = static_cast<int>(sampleRate * 0.3);
+                juce::AudioBuffer<float> tone(1, totalSamples);
+
+                for (int i = 0; i < totalSamples; ++i)
+                    tone.setSample(0, i, 0.8f * std::sin(2.0 * juce::MathConstants<double>::pi * 440.0 * i / sampleRate));
+
+                writer->writeFromAudioSampleBuffer(tone, 0, totalSamples);
+            }
+        }
+
+        djr::DrumSamplerProcessor sampler;
+        sampler.setPlayConfigDetails(0, 2, sampleRate, blockSize);
+        sampler.prepareToPlay(sampleRate, blockSize);
+
+        check(! sampler.getPad(0).hasSample(), "a fresh pad starts empty");
+
+        const auto loadError = sampler.loadSampleIntoPad(0, wav);
+        std::cout << "DIAG sampler load error: [" << loadError << "]\n";
+        check(loadError.isEmpty(), "loading a real WAV into pad 0 succeeds");
+        check(sampler.getPad(0).hasSample(), "pad 0 reports a sample after loading");
+
+        const auto renderNote = [&] (int note) -> float
+        {
+            // releaseResources() stops every voice first - each call starts
+            // clean, or a voice still finishing from the PREVIOUS call (the
+            // sample is 0.3s = ~26 blocks, longer than one render below)
+            // would bleed into this one's measurement.
+            sampler.releaseResources();
+
+            juce::AudioBuffer<float> buffer(2, blockSize);
+            float peak = 0.0f;
+
+            for (int block = 0; block < 30; ++block)
+            {
+                juce::MidiBuffer midi;
+
+                if (block == 0)
+                    midi.addEvent(juce::MidiMessage::noteOn(1, note, (juce::uint8) 100), 0);
+
+                sampler.processBlock(buffer, midi);
+                peak = juce::jmax(peak, buffer.getMagnitude(0, blockSize));
+            }
+
+            return peak;
+        };
+
+        const auto peakOnPadNote = renderNote(djr::DrumSamplerProcessor::firstPadNote);
+        std::cout << "DIAG peak triggering pad 0's own note: " << peakOnPadNote << "\n";
+        check(peakOnPadNote > 0.1f, "triggering pad 0's own MIDI note produces real audio output");
+
+        const auto peakOnOtherNote = renderNote(djr::DrumSamplerProcessor::firstPadNote + 5);
+        std::cout << "DIAG peak triggering an unmapped note: " << peakOnOtherNote << "\n";
+        check(peakOnOtherNote < 0.01f, "a note with no pad mapped to it stays silent");
+
+        sampler.setPadGain(0, 0.1f);
+        const auto peakLowGain = renderNote(djr::DrumSamplerProcessor::firstPadNote);
+        std::cout << "DIAG peak at gain 0.1: " << peakLowGain << "\n";
+        check(peakLowGain < peakOnPadNote * 0.3f, "lowering the pad's gain measurably lowers the output");
+
+        // Note 40 is pad 4's own default note (firstPadNote + 4) - moving pad
+        // 0 onto it is a swap, not a steal: pad 4 should land on pad 0's old
+        // note rather than losing its own trigger silently.
+        sampler.setPadMidiNote(0, 40);
+        check(sampler.findPadForNote(40) == 0, "moving a pad's note is reflected by findPadForNote");
+        check(sampler.findPadForNote(djr::DrumSamplerProcessor::firstPadNote) == 4,
+              "the pad that used to sit on note 40 was swapped onto the note pad 0 gave up, not left without one");
+
+        sampler.clearPad(0);
+        check(! sampler.getPad(0).hasSample(), "clearPad empties the pad");
+
+        wav.deleteFile();
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

@@ -126,6 +126,7 @@ set(DJR_STUDIO_SOURCES
     src/audio/AudioEngine.cpp
     src/plugins/PluginManager.cpp
     src/plugins/AudioEditorProcessor.cpp
+    src/plugins/DrumSamplerProcessor.cpp
     src/plugins/PluginScanner.cpp
     src/plugins/PluginWindow.cpp
     src/project/ProjectManager.cpp
