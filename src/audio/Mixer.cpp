@@ -20,8 +20,21 @@ Mixer::Mixer()
     drums->setPreviewDrumKit(true);
     addTrack(std::move(drums));
 
-    addTrack(std::make_unique<MidiTrack>("Bass"));
-    addTrack(std::make_unique<MidiTrack>("Pad"));
+    // Bass and Pad get no plugin either, same as Drums - without their own
+    // waveform and envelope they would default to the exact same plain sine
+    // tone as everything else, which is silent-in-spirit even though it is
+    // technically audible: nothing about it says "bass" or "pad" until a
+    // real instrument replaces it.
+    auto bass = std::make_unique<MidiTrack>("Bass");
+    bass->getPreviewSynth().setWaveform(SimpleSynth::Waveform::saw);
+    bass->getPreviewSynth().setEnvelope({ 0.002f, 0.08f, 0.85f, 0.08f });
+    addTrack(std::move(bass));
+
+    auto pad = std::make_unique<MidiTrack>("Pad");
+    pad->getPreviewSynth().setWaveform(SimpleSynth::Waveform::triangle);
+    pad->getPreviewSynth().setEnvelope({ 0.4f, 0.3f, 0.8f, 0.6f });
+    addTrack(std::move(pad));
+
     addTrack(std::make_unique<AudioTrack>("Vox"));
     addTrack(std::make_unique<AudioTrack>("FX"));
     addTrack(std::make_unique<MidiTrack>("Keys"));
