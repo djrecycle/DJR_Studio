@@ -1,5 +1,6 @@
 #include "DJRStudioApplication.h"
 
+#include "BinaryData.h"
 #include "Localisation.h"
 #include "MainWindow.h"
 #include "utils/Logger.h"
@@ -31,12 +32,25 @@ void DJRStudioApplication::initialise(const juce::String& commandLine)
     juce::ignoreUnused(commandLine);
     Logger::write("Starting DJR_Studio " + getApplicationVersion());
 
+    // Up first, before anything that takes real time to build - plugin
+    // scanning and MainComponent's own panel tree included - the way a DAW's
+    // splash covers its own startup rather than leaving a blank screen.
+    splashScreen = new juce::SplashScreen(
+        getApplicationName(),
+        juce::ImageCache::getFromMemory(BinaryData::splash_png, BinaryData::splash_pngSize),
+        false);
+
     // Before the window exists. The panels are members of MainComponent, so
     // their constructors - which is where chip labels and placeholders are set
     // - run before MainComponent's own constructor body ever would.
     Localisation::setLanguage(Localisation::loadSavedChoice());
 
     mainWindow = std::make_unique<MainWindow>(getApplicationName());
+
+    // Measured from the splash's own construction, not from here - so a slow
+    // first-run plugin scan doesn't linger any longer than it already did,
+    // and a fast startup still shows the logo long enough to register.
+    splashScreen->deleteAfterDelay(juce::RelativeTime::seconds(1.2), true);
 }
 
 void DJRStudioApplication::shutdown()
