@@ -1,5 +1,6 @@
 #include "PluginManager.h"
 
+#include "Lv2UiLibraryPinning.h"
 #include "utils/Logger.h"
 
 namespace djr
@@ -149,11 +150,18 @@ void PluginManager::createPluginAsync(const juce::PluginDescription& description
     }
 
     formatManager.createPluginInstanceAsync(description, sampleRate, blockSize,
-        [completion = std::move(completion)] (std::unique_ptr<juce::AudioPluginInstance> instance,
-                                              const juce::String& error)
+        [description, completion = std::move(completion)] (std::unique_ptr<juce::AudioPluginInstance> instance,
+                                                            const juce::String& error)
         {
             if (error.isNotEmpty())
                 Logger::write("Plugin load failed: " + error);
+
+            // Before the instance reaches anything that might open an editor
+            // for it - see Lv2UiLibraryPinning.h for why a GTK-based LV2 UI
+            // needs this done ahead of time, not reactively once a problem
+            // already showed up.
+            if (instance != nullptr)
+                Lv2UiLibraryPinning::pinLibrariesFor(description, PluginScanner::getExtraPathsFor(description.pluginFormatName));
 
             if (completion)
                 completion(std::move(instance), error);
