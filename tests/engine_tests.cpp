@@ -28,6 +28,7 @@
 #include "recording/Recorder.h"
 #include "recording/SampleCapture.h"
 #include "plugins/Lv2TtlInspector.h"
+#include "plugins/Lv2UiLibraryPinning.h"
 #include "plugins/MidiSamplerProcessor.h"
 #include "plugins/StarterKitSamples.h"
 #include "plugins/PluginWindow.h"
@@ -5055,6 +5056,70 @@ int main()
                   << delayedBounds.getWidth() << "x" << delayedBounds.getHeight() << "\n";
         check(delayedBounds.getWidth() == 500,
               "an editor that resizes itself within the grace period keeps its own editor, not the fallback");
+    }
+
+    // --- Lv2UiLibraryPinning: pins a bundle's libraries once, idempotently -
+    // A synthetic bundle, not a real installed plugin: a real LV2 plugin
+    // (AVLdrumkits, used to diagnose the bug this exists for) is a
+    // local-machine convenience, not something CI has installed. This test
+    // builds its own tiny bundle out of files guaranteed to exist wherever
+    // this test binary itself can build and link: a real ELF shared library
+    // (this test target already links libasound, so it is on disk wherever
+    // this binary is) copied in as the "plugin's" own .so, under a
+    // manifest.ttl this test writes declaring a made-up URI - through a
+    // @prefix shorthand, not spelled out in full, because that is how a
+    // real manifest.ttl is conventionally written (AVLdrumkits' own
+    // included) and a first cut of this matched only the spelled-out form:
+    // it silently found nothing for every real-world plugin it was ever
+    // actually asked about, discovered only once the field report showed
+    // this fix had not actually stopped the hang it was meant to.
+    {
+        const auto tempRoot = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                  .getChildFile("djr_lv2_pinning_test");
+        tempRoot.deleteRecursively();
+        const auto bundle = tempRoot.getChildFile("fake.lv2");
+        bundle.createDirectory();
+
+        const juce::String fakeUri = "http://example.invalid/fake#plugin";
+        bundle.getChildFile("manifest.ttl").replaceWithText(
+            "@prefix fake: <http://example.invalid/fake#> .\n\n"
+            "fake:plugin\n    a <http://lv2plug.in/ns/lv2core#Plugin> .\n");
+
+        juce::File realLibrary("/usr/lib/x86_64-linux-gnu/libasound.so");
+
+        if (! realLibrary.existsAsFile())
+            realLibrary = juce::File("/usr/lib/libasound.so");
+
+        check(realLibrary.existsAsFile(), "a real shared library is available to build the synthetic bundle from");
+        realLibrary.copyFileTo(bundle.getChildFile("fake_plugin.so"));
+
+        juce::FileSearchPath searchPaths;
+        searchPaths.add(tempRoot);
+
+        juce::PluginDescription fakePlugin;
+        fakePlugin.pluginFormatName = "LV2";
+        fakePlugin.fileOrIdentifier = fakeUri;
+
+        const auto pinnedBefore = djr::Lv2UiLibraryPinning::getPinnedCount();
+        djr::Lv2UiLibraryPinning::pinLibrariesFor(fakePlugin, searchPaths);
+        const auto afterFirst = djr::Lv2UiLibraryPinning::getPinnedCount();
+
+        std::cout << "DIAG Lv2UiLibraryPinning pinned count before/after: " << pinnedBefore << "/" << afterFirst << "\n";
+        check(afterFirst == pinnedBefore + 1, "pinning a plugin's bundle pins its one real shared library");
+        check(djr::Lv2UiLibraryPinning::isPinned(bundle.getChildFile("fake_plugin.so")),
+              "the specific library this bundle owns is the one reported pinned");
+
+        djr::Lv2UiLibraryPinning::pinLibrariesFor(fakePlugin, searchPaths);
+        check(djr::Lv2UiLibraryPinning::getPinnedCount() == afterFirst,
+              "pinning the same plugin again does not pin its library a second time");
+
+        juce::PluginDescription notLv2;
+        notLv2.pluginFormatName = "VST3";
+        notLv2.fileOrIdentifier = fakeUri;
+        djr::Lv2UiLibraryPinning::pinLibrariesFor(notLv2, searchPaths);
+        check(djr::Lv2UiLibraryPinning::getPinnedCount() == afterFirst, "a non-LV2 description is a no-op");
+
+        tempRoot.deleteRecursively();
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
