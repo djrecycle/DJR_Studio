@@ -21,7 +21,15 @@ target_sources(djr_studio_engine_tests PRIVATE
     # editor itself is never instantiated by the test.
     ${CMAKE_SOURCE_DIR}/src/ui/UiControls.cpp
     ${CMAKE_SOURCE_DIR}/src/ui/Icons.cpp
-    ${CMAKE_SOURCE_DIR}/src/plugins/MidiSamplerProcessor.cpp)
+    ${CMAKE_SOURCE_DIR}/src/plugins/MidiSamplerProcessor.cpp
+    # PluginShell's zero-size-editor guard (see its test block in
+    # engine_tests.cpp) is plain Component logic with no window/peer
+    # involved, so it is headless-testable the same way - Knob.cpp and
+    # PreviewSynthPanel.cpp are pulled in only to satisfy what PluginWindow.cpp
+    # itself references, neither is instantiated by the test.
+    ${CMAKE_SOURCE_DIR}/src/ui/Knob.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/PreviewSynthPanel.cpp
+    ${CMAKE_SOURCE_DIR}/src/plugins/PluginWindow.cpp)
 
 target_include_directories(djr_studio_engine_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
