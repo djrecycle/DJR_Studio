@@ -30,6 +30,7 @@
 #include "plugins/Lv2TtlInspector.h"
 #include "plugins/MidiSamplerProcessor.h"
 #include "plugins/StarterKitSamples.h"
+#include "plugins/PluginWindow.h"
 
 #include <algorithm>
 #include <iostream>
@@ -4955,6 +4956,66 @@ int main()
                   << naturalBlocks << "/" << withFallbackPresent << "\n";
         check(withFallbackPresent >= naturalBlocks - 2 && withFallbackPresent <= naturalBlocks + 2,
               "the exact-match pad still answers its own note, unaffected by a keyboard-mode pad that could also claim it");
+    }
+
+    // --- PluginShell: a plugin editor that never got a real size is refused -
+    // A plugin's native GUI can fail to construct itself (a broken or
+    // unavailable OpenGL context on the host system, for one) while
+    // createEditorIfNeeded() still hands back a real, non-null Component -
+    // one that was never given real bounds, because whatever is actually
+    // behind it never formed. Reported in the field: AVLdrumkits' GL-based
+    // LV2 UI segfaulted DJR_Studio outright on a machine whose GLX was
+    // broken, well after createEditorIfNeeded() returned a technically
+    // non-null editor. PluginShell must treat a zero-size editor the same as
+    // no editor at all, falling back to the generic parameter panel, rather
+    // than trying to embed and display whatever is behind it.
+    {
+        class ZeroSizeEditor final : public juce::AudioProcessorEditor
+        {
+        public:
+            explicit ZeroSizeEditor(juce::AudioProcessor& p) : juce::AudioProcessorEditor(p) {}
+            // Deliberately no setSize() call - this is the broken shape a
+            // plugin's own failed GUI creation leaves behind.
+        };
+
+        class BrokenEditorProcessor final : public juce::AudioProcessor
+        {
+        public:
+            BrokenEditorProcessor() : juce::AudioProcessor(BusesProperties()) {}
+
+            const juce::String getName() const override { return "Broken"; }
+            void prepareToPlay(double, int) override {}
+            void releaseResources() override {}
+            using juce::AudioProcessor::processBlock;
+            void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override {}
+            double getTailLengthSeconds() const override { return 0.0; }
+            bool acceptsMidi() const override { return false; }
+            bool producesMidi() const override { return false; }
+            bool hasEditor() const override { return true; }
+            juce::AudioProcessorEditor* createEditor() override { return new ZeroSizeEditor(*this); }
+            int getNumPrograms() override { return 1; }
+            int getCurrentProgram() override { return 0; }
+            void setCurrentProgram(int) override {}
+            const juce::String getProgramName(int) override { return {}; }
+            void changeProgramName(int, const juce::String&) override {}
+            void getStateInformation(juce::MemoryBlock&) override {}
+            void setStateInformation(const void*, int) override {}
+        };
+
+        BrokenEditorProcessor brokenProcessor;
+        djr::PluginShell shell(&brokenProcessor, nullptr);
+
+        const auto bounds = shell.getPreferredBounds();
+        std::cout << "DIAG PluginShell bounds with a broken (zero-size) native editor: "
+                  << bounds.getWidth() << "x" << bounds.getHeight() << "\n";
+
+        // getPreferredBounds() only reports the hardcoded 640-wide default
+        // when it is still looking at the broken zero-size editor - a real
+        // fallback to the generic parameter panel sizes to its own natural
+        // width instead (at least 460, per its own construction), which for
+        // this parameterless stub will not land on exactly 640.
+        check(bounds.getWidth() != 640,
+              "a zero-size native editor is not embedded as though it had succeeded");
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

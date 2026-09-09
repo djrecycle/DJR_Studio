@@ -63,8 +63,30 @@ PluginShell::PluginShell(juce::AudioProcessor* processor, Track* track)
     if (audioProcessor != nullptr)
     {
         if (audioProcessor->hasEditor())
+        {
             if (auto* editor = audioProcessor->createEditorIfNeeded())
-                generatorEditor.reset(editor);
+            {
+                // A plugin's own native GUI can fail to construct itself - a
+                // broken or unavailable OpenGL context on the host system, for
+                // one - while createEditorIfNeeded() still hands back a real,
+                // non-null Component: whatever was actually meant to be behind
+                // it never formed, so it was never given real bounds either.
+                // Embedding and displaying it anyway is what turned exactly
+                // this into a crash in the field (AVLdrumkits' GL-based LV2
+                // UI, well past this point) rather than a blank window, so a
+                // zero-size editor is refused here and treated the same as no
+                // editor at all.
+                if (editor->getWidth() > 0 && editor->getHeight() > 0)
+                {
+                    generatorEditor.reset(editor);
+                }
+                else
+                {
+                    audioProcessor->editorBeingDeleted(editor);
+                    delete editor;
+                }
+            }
+        }
 
         if (generatorEditor == nullptr)
         {
