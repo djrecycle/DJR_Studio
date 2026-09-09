@@ -48,6 +48,26 @@ namespace
     {
         return bounds.reduced(8, 6).withTrimmedTop(sectionHeader);
     }
+
+    /** Stands in for the generator page when a plugin's native GUI could not
+        be shown (see the zero-size-editor guard in PluginShell's constructor)
+        and it also has no automatable parameters for the generic panel to
+        list - a plugin whose only real controls live inside the GUI that
+        just failed. An empty page there reads as broken; this says why.
+    */
+    class NoControlsNotice final : public juce::Component
+    {
+    public:
+        void paint(juce::Graphics& g) override
+        {
+            g.setColour(Theme::mutedText());
+            g.setFont(Theme::ui(13.0f));
+            g.drawFittedText(
+                TRANS("This plugin's own window could not be shown, and it has no "
+                      "adjustable parameters to display here instead."),
+                getLocalBounds().reduced(24), juce::Justification::centred, 4);
+        }
+    };
 }
 
 PluginShell::PluginShell(juce::AudioProcessor* processor, Track* track)
@@ -90,10 +110,24 @@ PluginShell::PluginShell(juce::AudioProcessor* processor, Track* track)
 
         if (generatorEditor == nullptr)
         {
-            auto* generic = new juce::GenericAudioProcessorEditor(*audioProcessor);
-            const auto height = juce::jlimit(200, 560, generic->getHeight());
-            generic->setSize(juce::jmax(460, generic->getWidth()), height);
-            generatorEditor.reset(generic);
+            // A plugin with no automatable parameters gives the generic panel
+            // nothing to list either - it would render as an empty page with
+            // no explanation, indistinguishable from something broken. The
+            // notice says outright what generatorEditor == nullptr already
+            // meant: there is genuinely nothing to show here.
+            if (audioProcessor->getParameters().isEmpty())
+            {
+                auto* notice = new NoControlsNotice();
+                notice->setSize(460, 200);
+                generatorEditor.reset(notice);
+            }
+            else
+            {
+                auto* generic = new juce::GenericAudioProcessorEditor(*audioProcessor);
+                const auto height = juce::jlimit(200, 560, generic->getHeight());
+                generic->setSize(juce::jmax(460, generic->getWidth()), height);
+                generatorEditor.reset(generic);
+            }
         }
     }
     else if (auto* midiTrack = dynamic_cast<MidiTrack*>(channelTrack))
