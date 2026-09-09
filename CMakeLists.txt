@@ -171,6 +171,7 @@ set(DJR_STUDIO_SOURCES
 juce_add_binary_data(djr_studio_binary_data
     SOURCES
         docs/branding/watermark.png
+        docs/branding/splash.png
         packaging/icons/djr_studio.png)
 
 juce_add_gui_app(djr_studio
