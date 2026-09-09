@@ -3,6 +3,8 @@
 #include "ui/MainComponent.h"
 #include "ui/Theme.h"
 
+#include "BinaryData.h"
+
 namespace djr
 {
 
@@ -25,6 +27,14 @@ MainWindow::MainWindow(juce::String name)
     centreWithSize(juce::jmin(1600, userArea.getWidth()),
                    juce::jmin(1000, userArea.getHeight()));
     setVisible(true);
+
+    // DocumentWindow::setIcon() only feeds JUCE's own title-bar painting,
+    // which setUsingNativeTitleBar(true) above disables - the taskbar/
+    // window-list icon the OS actually shows is set on the peer itself
+    // (X11's _NET_WM_ICON on Linux), which only exists once the window is
+    // visible, hence this coming after setVisible() rather than before it.
+    if (auto* peer = getPeer())
+        peer->setIcon(juce::ImageCache::getFromMemory(BinaryData::djr_studio_png, BinaryData::djr_studio_pngSize));
 }
 
 MainWindow::~MainWindow() = default;

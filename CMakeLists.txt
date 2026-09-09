@@ -163,9 +163,15 @@ set(DJR_STUDIO_SOURCES
 # Compiled into the binary rather than loaded from disk at runtime: a
 # watermark is small, never changes, and this way it works identically
 # whether the app is run from the build directory or installed - no
-# resource-path resolution to get right for it.
+# resource-path resolution to get right for it. The app icon rides along
+# for the same reason: ICON_BIG below only feeds macOS/Windows/iOS
+# packaging (JUCE's CMake has no Linux branch for it at all), so showing
+# this icon on Linux needs a runtime peer->setIcon() call - see
+# MainWindow.cpp.
 juce_add_binary_data(djr_studio_binary_data
-    SOURCES docs/branding/watermark.png)
+    SOURCES
+        docs/branding/watermark.png
+        packaging/icons/djr_studio.png)
 
 juce_add_gui_app(djr_studio
     PRODUCT_NAME "DJR_Studio"
