@@ -35,6 +35,12 @@ target_include_directories(djr_studio_engine_tests PRIVATE ${CMAKE_SOURCE_DIR}/s
 
 target_compile_definitions(djr_studio_engine_tests
     PRIVATE
+        # Needed to pump PluginShell's editor-resize grace period with
+        # runDispatchLoopUntil() in its test (engine_tests.cpp) - this test
+        # console app has no running event loop of its own otherwise. Not
+        # defined for the shipped app (CMakeLists.txt), which uses JUCE's
+        # async APIs instead.
+        JUCE_MODAL_LOOPS_PERMITTED=1
         JUCE_APPLICATION_NAME_STRING="DJR_Studio Engine Tests"
         JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
         JUCE_REPORT_APP_USAGE=0

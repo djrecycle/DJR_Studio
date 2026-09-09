@@ -4958,32 +4958,49 @@ int main()
               "the exact-match pad still answers its own note, unaffected by a keyboard-mode pad that could also claim it");
     }
 
-    // --- PluginShell: a plugin editor that never got a real size is refused -
-    // A plugin's native GUI can fail to construct itself (a broken or
-    // unavailable OpenGL context on the host system, for one) while
-    // createEditorIfNeeded() still hands back a real, non-null Component -
-    // one that was never given real bounds, because whatever is actually
-    // behind it never formed. Reported in the field: AVLdrumkits' GL-based
-    // LV2 UI segfaulted DJR_Studio outright on a machine whose GLX was
-    // broken, well after createEditorIfNeeded() returned a technically
-    // non-null editor. PluginShell must treat a zero-size editor the same as
-    // no editor at all, falling back to the generic parameter panel, rather
-    // than trying to embed and display whatever is behind it.
+    // --- PluginShell: a zero-size editor is given a grace period, not
+    // refused outright -----------------------------------------------------
+    // A plugin's native GUI can come back from createEditorIfNeeded() as a
+    // real, non-null Component that has not yet been given real bounds -
+    // some LV2 UIs negotiate their size asynchronously, once their own
+    // toolkit has had a chance to realise its window. First cut of this
+    // guard rejected a zero-size editor immediately, which is exactly what
+    // broke a plugin (AVLdrumkits) that was, on the machine that reported
+    // it, actually working - fixing that machine's OpenGL made the crash
+    // this guard exists for go away, but the immediate rejection then threw
+    // away the now-working editor anyway, because its resize genuinely
+    // hadn't arrived by the time the check ran. So: given the benefit of the
+    // doubt immediately, swapped for the fallback only if it is still
+    // zero-size once editorSizeGracePeriodMs has actually elapsed.
     {
         class ZeroSizeEditor final : public juce::AudioProcessorEditor
         {
         public:
             explicit ZeroSizeEditor(juce::AudioProcessor& p) : juce::AudioProcessorEditor(p) {}
-            // Deliberately no setSize() call - this is the broken shape a
-            // plugin's own failed GUI creation leaves behind.
+            // Deliberately no setSize() call, ever - this is the genuinely
+            // broken shape: a plugin's own failed GUI creation that will
+            // never size itself, not just one running late.
         };
 
-        class BrokenEditorProcessor final : public juce::AudioProcessor
+        // Resizes itself shortly after construction - the shape a plugin
+        // whose UI negotiates its size asynchronously leaves behind on a
+        // machine where its GUI actually works.
+        class DelayedResizeEditor final : public juce::AudioProcessorEditor
         {
         public:
-            BrokenEditorProcessor() : juce::AudioProcessor(BusesProperties()) {}
+            explicit DelayedResizeEditor(juce::AudioProcessor& p) : juce::AudioProcessorEditor(p)
+            {
+                juce::Timer::callAfterDelay(80, [this] { setSize(500, 300); });
+            }
+        };
 
-            const juce::String getName() const override { return "Broken"; }
+        class StubProcessor final : public juce::AudioProcessor
+        {
+        public:
+            explicit StubProcessor(std::function<juce::AudioProcessorEditor*(juce::AudioProcessor&)> makeEditor)
+                : juce::AudioProcessor(BusesProperties()), createEditorFn(std::move(makeEditor)) {}
+
+            const juce::String getName() const override { return "Stub"; }
             void prepareToPlay(double, int) override {}
             void releaseResources() override {}
             using juce::AudioProcessor::processBlock;
@@ -4992,7 +5009,7 @@ int main()
             bool acceptsMidi() const override { return false; }
             bool producesMidi() const override { return false; }
             bool hasEditor() const override { return true; }
-            juce::AudioProcessorEditor* createEditor() override { return new ZeroSizeEditor(*this); }
+            juce::AudioProcessorEditor* createEditor() override { return createEditorFn(*this); }
             int getNumPrograms() override { return 1; }
             int getCurrentProgram() override { return 0; }
             void setCurrentProgram(int) override {}
@@ -5000,22 +5017,44 @@ int main()
             void changeProgramName(int, const juce::String&) override {}
             void getStateInformation(juce::MemoryBlock&) override {}
             void setStateInformation(const void*, int) override {}
+
+        private:
+            std::function<juce::AudioProcessorEditor*(juce::AudioProcessor&)> createEditorFn;
         };
 
-        BrokenEditorProcessor brokenProcessor;
-        djr::PluginShell shell(&brokenProcessor, nullptr);
+        StubProcessor brokenProcessor([] (juce::AudioProcessor& p) -> juce::AudioProcessorEditor*
+                                      { return new ZeroSizeEditor(p); });
+        djr::PluginShell brokenShell(&brokenProcessor, nullptr);
 
-        const auto bounds = shell.getPreferredBounds();
-        std::cout << "DIAG PluginShell bounds with a broken (zero-size) native editor: "
-                  << bounds.getWidth() << "x" << bounds.getHeight() << "\n";
+        const auto immediateBounds = brokenShell.getPreferredBounds();
+        std::cout << "DIAG PluginShell bounds immediately after a zero-size editor: "
+                  << immediateBounds.getWidth() << "x" << immediateBounds.getHeight() << "\n";
+        check(immediateBounds.getWidth() == 640,
+              "a zero-size editor is embedded as-is immediately, given the benefit of the doubt");
 
-        // getPreferredBounds() only reports the hardcoded 640-wide default
-        // when it is still looking at the broken zero-size editor - a real
-        // fallback to the generic parameter panel sizes to its own natural
-        // width instead (at least 460, per its own construction), which for
-        // this parameterless stub will not land on exactly 640.
-        check(bounds.getWidth() != 640,
-              "a zero-size native editor is not embedded as though it had succeeded");
+        // Past the grace period, with no resize ever arriving.
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(
+            djr::PluginShell::editorSizeGracePeriodMs + 300);
+
+        const auto brokenBounds = brokenShell.getPreferredBounds();
+        std::cout << "DIAG PluginShell bounds once the grace period elapsed: "
+                  << brokenBounds.getWidth() << "x" << brokenBounds.getHeight() << "\n";
+        check(brokenBounds.getWidth() != 640,
+              "an editor still zero-size once its grace period elapses is swapped for the fallback");
+
+        StubProcessor delayedProcessor([] (juce::AudioProcessor& p) -> juce::AudioProcessorEditor*
+                                       { return new DelayedResizeEditor(p); });
+        djr::PluginShell delayedShell(&delayedProcessor, nullptr);
+
+        // The stub's own resize (80ms) has time to land, comfortably inside
+        // the grace period (2000ms) - nowhere near long enough to swap it.
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(300);
+
+        const auto delayedBounds = delayedShell.getPreferredBounds();
+        std::cout << "DIAG PluginShell bounds after an in-time delayed resize: "
+                  << delayedBounds.getWidth() << "x" << delayedBounds.getHeight() << "\n";
+        check(delayedBounds.getWidth() == 500,
+              "an editor that resizes itself within the grace period keeps its own editor, not the fallback");
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

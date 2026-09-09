@@ -32,9 +32,17 @@ class PluginShell final : public juce::Component,
                           private juce::Button::Listener,
                           private juce::Slider::Listener,
                           private juce::ComboBox::Listener,
-                          private juce::ComponentListener
+                          private juce::ComponentListener,
+                          private juce::Timer
 {
 public:
+    /** How long a plugin editor that came back at zero size is given to
+        report a real one before it is treated as broken - see the
+        constructor and timerCallback(). Public so tests can pump exactly
+        this long rather than guess at (or duplicate) the real value.
+    */
+    static constexpr int editorSizeGracePeriodMs = 2000;
+
     /** `processor` is the generator this channel holds, or nullptr when the
         track has none and is still playing through its preview synth. The
         channel's own pages work either way - they belong to the track, not to
@@ -79,6 +87,18 @@ private:
         and some resize themselves later on. The window follows it.
     */
     void componentMovedOrResized(juce::Component& component, bool moved, bool resized) override;
+    /** Fires once editorSizeGracePeriodMs has passed since a zero-size
+        editor was embedded, unless componentMovedOrResized() already
+        cancelled it by then - swaps to the fallback if the editor is still
+        zero-size, otherwise does nothing (it sized itself in time).
+    */
+    void timerCallback() override;
+    /** The generic parameter panel, or (for a plugin with no automatable
+        parameters at all) a short notice explaining there is nothing to
+        show - what an editor that never showed up, or never sized itself,
+        is replaced by.
+    */
+    std::unique_ptr<juce::Component> buildFallbackEditor() const;
     void sliderValueChanged(juce::Slider* slider) override;
     void comboBoxChanged(juce::ComboBox* box) override;
     void showPage(Page page);
