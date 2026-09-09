@@ -48,6 +48,26 @@ namespace
     {
         return bounds.reduced(8, 6).withTrimmedTop(sectionHeader);
     }
+
+    /** Stands in for the generator page when a plugin's native GUI could not
+        be shown (see the zero-size-editor guard in PluginShell's constructor)
+        and it also has no automatable parameters for the generic panel to
+        list - a plugin whose only real controls live inside the GUI that
+        just failed. An empty page there reads as broken; this says why.
+    */
+    class NoControlsNotice final : public juce::Component
+    {
+    public:
+        void paint(juce::Graphics& g) override
+        {
+            g.setColour(Theme::mutedText());
+            g.setFont(Theme::ui(13.0f));
+            g.drawFittedText(
+                TRANS("This plugin's own window could not be shown, and it has no "
+                      "adjustable parameters to display here instead."),
+                getLocalBounds().reduced(24), juce::Justification::centred, 4);
+        }
+    };
 }
 
 PluginShell::PluginShell(juce::AudioProcessor* processor, Track* track)
@@ -63,37 +83,29 @@ PluginShell::PluginShell(juce::AudioProcessor* processor, Track* track)
     if (audioProcessor != nullptr)
     {
         if (audioProcessor->hasEditor())
-        {
             if (auto* editor = audioProcessor->createEditorIfNeeded())
-            {
-                // A plugin's own native GUI can fail to construct itself - a
-                // broken or unavailable OpenGL context on the host system, for
-                // one - while createEditorIfNeeded() still hands back a real,
-                // non-null Component: whatever was actually meant to be behind
-                // it never formed, so it was never given real bounds either.
-                // Embedding and displaying it anyway is what turned exactly
-                // this into a crash in the field (AVLdrumkits' GL-based LV2
-                // UI, well past this point) rather than a blank window, so a
-                // zero-size editor is refused here and treated the same as no
-                // editor at all.
-                if (editor->getWidth() > 0 && editor->getHeight() > 0)
-                {
-                    generatorEditor.reset(editor);
-                }
-                else
-                {
-                    audioProcessor->editorBeingDeleted(editor);
-                    delete editor;
-                }
-            }
-        }
+                generatorEditor.reset(editor);
 
         if (generatorEditor == nullptr)
         {
-            auto* generic = new juce::GenericAudioProcessorEditor(*audioProcessor);
-            const auto height = juce::jlimit(200, 560, generic->getHeight());
-            generic->setSize(juce::jmax(460, generic->getWidth()), height);
-            generatorEditor.reset(generic);
+            generatorEditor = buildFallbackEditor();
+        }
+        else if (generatorEditor->getWidth() <= 0 || generatorEditor->getHeight() <= 0)
+        {
+            // A plugin's own native GUI can come back from creation before it
+            // has actually sized itself: some LV2 UIs negotiate their real
+            // size asynchronously, once their own toolkit has had a chance to
+            // realise its window - which only happens once this editor is
+            // genuinely part of a visible window and the message loop is
+            // pumping, not yet, here. Rejecting it outright on the spot once
+            // broke a plugin (AVLdrumkits) that was, on that machine, actually
+            // working fine - its resize simply hadn't arrived yet. So it is
+            // embedded and given a grace period instead: componentMovedOrResized()
+            // below cancels this timer the moment a real size arrives, and only
+            // an editor still stuck at zero once the period elapses - genuinely
+            // never going to size itself, not just not-there-yet - gets swapped
+            // for the fallback, in timerCallback().
+            startTimer(editorSizeGracePeriodMs);
         }
     }
     else if (auto* midiTrack = dynamic_cast<MidiTrack*>(channelTrack))
@@ -118,6 +130,65 @@ PluginShell::PluginShell(juce::AudioProcessor* processor, Track* track)
     loadTargetIntoControls();
     refreshControlStates();
     refreshPageVisibility();
+}
+
+std::unique_ptr<juce::Component> PluginShell::buildFallbackEditor() const
+{
+    if (audioProcessor == nullptr)
+        return nullptr;
+
+    // A plugin with no automatable parameters gives the generic panel
+    // nothing to list either - it would render as an empty page with no
+    // explanation, indistinguishable from something broken. The notice says
+    // outright what "no editor to show" actually means here: there is
+    // genuinely nothing to show, not that something failed silently.
+    if (audioProcessor->getParameters().isEmpty())
+    {
+        auto notice = std::make_unique<NoControlsNotice>();
+        notice->setSize(460, 200);
+        return notice;
+    }
+
+    auto generic = std::make_unique<juce::GenericAudioProcessorEditor>(*audioProcessor);
+    const auto height = juce::jlimit(200, 560, generic->getHeight());
+    generic->setSize(juce::jmax(460, generic->getWidth()), height);
+    return generic;
+}
+
+void PluginShell::timerCallback()
+{
+    stopTimer();
+
+    // Either something else already replaced it, or componentMovedOrResized()
+    // below already saw a real size arrive and this callback is only firing
+    // because it was already queued - either way, there is nothing to swap.
+    if (generatorEditor == nullptr
+        || (generatorEditor->getWidth() > 0 && generatorEditor->getHeight() > 0))
+        return;
+
+    // The grace period elapsed and it is still zero-size: genuinely not going
+    // to size itself, as opposed to just not-there-yet. Torn down the same
+    // way the destructor tears down a native editor - the processor has to
+    // be told before it goes.
+    generatorEditor->removeComponentListener(this);
+    generatorHolder.removeChildComponent(generatorEditor.get());
+
+    if (auto* editor = dynamic_cast<juce::AudioProcessorEditor*>(generatorEditor.get()))
+        if (audioProcessor != nullptr && audioProcessor->getActiveEditor() == editor)
+            audioProcessor->editorBeingDeleted(editor);
+
+    generatorEditor = buildFallbackEditor();
+
+    if (generatorEditor != nullptr)
+    {
+        generatorEditor->addComponentListener(this);
+
+        if (currentPage == Page::generator)
+            generatorHolder.addAndMakeVisible(generatorEditor.get());
+    }
+
+    if (onPageChanged != nullptr)
+        onPageChanged();
 }
 
 PluginShell::~PluginShell()
@@ -692,7 +763,16 @@ juce::Rectangle<int> PluginShell::getMinimumBounds() const
 
 void PluginShell::componentMovedOrResized(juce::Component& component, bool, bool wasResized)
 {
-    if (! wasResized || generatorEditor == nullptr || &component != generatorEditor.get())
+    if (generatorEditor == nullptr || &component != generatorEditor.get())
+        return;
+
+    // A real size arriving is exactly what the grace period in the
+    // constructor was waiting for - it sized itself in time, so it is no
+    // longer at risk of being swapped for the fallback in timerCallback().
+    if (isTimerRunning() && component.getWidth() > 0 && component.getHeight() > 0)
+        stopTimer();
+
+    if (! wasResized)
         return;
 
     // Only while its page is the one on screen; a resize behind the settings
