@@ -54,6 +54,42 @@ public:
     void paint(juce::Graphics& g) override;
     void resized() override;
 
+    /** Whether `description`'s own editor should open as its own separate,
+        top-level window rather than embedded in this shell - the per-plugin
+        choice the detach toggle in the top strip makes. Persisted across
+        runs, keyed by format and file/identifier, for a plugin that gives
+        real trouble embedded: a Qt-based LV2 UI that pops its own extra
+        top-level windows regardless of embedding (QMidiArp's "Pattern"
+        editor, among others) gets no worse for it, and one whose embedding
+        itself is what is fragile - a native GUI reparented into a window
+        with a mismatched GL visual, say - sidesteps that reparenting
+        altogether.
+    */
+    static bool prefersDetachedWindow(const juce::PluginDescription& description);
+    static void setPrefersDetachedWindow(const juce::PluginDescription& description, bool detached);
+
+    /** Switches this shell's own plugin editor between embedded (the normal
+        case) and living in its own top-level window - what the detach
+        toggle does, exposed here too so it can be driven without simulating
+        a click. Persists the choice via setPrefersDetachedWindow() when this
+        editor came from a real, identifiable plugin instance; a no-op when
+        there is no native editor to detach in the first place (the generic
+        parameter panel, the no-controls notice, or nothing at all), or when
+        `detached` already matches the current state.
+    */
+    void setDetachedWindowActive(bool detached);
+    bool isDetachedWindowActive() const noexcept { return detachedWindowActive; }
+
+    /** The generator page's own plain-text notice, when it is showing one
+        (a plugin with no editor and no automatable parameters - see
+        buildFallbackEditor()) - empty otherwise (a real editor, the generic
+        parameter panel, or nothing was ever built). Exposed so a test can
+        tell which specific notice came up (a plugin known to need its own
+        explanation, like Carla, versus the generic one) without a general
+        way to read arbitrary Component text.
+    */
+    juce::String getFallbackNoticeText() const;
+
     /** The size this shell wants for the page currently showing. */
     juce::Rectangle<int> getPreferredBounds() const;
     /** The smallest this shell may be without breaking what it holds. A plugin
@@ -99,6 +135,32 @@ private:
         is replaced by.
     */
     std::unique_ptr<juce::Component> buildFallbackEditor() const;
+    /** Takes the plugin's own editor out of generatorHolder and gives it its
+        own top-level window instead, then puts detachedNotice in its place -
+        the other half of setDetachedWindowActive(true).
+    */
+    void showGeneratorEditorDetached();
+    /** The reverse: pulls the editor back off the desktop and into
+        generatorHolder, and drops detachedNotice - setDetachedWindowActive(false).
+    */
+    void showGeneratorEditorEmbedded();
+    /** Raises the plugin's own window, for detachedNotice's button - easy to
+        lose behind this one or minimise by accident, with no taskbar entry
+        of its own to recover it from.
+    */
+    void bringDetachedEditorToFront();
+    /** Whichever of generatorEditor or detachedNotice is the thing actually
+        meant to be visible in generatorHolder right now - what the sizing
+        and centring in getPreferredBounds(), getMinimumBounds() and
+        resized() all care about, regardless of which one it is.
+    */
+    juce::Component* embeddedGeneratorContent() const noexcept;
+    /** The description behind `processor`'s identity, for the detach
+        preference to be keyed and persisted by - only an AudioPluginInstance
+        (a plugin the format manager created) has one; a built-in processor
+        does not, and gets no detach toggle at all as a result.
+    */
+    static bool identityOf(juce::AudioProcessor* processor, juce::PluginDescription& out);
     void sliderValueChanged(juce::Slider* slider) override;
     void comboBoxChanged(juce::ComboBox* box) override;
     void showPage(Page page);
@@ -159,6 +221,32 @@ private:
         preview-synth placeholder when there is no plugin at all.
     */
     std::unique_ptr<juce::Component> generatorEditor;
+    /** True when generatorEditor is the plugin's own native GUI rather than
+        the generic panel, the no-controls notice, or the preview synth's own
+        panel - only that one is ever worth the detach toggle.
+    */
+    bool hasNativeEditor = false;
+    /** Set from identityOf() at construction: whether generatorEditor's
+        processor is one the detach preference can actually be keyed and
+        persisted by.
+    */
+    bool hasPluginIdentity = false;
+    juce::PluginDescription pluginIdentity;
+    /** Whether generatorEditor currently lives on its own, off the desktop,
+        rather than embedded in generatorHolder - see setDetachedWindowActive().
+    */
+    bool detachedWindowActive = false;
+    /** Stands in for generatorEditor in generatorHolder while it is
+        detached - explains where the plugin's own window went, with a way
+        back to it. Never both this and generatorEditor embedded at once.
+    */
+    std::unique_ptr<juce::Component> detachedNotice;
+    /** Toggles setDetachedWindowActive() - shown only when hasNativeEditor
+        and hasPluginIdentity both hold, since anything else has no native
+        window worth detaching, or no stable identity to remember the choice
+        by.
+    */
+    IconChipButton detachButton { "detach window", Icon::popOut };
 
     juce::OwnedArray<IconChipButton> tabButtons;
     juce::OwnedArray<TabChip> envelopeTabs;

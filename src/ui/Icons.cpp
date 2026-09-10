@@ -75,6 +75,18 @@ juce::Path Icons::path(Icon icon, juce::Rectangle<float> bounds)
             p.lineTo(px(0.54f), py(0.48f));
             break;
 
+        case Icon::popOut:
+            // A window escaping its box, for "open this on its own instead
+            // of in here": the box is what it is leaving, the arrow where
+            // it is going.
+            p.addRoundedRectangle(px(0.14f), py(0.34f), w * 0.52f, h * 0.52f, w * 0.06f);
+            p.startNewSubPath(px(0.42f), py(0.58f));
+            p.lineTo(px(0.86f), py(0.14f));
+            p.startNewSubPath(px(0.86f), py(0.38f));
+            p.lineTo(px(0.86f), py(0.14f));
+            p.lineTo(px(0.62f), py(0.14f));
+            break;
+
         case Icon::metronome:
             p.startNewSubPath(px(0.24f), py(0.86f));
             p.lineTo(px(0.44f), py(0.14f));

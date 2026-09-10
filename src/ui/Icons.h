@@ -37,6 +37,7 @@ enum class Icon
     steps,
     undo,
     redo,
+    popOut,
 
     // Playlist tools
     magnet,

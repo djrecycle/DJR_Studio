@@ -5059,6 +5059,66 @@ int main()
               "an editor that resizes itself within the grace period keeps its own editor, not the fallback");
     }
 
+    // --- PluginShell: a plugin with no editor and no parameters gets a -----
+    // notice explaining why - Carla's own LV2 plugins (Carla-Rack, etc.) get
+    // a specific, actionable one pointing at External Apps instead of the
+    // generic "nothing to show" every other such plugin gets. See
+    // isCarlaPlugin() and buildFallbackEditor() in PluginWindow.cpp - the
+    // field report that prompted this was a user hitting exactly the
+    // generic message after loading Carla as an insert plugin.
+    {
+        class StubNoEditorInstance final : public juce::AudioPluginInstance
+        {
+        public:
+            explicit StubNoEditorInstance(juce::String uri)
+                : juce::AudioPluginInstance(BusesProperties()), identifier(std::move(uri)) {}
+
+            const juce::String getName() const override { return "Stub"; }
+            void fillInPluginDescription(juce::PluginDescription& description) const override
+            {
+                description.pluginFormatName = "LV2";
+                description.fileOrIdentifier = identifier;
+            }
+            void prepareToPlay(double, int) override {}
+            void releaseResources() override {}
+            using juce::AudioProcessor::processBlock;
+            void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override {}
+            double getTailLengthSeconds() const override { return 0.0; }
+            bool acceptsMidi() const override { return false; }
+            bool producesMidi() const override { return false; }
+            bool hasEditor() const override { return false; }
+            juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+            int getNumPrograms() override { return 1; }
+            int getCurrentProgram() override { return 0; }
+            void setCurrentProgram(int) override {}
+            const juce::String getProgramName(int) override { return {}; }
+            void changeProgramName(int, const juce::String&) override {}
+            void getStateInformation(juce::MemoryBlock&) override {}
+            void setStateInformation(const void*, int) override {}
+
+        private:
+            juce::String identifier;
+        };
+
+        StubNoEditorInstance carlaInstance("http://kxstudio.sf.net/carla/plugins/carlarack");
+        djr::PluginShell carlaShell(&carlaInstance, nullptr);
+
+        const auto carlaText = carlaShell.getFallbackNoticeText();
+        std::cout << "DIAG Carla fallback notice: " << carlaText << "\n";
+        check(carlaText.containsIgnoreCase("External Apps"),
+              "Carla's own LV2 plugins get a notice pointing at External Apps, not the generic one");
+
+        StubNoEditorInstance otherInstance("http://example.invalid/some-other-plugin");
+        djr::PluginShell otherShell(&otherInstance, nullptr);
+
+        const auto otherText = otherShell.getFallbackNoticeText();
+        std::cout << "DIAG non-Carla fallback notice: " << otherText << "\n";
+        check(! otherText.containsIgnoreCase("External Apps"),
+              "a different plugin with no editor and no parameters still gets the generic notice");
+        check(otherText.isNotEmpty(), "the generic notice is not itself empty");
+    }
+
+
     // --- Lv2UiLibraryPinning: pins a bundle's libraries once, idempotently -
     // A synthetic bundle, not a real installed plugin: a real LV2 plugin
     // (AVLdrumkits, used to diagnose the bug this exists for) is a
@@ -5142,6 +5202,39 @@ int main()
         check(asStrings.contains("/usr/lib/x86_64-linux-gnu/lmms/ladspa"),
               "LADSPA extra paths include the private copy LMMS bundles for its own effects");
     }
+
+    // --- PluginShell: the detach-window preference is per-plugin and -------
+    // persisted - a real file on disk (see Settings), not just in-memory for
+    // this run, so the choice survives closing and reopening the plugin.
+    // "DJR_TEST_FORMAT" is not a real plugin format DJR_Studio ever scans,
+    // so this can never collide with - or leave behind - a real preference
+    // of the user's own.
+    {
+        juce::PluginDescription pluginA;
+        pluginA.pluginFormatName = "DJR_TEST_FORMAT";
+        pluginA.fileOrIdentifier = "test://pluginA";
+
+        juce::PluginDescription pluginB;
+        pluginB.pluginFormatName = "DJR_TEST_FORMAT";
+        pluginB.fileOrIdentifier = "test://pluginB";
+
+        check(! djr::PluginShell::prefersDetachedWindow(pluginA),
+              "a plugin defaults to embedded, not detached");
+
+        djr::PluginShell::setPrefersDetachedWindow(pluginA, true);
+        check(djr::PluginShell::prefersDetachedWindow(pluginA),
+              "setting the preference is read back");
+        check(! djr::PluginShell::prefersDetachedWindow(pluginB),
+              "a different plugin's preference is untouched");
+
+        djr::PluginShell::setPrefersDetachedWindow(pluginA, false);
+        check(! djr::PluginShell::prefersDetachedWindow(pluginA),
+              "clearing the preference is read back too");
+
+        // Leaves nothing behind in the user's real settings file.
+        djr::PluginShell::setPrefersDetachedWindow(pluginB, false);
+    }
+
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
                                 : "\n" + std::to_string(failures) + " engine test(s) failed\n");
