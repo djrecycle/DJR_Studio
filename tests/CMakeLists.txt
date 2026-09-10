@@ -29,7 +29,14 @@ target_sources(djr_studio_engine_tests PRIVATE
     # itself references, neither is instantiated by the test.
     ${CMAKE_SOURCE_DIR}/src/ui/Knob.cpp
     ${CMAKE_SOURCE_DIR}/src/ui/PreviewSynthPanel.cpp
-    ${CMAKE_SOURCE_DIR}/src/plugins/PluginWindow.cpp)
+    ${CMAKE_SOURCE_DIR}/src/plugins/PluginWindow.cpp
+    # PluginScanner::getExtraPathsFor() (see its test block in
+    # engine_tests.cpp) is plain path logic with no scanning thread ever
+    # started, so it is headless-testable the same way - Settings.cpp is
+    # pulled in only because PluginScanner.cpp's other (untested here)
+    # methods reference it.
+    ${CMAKE_SOURCE_DIR}/src/app/Settings.cpp
+    ${CMAKE_SOURCE_DIR}/src/plugins/PluginScanner.cpp)
 
 target_include_directories(djr_studio_engine_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
@@ -48,6 +55,7 @@ target_compile_definitions(djr_studio_engine_tests
         JUCE_PLUGINHOST_VST=0
         JUCE_PLUGINHOST_VST3=1
         JUCE_PLUGINHOST_LV2=1
+        JUCE_PLUGINHOST_LADSPA=1
         JUCE_PLUGINHOST_AU=0
         JUCE_ALSA=1
         JUCE_JACK=0

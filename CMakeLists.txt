@@ -205,6 +205,11 @@ target_compile_definitions(djr_studio
         # VST2 stays off: hosting it needs the Steinberg SDK, which is no longer
         # distributable, and Carla loaded as an LV2 covers that case anyway.
         JUCE_PLUGINHOST_LV2=1
+        # LADSPA plugins (Calf, CAPS, CMT, swh-plugins, and the private copy
+        # LMMS bundles for its own effects) are a plain, open C ABI with no
+        # SDK-availability issue like VST2 above - JUCE already hosts them,
+        # this just turns that host on.
+        JUCE_PLUGINHOST_LADSPA=1
         JUCE_PLUGINHOST_AU=0
         JUCE_ALSA=1
         JUCE_JACK=1

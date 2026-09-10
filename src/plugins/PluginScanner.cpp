@@ -64,6 +64,17 @@ juce::FileSearchPath PluginScanner::getExtraPathsFor(const juce::String& formatN
         // some releases, and Ubuntu Studio is exactly where that shows up.
         paths.add(juce::File("/usr/lib/x86_64-linux-gnu/lv2"));
     }
+    else if (formatName == "LADSPA")
+    {
+        // JUCE's own default (LADSPA_PATH, or /usr/lib/ladspa;/usr/local/lib/
+        // ladspa;~/.ladspa if that is unset) misses two real-world locations:
+        // Debian/Ubuntu's multiarch package dir, same as LV2 above, and the
+        // private copy LMMS bundles under its own lib dir for its bundled
+        // effects (Calf, CAPS, CMT, ...) - not installed anywhere a generic
+        // LADSPA host would otherwise look.
+        paths.add(juce::File("/usr/lib/x86_64-linux-gnu/ladspa"));
+        paths.add(juce::File("/usr/lib/x86_64-linux-gnu/lmms/ladspa"));
+    }
 
     return paths;
 }

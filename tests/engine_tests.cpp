@@ -30,6 +30,7 @@
 #include "plugins/Lv2TtlInspector.h"
 #include "plugins/Lv2UiLibraryPinning.h"
 #include "plugins/MidiSamplerProcessor.h"
+#include "plugins/PluginScanner.h"
 #include "plugins/StarterKitSamples.h"
 #include "plugins/PluginWindow.h"
 
@@ -5120,6 +5121,26 @@ int main()
         check(djr::Lv2UiLibraryPinning::getPinnedCount() == afterFirst, "a non-LV2 description is a no-op");
 
         tempRoot.deleteRecursively();
+    }
+
+    // --- PluginScanner: LADSPA gets the same "extra Linux locations" -------
+    // treatment as VST3/LV2 - neither of these is one of JUCE's own
+    // defaults (LADSPAPluginFormat::getDefaultLocationsToSearch() only
+    // covers /usr/lib/ladspa, /usr/local/lib/ladspa and ~/.ladspa), but real
+    // plugins live there: Debian/Ubuntu's multiarch package directory, and
+    // the private copy LMMS bundles for its own effects - see
+    // getExtraPathsFor().
+    {
+        const auto ladspaPaths = djr::PluginScanner::getExtraPathsFor("LADSPA");
+
+        juce::StringArray asStrings;
+        for (int i = 0; i < ladspaPaths.getNumPaths(); ++i)
+            asStrings.add(ladspaPaths[i].getFullPathName());
+
+        check(asStrings.contains("/usr/lib/x86_64-linux-gnu/ladspa"),
+              "LADSPA extra paths include Debian/Ubuntu's multiarch package directory");
+        check(asStrings.contains("/usr/lib/x86_64-linux-gnu/lmms/ladspa"),
+              "LADSPA extra paths include the private copy LMMS bundles for its own effects");
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
