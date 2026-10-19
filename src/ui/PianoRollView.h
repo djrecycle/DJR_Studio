@@ -102,6 +102,12 @@ public:
     */
     std::function<void()> onChordStampChanged;
 
+    /** Pulls the selected notes - or every note, with nothing selected - onto
+        the current snap grid, falling back to a sixteenth when snap is off.
+        Ctrl+Q, and the Quantize button in the editor strip.
+    */
+    void quantizeSelectedNotes();
+
 private:
     void changeListenerCallback(juce::ChangeBroadcaster* source) override;
     void timerCallback() override;

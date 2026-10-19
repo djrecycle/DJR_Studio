@@ -198,6 +198,7 @@ juce::String Localisation::getIndonesianTranslations()
         + "\"Snap on - click to turn off\" = \"Snap aktif - klik untuk mematikan\"\n"
         + "\"Snap off - click to turn on\" = \"Snap mati - klik untuk menyalakan\"\n"
         + "\"Follow playhead during playback\" = \"Ikuti playhead saat playback\"\n"
+        + "\"Quantize notes to the snap grid (Ctrl+Q)\" = \"Rapikan note ke grid snap (Ctrl+Q)\"\n"
         + "\"Collapse panel\" = \"Turunkan panel\"\n"
         + "\"Select - move and trim clips\" = \"Select - geser & trim clip\"\n"
         + "\"Select - pick and move notes\" = \"Select - pilih & geser note\"\n"

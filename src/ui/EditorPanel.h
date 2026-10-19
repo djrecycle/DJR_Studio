@@ -135,6 +135,8 @@ private:
         playlist's follow button.
     */
     IconChipButton followButton { "Ikuti playhead", Icon::chevronRight };
+    /** Quick quantize for the roll - the selection, or every note when none is. */
+    HitAreaButton quantizeButton { "Quantize" };
 
     PianoRollView pianoRoll;
     VelocityLane velocityLane;

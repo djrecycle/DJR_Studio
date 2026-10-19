@@ -4258,6 +4258,68 @@ int main()
         }
     }
 
+    // --- Quantize: notes pulled onto the snap grid ------------------------
+    {
+        djr::Mixer quantizeMixer;
+        quantizeMixer.prepare(sampleRate, blockSize);
+
+        auto* track = findFirstMidiTrack(quantizeMixer);
+        check(track != nullptr, "there is a MIDI track for the quantize check");
+
+        if (track != nullptr)
+        {
+            djr::PianoRollModel model;
+            model.setTargetClip(&track->getClip());
+
+            int undoPoints = 0;
+            model.onBeforeEdit = [&undoPoints] { ++undoPoints; };
+
+            juce::Array<djr::MidiNote> loose;
+            djr::MidiNote early; early.pitch = 60; early.startBeat = 0.9;  early.lengthBeats = 0.3;
+            djr::MidiNote late;  late.pitch = 62;  late.startBeat = 2.13; late.lengthBeats = 0.5;
+            djr::MidiNote other; other.pitch = 64; other.startBeat = 3.6;  other.lengthBeats = 1.0;
+            loose.add(early);
+            loose.add(late);
+            loose.add(other);
+            model.setNotes(loose);
+            undoPoints = 0;
+
+            // Only the selection moves.
+            model.quantizeNotes({ 0, 1 }, 0.25);
+            auto result = model.getNotes();
+            check(undoPoints == 1, "quantizing a selection is exactly one undo step");
+            check(result.size() == 3, "quantizing neither adds nor removes notes");
+            check(std::abs(result[0].startBeat - 1.0) < 1.0e-9, "0.9 snaps to beat 1.0 on a quarter-beat grid");
+            check(std::abs(result[1].startBeat - 2.25) < 1.0e-9, "2.13 snaps to the nearest grid line, 2.25");
+            check(std::abs(result[2].startBeat - 3.6) < 1.0e-9, "a note outside the selection is left alone");
+            check(std::abs(result[0].lengthBeats - 0.3) < 1.0e-9
+                      && std::abs(result[1].lengthBeats - 0.5) < 1.0e-9,
+                  "quantize moves note starts but keeps each note's length");
+
+            // An empty selection means every note, like FL's quick quantize.
+            model.setNotes(loose);
+            undoPoints = 0;
+            model.quantizeNotes({}, 1.0);
+            result = model.getNotes();
+            check(std::abs(result[0].startBeat - 1.0) < 1.0e-9
+                      && std::abs(result[1].startBeat - 2.0) < 1.0e-9
+                      && std::abs(result[2].startBeat - 4.0) < 1.0e-9,
+                  "with nothing selected, every note in the clip is quantized");
+
+            // Already on the grid: nothing changes, so no undo point either.
+            undoPoints = 0;
+            model.quantizeNotes({}, 1.0);
+            check(undoPoints == 0, "quantizing notes that are already on the grid records no undo step");
+
+            // A grid of zero (snap off) cannot be quantized to.
+            model.setNotes(loose);
+            undoPoints = 0;
+            model.quantizeNotes({}, 0.0);
+            check(undoPoints == 0 && std::abs(model.getNotes()[0].startBeat - 0.9) < 1.0e-9,
+                  "a zero grid is a no-op");
+        }
+    }
+
     // --- Track::onPluginAboutToBeRemoved: told before the instance is freed -
     {
         // clearPlugins(): an insert.

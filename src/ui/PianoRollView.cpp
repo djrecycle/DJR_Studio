@@ -905,6 +905,24 @@ void PianoRollView::flamSelectedNotes()
     repaint();
 }
 
+void PianoRollView::quantizeSelectedNotes()
+{
+    // With snap off there is no grid to pull towards, so a sixteenth - FL's
+    // own default step - stands in rather than the button doing nothing.
+    const auto snap = model.getSnapBeats();
+    const auto grid = snap > 0.0 ? snap : 0.25;
+
+    if (onEditGesture)
+        onEditGesture(true);
+
+    model.quantizeNotes(selectedNotes, grid);
+
+    if (onEditGesture)
+        onEditGesture(false);
+
+    repaint();
+}
+
 void PianoRollView::arpeggiateSelectedNotes()
 {
     if (selectedNotes.size() < 2)
@@ -1218,6 +1236,12 @@ bool PianoRollView::keyPressed(const juce::KeyPress& key)
         if (character == 'k')
         {
             arpeggiateSelectedNotes();
+            return true;
+        }
+
+        if (character == 'q')
+        {
+            quantizeSelectedNotes();
             return true;
         }
 

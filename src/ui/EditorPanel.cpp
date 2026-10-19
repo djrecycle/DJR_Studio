@@ -48,6 +48,11 @@ EditorPanel::EditorPanel(PianoRollModel& modelToUse, Transport& transport)
     followButton.setTooltip(TRANS("Follow playhead during playback"));
     addAndMakeVisible(followButton);
 
+    quantizeButton.setCornerSize(5.0f);
+    quantizeButton.addListener(this);
+    quantizeButton.setTooltip(TRANS("Quantize notes to the snap grid (Ctrl+Q)"));
+    addAndMakeVisible(quantizeButton);
+
     // The roll only knows the chord stamp flipped; the badge showing that
     // lives here now, so this is the only way it finds out to repaint.
     pianoRoll.onChordStampChanged = [this] { repaint(); };
@@ -130,6 +135,7 @@ void EditorPanel::refreshFollowButton()
     followButton.setIcon(pianoRoll.isFollowingPlayhead() ? Icon::chevronRight : Icon::minimise);
     // Following only means anything while the roll itself is on screen.
     followButton.setVisible(pianoRollVisible);
+    quantizeButton.setVisible(pianoRollVisible);
 }
 
 EditorPanel::~EditorPanel()
@@ -143,6 +149,7 @@ EditorPanel::~EditorPanel()
     stepSequencerTab.removeListener(this);
     velocityToggle.removeListener(this);
     followButton.removeListener(this);
+    quantizeButton.removeListener(this);
 }
 
 void EditorPanel::paint(juce::Graphics& g)
@@ -172,9 +179,15 @@ void EditorPanel::paint(juce::Graphics& g)
     g.setFont(Theme::ui(11.0f));
     g.drawText("Velocity", toggleArea, juce::Justification::centred, false);
 
+    if (quantizeButton.isVisible())
+    {
+        g.setColour(Theme::mutedText());
+        g.drawText(TRANS("Quantize"), quantizeButton.getBounds(), juce::Justification::centred, false);
+    }
+
     // Stop short of the follow button too, whether or not it is shown for the
     // current tab - its slot in the strip is reserved either way.
-    info = info.withRight(followButton.getBounds().getX());
+    info = info.withRight(quantizeButton.getBounds().getX());
     drawDivider(info.removeFromRight(11));
 
     const auto notesText = juce::String(noteCount) + " notes";
@@ -554,6 +567,8 @@ void EditorPanel::resized()
 
     velocityToggle.setBounds(strip.removeFromRight(58).withSizeKeepingCentre(58, 16));
     followButton.setBounds(strip.removeFromRight(19).withSizeKeepingCentre(18, 18));
+    strip.removeFromRight(2);
+    quantizeButton.setBounds(strip.removeFromRight(58).withSizeKeepingCentre(58, 16));
     strip.removeFromRight(4);
 
     // Tools sit after the pattern controls, in the gap before the note count.
@@ -664,6 +679,11 @@ void EditorPanel::buttonClicked(juce::Button* button)
     else if (button == &velocityToggle)
     {
         setVelocityLaneVisible(! velocityLaneVisible);
+    }
+    else if (button == &quantizeButton)
+    {
+        pianoRoll.quantizeSelectedNotes();
+        pianoRoll.grabKeyboardFocus();
     }
     else if (button == &followButton)
     {
