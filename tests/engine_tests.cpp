@@ -1231,6 +1231,137 @@ int main()
         }
     }
 
+    // --- Export formats, bit depths and normalising --------------------------
+    {
+        using Format = djr::ExportManager::Format;
+
+        check(djr::ExportManager::resolveBitDepth(Format::flac, 32) == 24,
+              "FLAC cannot hold float, so 32 bit comes down to 24");
+        check(djr::ExportManager::resolveBitDepth(Format::aiff, 32) == 24,
+              "AIFF export also tops out at 24 bit");
+        check(djr::ExportManager::resolveBitDepth(Format::wav, 32) == 32, "wav keeps 32 bit float");
+        check(djr::ExportManager::resolveBitDepth(Format::wav, 8) == 16,
+              "a depth below every option goes up to the shallowest one");
+
+        djr::Mixer formatMixer;
+        formatMixer.prepare(sampleRate, blockSize);
+
+        auto* voice = findFirstMidiTrack(formatMixer);
+        check(voice != nullptr, "there is a track for the format export check");
+
+        if (voice != nullptr)
+        {
+            voice->setClipNotes(makeFourBarChord());
+
+            juce::AudioFormatManager formats;
+            formats.registerBasicFormats();
+
+            const auto folder = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                    .getChildFile("djr_engine_test_export_formats");
+            folder.deleteRecursively();
+
+            djr::ExportManager exporter;
+            djr::ExportManager::Options options;
+            options.sampleRate = sampleRate;
+            options.blockSize = blockSize;
+            options.tempoBpm = tempoBpm;
+            options.lengthBeats = 4.0;
+            options.songMode = false;
+
+            // Renders, reads the whole file back, and hands back its peak.
+            const auto renderAndRead = [&] (const juce::File& file, int& bitsOut, bool& floatOut,
+                                            juce::String& formatNameOut)
+            {
+                juce::String error;
+                const auto ok = exporter.render(formatMixer, file, options, error);
+                check(ok, "export to " + file.getFileName() + " succeeds" + (error.isEmpty() ? juce::String() : ": " + error));
+
+                std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(file));
+                check(reader != nullptr, file.getFileName() + " can be read back");
+
+                if (reader == nullptr)
+                    return -1.0f;
+
+                bitsOut = static_cast<int>(reader->bitsPerSample);
+                floatOut = reader->usesFloatingPointData;
+                formatNameOut = reader->getFormatName();
+
+                juce::AudioBuffer<float> readBack(static_cast<int>(reader->numChannels),
+                                                  static_cast<int>(reader->lengthInSamples));
+                reader->read(&readBack, 0, readBack.getNumSamples(), 0, true, true);
+
+                auto peak = 0.0f;
+                for (int channel = 0; channel < readBack.getNumChannels(); ++channel)
+                    peak = std::max(peak, readBack.getMagnitude(channel, 0, readBack.getNumSamples()));
+
+                return peak;
+            };
+
+            struct Case { Format format; int requested; int expectedBits; bool expectedFloat; const char* name; };
+            const Case cases[] {
+                { Format::wav,  16, 16, false, "WAV" },
+                { Format::wav,  32, 32, true,  "WAV" },
+                { Format::flac, 16, 16, false, "FLAC" },
+                { Format::flac, 24, 24, false, "FLAC" },
+                { Format::flac, 32, 24, false, "FLAC" },
+                { Format::aiff, 24, 24, false, "AIFF" },
+            };
+
+            for (const auto& c : cases)
+            {
+                options.format = c.format;
+                options.bitDepth = c.requested;
+                options.normalise = false;
+
+                const auto file = folder.getChildFile("mix-" + juce::String(c.requested)
+                                                      + djr::ExportManager::extensionFor(c.format));
+                int bits = 0;
+                bool isFloat = false;
+                juce::String formatName;
+                const auto peak = renderAndRead(file, bits, isFloat, formatName);
+                const auto label = juce::String(c.name) + " " + juce::String(c.requested) + " bit";
+
+                check(formatName.containsIgnoreCase(c.name), label + " is written as " + c.name + " (got " + formatName + ")");
+                check(bits == c.expectedBits, label + " is stored at " + juce::String(c.expectedBits)
+                                                  + " bit (got " + juce::String(bits) + ")");
+                check(isFloat == c.expectedFloat, label + (c.expectedFloat ? " is float" : " is integer"));
+                check(! isSilent(peak), label + " contains audio, not silence");
+            }
+
+            // Normalising: the loudest sample lands on the target, whatever
+            // the mix's own level was. 24-bit integer rounding is far below
+            // the tolerance here.
+            options.format = Format::wav;
+            options.bitDepth = 24;
+            options.normalise = false;
+            int bits = 0;
+            bool isFloat = false;
+            juce::String formatName;
+            const auto rawPeak = renderAndRead(folder.getChildFile("raw.wav"), bits, isFloat, formatName);
+
+            options.normalise = true;
+            options.normaliseTargetDb = -0.3f;
+            const auto normalisedPeak = renderAndRead(folder.getChildFile("normalised.wav"), bits, isFloat, formatName);
+            const auto target = juce::Decibels::decibelsToGain(-0.3f);
+
+            check(std::abs(normalisedPeak - target) < 0.002f,
+                  "a normalised export peaks at -0.3 dBFS (raw " + juce::String(rawPeak, 4)
+                      + ", normalised " + juce::String(normalisedPeak, 4) + ")");
+            check(std::abs(rawPeak - target) > 0.01f,
+                  "and the raw mix did not already peak there, so normalising actually did something");
+
+            // No scratch file is left behind next to the export.
+            auto leftovers = 0;
+            for (const auto& entry : juce::RangedDirectoryIterator(folder, false, "*", juce::File::findFiles, juce::File::FollowSymlinks::no))
+                if (entry.getFile().getFileName().contains("rendering"))
+                    ++leftovers;
+
+            check(leftovers == 0, "the hidden scratch render is removed after export");
+
+            folder.deleteRecursively();
+        }
+    }
+
     // --- The export tail keeps advancing, not stuck replaying one block -----
     // The bug: the render loop lost `beat = context.endBeat` in its tail
     // phase, so every tail block re-read the exact same source position. A

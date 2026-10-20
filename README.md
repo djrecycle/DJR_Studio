@@ -73,7 +73,7 @@ piano roll, dan step sequencer dalam satu shell panel mengambang ala FL Studio.
 - Recording audio (WAV) dan MIDI, dengan metronome dan count-in.
 - Time signature 4/4 sampai 12/8.
 - Undo/redo 64 langkah untuk semua edit clip dan note.
-- Export WAV offline, lebih cepat dari realtime.
+- Export WAV, FLAC, atau AIFF (16/24-bit, WAV juga 32-bit float), dengan opsi normalisasi - offline, lebih cepat dari realtime.
 
 ## Install dari `.deb`
 
