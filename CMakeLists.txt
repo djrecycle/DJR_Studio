@@ -126,6 +126,7 @@ set(DJR_STUDIO_SOURCES
     src/app/Settings.cpp
     src/app/TypingKeyboard.cpp
     src/audio/AudioEngine.cpp
+    src/audio/ExternalAppBridge.cpp
     src/plugins/PluginManager.cpp
     src/plugins/AudioEditorProcessor.cpp
     src/plugins/MidiSamplerProcessor.cpp
@@ -140,6 +141,7 @@ set(DJR_STUDIO_SOURCES
     src/ui/MenuBarView.cpp
     src/ui/TransportBar.cpp
     src/ui/BrowserPanel.cpp
+    src/ui/ExternalAppConnector.cpp
     src/ui/ArrangementView.cpp
     src/ui/EditorPanel.cpp
     src/ui/MixerView.cpp
@@ -213,6 +215,12 @@ target_compile_definitions(djr_studio
         JUCE_PLUGINHOST_AU=0
         JUCE_ALSA=1
         JUCE_JACK=1
+        # JUCE's own default JACK client name is the literal "JUCEJack" - fine
+        # for a plugin host with only one client ever open, but this app's own
+        # External Apps bridge (ExternalAppBridge.cpp) has to name a specific
+        # target for jack_connect to patch other apps' ports into, and every
+        # patchbay (qjackctl included) shows this name to the user too.
+        JUCE_JACK_CLIENT_NAME="DJR_Studio"
         JUCE_USE_CURL=1
         JUCE_WEB_BROWSER=0)
 
