@@ -113,6 +113,16 @@ MainComponent::MainComponent()
         loadSelectedPluginIntoTrack(pluginIndex, sessionState.getSelectedTrack());
     });
 
+    browserPanel.setExternalAppActivatedCallback([this] (int appIndex)
+    {
+        connectExternalApp(appIndex);
+    });
+
+    browserPanel.setExternalAppQuitRequestedCallback([this] (int appIndex)
+    {
+        quitExternalApp(appIndex);
+    });
+
     transportBar.setSnapChangeCallback([this] (SnapUnit unit)
     {
         // Each editor resolves Line and Cell against its own zoom and grid.
@@ -1566,6 +1576,112 @@ void MainComponent::changeListenerCallback(juce::ChangeBroadcaster* source)
         syncBrowserPluginLibrary();
         insertChainPanel.refresh();
     }
+}
+
+void MainComponent::connectExternalApp(int appIndex)
+{
+    const auto& apps = ExternalAppBridge::knownApps();
+
+    if (! juce::isPositiveAndBelow(appIndex, static_cast<int>(apps.size())))
+        return;
+
+    const auto app = apps[static_cast<size_t>(appIndex)];
+    const auto trackIndex = sessionState.getSelectedTrack();
+
+    if (getTrack(trackIndex) == nullptr)
+    {
+        setStatusMessage(TRANS("Select a track first."));
+        return;
+    }
+
+    // Switching device type takes over the audio callback and briefly
+    // interrupts whatever is playing - worth asking first, not something to
+    // do as a side effect of a browser double click.
+    if (audioEngine.getDeviceManager().getCurrentAudioDeviceType() != "JACK")
+    {
+        const auto currentType = audioEngine.getDeviceManager().getCurrentAudioDeviceType();
+        const auto options = juce::MessageBoxOptions::makeOptionsOkCancel(
+            juce::MessageBoxIconType::QuestionIcon,
+            TRANS("Switch to JACK Audio?"),
+            TRANS("Connecting to ") + app.displayName
+                + TRANS(" needs DJR_Studio's audio device set to JACK, not ")
+                + currentType + TRANS(". Switch now?"),
+            TRANS("Switch and connect"),
+            TRANS("Cancel"));
+
+        juce::AlertWindow::showAsync(options, [this, app, trackIndex] (int result)
+        {
+            if (result != 0)
+                beginExternalAppConnect(app, trackIndex);
+        });
+
+        return;
+    }
+
+    beginExternalAppConnect(app, trackIndex);
+}
+
+void MainComponent::beginExternalAppConnect(const ExternalApp& app, int trackIndex)
+{
+    auto* track = getTrack(trackIndex);
+
+    if (track == nullptr)
+        return;
+
+    // Also makes sure every input channel this app asks for is actually
+    // open, not just whichever count JACK last happened to remember - see
+    // AudioEngine::switchToJack(). A no-op when JACK is already current with
+    // its full channel count.
+    audioEngine.switchToJack();
+
+    // A track that has never been pointed at an input of its own gets one
+    // here, deterministically by its own index - so connecting a second app
+    // to a second track lands on a different pair without either of them
+    // having to know the device's channel layout. One that already has a
+    // pair (the user's own choice, from the mixer strip's Input menu) keeps
+    // it untouched.
+    if (track->getInputChannel() == Track::noInput)
+    {
+        const auto numPairs = juce::jmax(1, AudioEngine::maxInputChannels / 2);
+        track->setInputChannel((trackIndex % numPairs) * 2);
+        track->setInputStereo(true);
+    }
+
+    // Connecting an external source in is only useful heard, and there is no
+    // separate step in this flow for the user to turn monitoring on by hand.
+    track->setInputMonitoring(true);
+
+    const auto firstChannel = track->getInputChannel();
+    const auto trackName = track->getName();
+
+    setStatusMessage(TRANS("Connecting ") + app.displayName + TRANS(" to ") + trackName + "...");
+
+    externalAppConnector.begin(app, firstChannel,
+        [this, trackName, displayName = app.displayName] (int connected, juce::String error)
+        {
+            setStatusMessage(connected > 0
+                                 ? displayName + TRANS(" connected to ") + trackName
+                                     + TRANS(" (") + juce::String(connected) + TRANS(" port(s)).")
+                                 : displayName + ": " + error);
+
+            browserPanel.refreshContent();
+        });
+}
+
+void MainComponent::quitExternalApp(int appIndex)
+{
+    const auto& apps = ExternalAppBridge::knownApps();
+
+    if (! juce::isPositiveAndBelow(appIndex, static_cast<int>(apps.size())))
+        return;
+
+    const auto& app = apps[static_cast<size_t>(appIndex)];
+    const auto quit = ExternalAppBridge::quit(app);
+
+    setStatusMessage(quit ? app.displayName + TRANS(" was asked to quit.")
+                         : app.displayName + TRANS(" was not running."));
+
+    browserPanel.refreshContent();
 }
 
 void MainComponent::loadSelectedPluginIntoTrack(int pluginIndex, int trackIndex)

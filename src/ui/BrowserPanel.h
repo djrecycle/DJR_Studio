@@ -1,6 +1,7 @@
 #pragma once
 
 #include "UiControls.h"
+#include "audio/ExternalAppBridge.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -48,6 +49,14 @@ public:
         Without this the list was only ever something to look at.
     */
     void setPluginActivatedCallback(std::function<void(int)> callback);
+    /** Fired when an External Apps row is double clicked, with its index into
+        ExternalAppBridge::knownApps().
+    */
+    void setExternalAppActivatedCallback(std::function<void(int)> callback);
+    /** Fired when "Quit" is picked from an External Apps row's right-click
+        menu, with its index into ExternalAppBridge::knownApps().
+    */
+    void setExternalAppQuitRequestedCallback(std::function<void(int)> callback);
     void setPluginList(const juce::Array<juce::PluginDescription>& plugins);
     void setScanProgress(bool scanning, int scanned, int total, const juce::String& currentItem);
     void refreshContent();
@@ -66,6 +75,10 @@ private:
             box filters the list, so the two stop lining up.
         */
         int pluginIndex = -1;
+        /** Index into ExternalAppBridge::knownApps() for an External Apps
+            row, -1 otherwise.
+        */
+        int externalAppIndex = -1;
     };
 
     class RowsModel final : public juce::ListBoxModel
@@ -75,6 +88,10 @@ private:
         int getNumRows() override;
         void paintListBoxItem(int row, juce::Graphics& g, int width, int height, bool rowIsSelected) override;
         void listBoxItemDoubleClicked(int row, const juce::MouseEvent&) override;
+        /** Right click on an External Apps row offers Quit - everything else
+            in this list has nothing of its own to right click for.
+        */
+        void listBoxItemClicked(int row, const juce::MouseEvent& event) override;
         /** What a drag out of this list carries. A sample carries its path so
             the playlist can place it where it was dropped; everything else
             carries nothing, which is how a drag refuses to start.
@@ -93,7 +110,7 @@ private:
     void refreshControls();
     static juce::String describeFile(const juce::File& file);
 
-    juce::StringArray sections { "Projects", "Samples", "Recordings", "Presets", "Plugins" };
+    juce::StringArray sections { "Projects", "Samples", "Recordings", "Presets", "Plugins", "External Apps" };
     juce::OwnedArray<TabChip> sectionChips;
     IconChipButton dockButton { "Move browser dock", Icon::dockLeft };
     IconChipButton minimizeButton { "Minimize browser", Icon::minimise };
@@ -113,6 +130,8 @@ private:
     std::function<void()> dockCycleCallback;
     std::function<void(const juce::File&)> fileActivatedCallback;
     std::function<void(int)> pluginActivatedCallback;
+    std::function<void(int)> externalAppActivatedCallback;
+    std::function<void(int)> externalAppQuitRequestedCallback;
 
     DockPosition dockPosition = DockPosition::left;
     int selectedSectionIndex = 1;

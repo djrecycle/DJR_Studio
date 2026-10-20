@@ -2,6 +2,7 @@
 // driven by hand so the assertions are deterministic.
 
 #include "audio/AlignmentDelay.h"
+#include "audio/ExternalAppBridge.h"
 #include "audio/TimeStretch.h"
 #include "audio/AudioAnalysis.h"
 #include "audio/AudioClip.h"
@@ -5234,7 +5235,85 @@ int main()
         // Leaves nothing behind in the user's real settings file.
         djr::PluginShell::setPrefersDetachedWindow(pluginB, false);
     }
+    // --- ExternalAppBridge::parseJackLspOutput: real `jack_lsp -pt` text ----
+    // captured on a live Ubuntu Studio machine with Rakarrack, Hydrogen and
+    // Guitarix actually running - not a hand-written fixture shaped to fit
+    // whatever the parser happens to expect (see the LADSPA manifest lesson
+    // above: a fixture authored by the same hand that wrote the parser is
+    // liable to match it by construction, proving nothing about real data).
+    // Includes a port name with its own embedded colons and spaces
+    // (Midi-Bridge's), the shape that would break a parser that spilt port
+    // names on the first colon instead of taking the whole line.
+    {
+        const juce::String sample =
+            "rakarrack:out_1\n"
+            "\tproperties: output,\n"
+            "\t32 bit float mono audio\n"
+            "rakarrack:out_2\n"
+            "\tproperties: output,\n"
+            "\t32 bit float mono audio\n"
+            "Hydrogen:out_L\n"
+            "\tproperties: output,\n"
+            "\t32 bit float mono audio\n"
+            "gx_head_amp:out_0\n"
+            "\tproperties: output,\n"
+            "\t32 bit float mono audio\n"
+            "gx_head_fx:out_0\n"
+            "\tproperties: output,\n"
+            "\t32 bit float mono audio\n"
+            "gx_head_fx:out_1\n"
+            "\tproperties: output,\n"
+            "\t32 bit float mono audio\n"
+            "rakarrack:in_1\n"
+            "\tproperties: input,\n"
+            "\t32 bit float mono audio\n"
+            "gx_head_amp:in_0\n"
+            "\tproperties: input,\n"
+            "\t32 bit float mono audio\n"
+            "Midi-Bridge:Midi Through:(capture_0) Midi Through Port-0\n"
+            "\tproperties: output,physical,terminal,\n"
+            "\t8 bit raw midi\n"
+            "rakarrack:MC out\n"
+            "\tproperties: output,\n"
+            "\t8 bit raw midi\n"
+            "gx_head_amp:midi_in_1\n"
+            "\tproperties: input,\n"
+            "\t8 bit raw midi\n";
 
+        const auto ports = djr::ExternalAppBridge::parseJackLspOutput(sample);
+        std::cout << "DIAG parseJackLspOutput ports found: " << static_cast<int>(ports.size()) << "\n";
+
+        const auto find = [&ports] (const juce::String& name) -> const djr::ExternalAppBridge::JackPortInfo*
+        {
+            for (const auto& port : ports)
+                if (port.name == name)
+                    return &port;
+
+            return nullptr;
+        };
+
+        check(ports.size() == 11, "every port line in the sample is parsed, none dropped or merged");
+
+        const auto* rakarrackOut1 = find("rakarrack:out_1");
+        check(rakarrackOut1 != nullptr && rakarrackOut1->isOutput && rakarrackOut1->isAudio,
+              "an audio output port reads as output and audio");
+
+        const auto* gxFxOut1 = find("gx_head_fx:out_1");
+        check(gxFxOut1 != nullptr && gxFxOut1->isOutput && gxFxOut1->isAudio,
+              "a later client's audio output is still found after several earlier ones");
+
+        const auto* rakarrackIn1 = find("rakarrack:in_1");
+        check(rakarrackIn1 != nullptr && ! rakarrackIn1->isOutput,
+              "an audio input port does not read as output");
+
+        const auto* rakarrackMidiOut = find("rakarrack:MC out");
+        check(rakarrackMidiOut != nullptr && rakarrackMidiOut->isOutput && ! rakarrackMidiOut->isAudio,
+              "a MIDI output port reads as output but not audio - what keeps it out of an audio-only connect");
+
+        const auto* midiBridgePort = find("Midi-Bridge:Midi Through:(capture_0) Midi Through Port-0");
+        check(midiBridgePort != nullptr && midiBridgePort->isOutput && ! midiBridgePort->isAudio,
+              "a port name with its own colons and spaces is kept whole, not split on the first colon");
+    }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
                                 : "\n" + std::to_string(failures) + " engine test(s) failed\n");

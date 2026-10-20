@@ -16,11 +16,34 @@ namespace djr
 class AudioEngine final : private juce::AudioIODeviceCallback
 {
 public:
+    /** How many input channels this app asks the device for - five stereo
+        pairs, so a handful of tracks can each be pointed at their own live
+        source (an External App's own JACK ports among them - see
+        ExternalAppBridge) at the same time, not just one shared pair. A
+        track that has not been given one of its own falls back to reading
+        no input at all rather than silently sharing another track's.
+    */
+    static constexpr int maxInputChannels = 10;
+
     AudioEngine();
     ~AudioEngine() override;
 
     bool initialise();
     void shutdown();
+
+    /** Switches to the JACK Audio device type, if not already active, and
+        makes sure the switch actually opens with every input channel this
+        app asks for (maxInputChannels). JUCE's own
+        AudioDeviceManager::setCurrentAudioDeviceType() reopens the new type
+        with whatever channel setup was last remembered for *that specific
+        type* (AudioDeviceManager.cpp's lastDeviceTypeConfigs), not what
+        initialise() originally asked for - the first time this runs, JACK
+        has never been the current type before, so that remembered setup is
+        just its own scan's stereo default, and the switch would otherwise
+        silently reopen with only 2 input channels regardless of
+        maxInputChannels.
+    */
+    void switchToJack();
 
     juce::AudioDeviceManager& getDeviceManager() noexcept;
     Transport& getTransport() noexcept;

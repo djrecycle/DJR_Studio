@@ -36,7 +36,12 @@ target_sources(djr_studio_engine_tests PRIVATE
     # pulled in only because PluginScanner.cpp's other (untested here)
     # methods reference it.
     ${CMAKE_SOURCE_DIR}/src/app/Settings.cpp
-    ${CMAKE_SOURCE_DIR}/src/plugins/PluginScanner.cpp)
+    ${CMAKE_SOURCE_DIR}/src/plugins/PluginScanner.cpp
+    # ExternalAppBridge::parseJackLspOutput() (see its test block in
+    # engine_tests.cpp) is plain text parsing with no process ever started
+    # and no JACK server ever contacted, so it is headless-testable the same
+    # way.
+    ${CMAKE_SOURCE_DIR}/src/audio/ExternalAppBridge.cpp)
 
 target_include_directories(djr_studio_engine_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 

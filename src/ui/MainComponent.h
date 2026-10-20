@@ -25,7 +25,9 @@
 #include "app/TypingKeyboard.h"
 #include "audio/AudioEngine.h"
 #include "audio/AudioTrack.h"
+#include "audio/ExternalAppBridge.h"
 #include "audio/MidiTrack.h"
+#include "ExternalAppConnector.h"
 #include "midi/MidiEngine.h"
 #include "midi/PianoRollModel.h"
 #include "plugins/PluginManager.h"
@@ -154,6 +156,22 @@ private:
     };
 
     void loadSelectedPluginIntoTrack(int pluginIndex, int trackIndex);
+    /** An External Apps row was activated - connects to the currently
+        selected track's own input, the same track double clicking a plugin
+        would load onto. Asks first if DJR_Studio's audio device is not
+        already JACK (switching is not undoable mid-playback without a
+        moment's audio dropout), then hands off to beginExternalAppConnect().
+    */
+    void connectExternalApp(int appIndex);
+    /** The actual launch-then-connect, once JACK is confirmed as the current
+        device (or already was). Gives `trackIndex` its own input channel
+        pair first if it does not already have one (see
+        AudioEngine::maxInputChannels), so it never lands on whatever pair
+        another track happens to be using.
+    */
+    void beginExternalAppConnect(const ExternalApp& app, int trackIndex);
+    /** "Quit" from an External Apps row's right-click menu. */
+    void quitExternalApp(int appIndex);
     void openTrackPluginEditor(int trackIndex);
     void openTrackPlugin(int trackIndex, PluginSlot slot, int insertIndex);
     /** `plugin` may be nullptr: a channel with no generator still has a window. */
@@ -265,6 +283,7 @@ private:
     MenuBarView menuBar;
     TransportBar transportBar;
     BrowserPanel browserPanel;
+    ExternalAppConnector externalAppConnector;
     ArrangementView arrangementView;
     EditorPanel editorPanel;
     PluginBrowserView pluginBrowserView;
