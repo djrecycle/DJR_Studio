@@ -48,7 +48,7 @@ EditorPanel::EditorPanel(PianoRollModel& modelToUse, Transport& transport)
     followButton.setTooltip(TRANS("Follow playhead during playback"));
     addAndMakeVisible(followButton);
 
-    quantizeButton.setCornerSize(5.0f);
+    quantizeButton.setCornerSize(3.0f);
     quantizeButton.addListener(this);
     quantizeButton.setTooltip(TRANS("Quantize notes to the snap grid (Ctrl+Q)"));
     addAndMakeVisible(quantizeButton);
@@ -179,9 +179,16 @@ void EditorPanel::paint(juce::Graphics& g)
     g.setFont(Theme::ui(11.0f));
     g.drawText("Velocity", toggleArea, juce::Justification::centred, false);
 
+    // Drawn as a chip like the Key | Chord badge, so it reads as something
+    // to press rather than another label in the info cluster.
     if (quantizeButton.isVisible())
     {
-        g.setColour(Theme::mutedText());
+        const auto chip = quantizeButton.getBounds().toFloat();
+        g.setColour(Theme::control());
+        g.fillRoundedRectangle(chip, 3.0f);
+        g.setColour(Theme::outlineStrong());
+        g.drawRoundedRectangle(chip.reduced(0.5f), 3.0f, 1.0f);
+        g.setColour(Theme::text());
         g.drawText(TRANS("Quantize"), quantizeButton.getBounds(), juce::Justification::centred, false);
     }
 
@@ -670,6 +677,16 @@ void EditorPanel::setKeyboardMessageCallback(std::function<void(const juce::Midi
     keyboardBridge.onMessage = std::move(callback);
 }
 
+void EditorPanel::quantizeNotes()
+{
+    pianoRoll.quantizeSelectedNotes();
+}
+
+void EditorPanel::setQuantizeCallback(std::function<void(int)> callback)
+{
+    pianoRoll.onQuantized = std::move(callback);
+}
+
 void EditorPanel::buttonClicked(juce::Button* button)
 {
     if (button == &pianoRollTab)
@@ -682,7 +699,9 @@ void EditorPanel::buttonClicked(juce::Button* button)
     }
     else if (button == &quantizeButton)
     {
-        pianoRoll.quantizeSelectedNotes();
+        quantizeNotes();
+        // Back to the roll, so Ctrl+Q and the note shortcuts work straight
+        // after without another click on the grid first.
         pianoRoll.grabKeyboardFocus();
     }
     else if (button == &followButton)

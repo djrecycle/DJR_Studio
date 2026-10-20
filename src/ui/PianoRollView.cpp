@@ -905,7 +905,7 @@ void PianoRollView::flamSelectedNotes()
     repaint();
 }
 
-void PianoRollView::quantizeSelectedNotes()
+int PianoRollView::quantizeSelectedNotes()
 {
     // With snap off there is no grid to pull towards, so a sixteenth - FL's
     // own default step - stands in rather than the button doing nothing.
@@ -915,12 +915,17 @@ void PianoRollView::quantizeSelectedNotes()
     if (onEditGesture)
         onEditGesture(true);
 
-    model.quantizeNotes(selectedNotes, grid);
+    const auto moved = model.quantizeNotes(selectedNotes, grid);
 
     if (onEditGesture)
         onEditGesture(false);
 
     repaint();
+
+    if (onQuantized)
+        onQuantized(moved);
+
+    return moved;
 }
 
 void PianoRollView::arpeggiateSelectedNotes()

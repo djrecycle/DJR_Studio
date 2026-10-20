@@ -104,9 +104,15 @@ public:
 
     /** Pulls the selected notes - or every note, with nothing selected - onto
         the current snap grid, falling back to a sixteenth when snap is off.
-        Ctrl+Q, and the Quantize button in the editor strip.
+        Ctrl+Q, and the Quantize button in the editor strip. Returns how many
+        notes moved, so the caller can say so - zero means they already sat
+        on the grid.
     */
-    void quantizeSelectedNotes();
+    int quantizeSelectedNotes();
+    /** Told how many notes a quantize moved, from the button, Ctrl+Q or the
+        window-level shortcut alike, so the host can report it.
+    */
+    std::function<void(int)> onQuantized;
 
 private:
     void changeListenerCallback(juce::ChangeBroadcaster* source) override;

@@ -232,15 +232,15 @@ void PianoRollModel::strumNotes(const juce::Array<int>& indices, double strumSte
     sendChangeMessage();
 }
 
-void PianoRollModel::quantizeNotes(const juce::Array<int>& indices, double gridBeats)
+int PianoRollModel::quantizeNotes(const juce::Array<int>& indices, double gridBeats)
 {
     if (targetClip == nullptr || gridBeats <= 0.0)
-        return;
+        return 0;
 
     auto notes = targetClip->getNotesSnapshot();
-    bool changed = false;
+    int moved = 0;
 
-    const auto quantizeOne = [&notes, &changed, gridBeats] (int index)
+    const auto quantizeOne = [&notes, &moved, gridBeats] (int index)
     {
         if (! juce::isPositiveAndBelow(index, notes.size()))
             return;
@@ -251,7 +251,7 @@ void PianoRollModel::quantizeNotes(const juce::Array<int>& indices, double gridB
         if (std::abs(snapped - note.startBeat) > 1.0e-9)
         {
             note.startBeat = snapped;
-            changed = true;
+            ++moved;
         }
     };
 
@@ -263,14 +263,15 @@ void PianoRollModel::quantizeNotes(const juce::Array<int>& indices, double gridB
             quantizeOne(index);
 
     // Nothing off the grid: an undo step that undoes nothing is just noise.
-    if (! changed)
-        return;
+    if (moved == 0)
+        return 0;
 
     if (onBeforeEdit)
         onBeforeEdit();
 
     targetClip->setNotes(notes);
     sendChangeMessage();
+    return moved;
 }
 
 void PianoRollModel::setNotes(const juce::Array<MidiNote>& notes)

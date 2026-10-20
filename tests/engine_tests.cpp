@@ -4285,8 +4285,9 @@ int main()
             undoPoints = 0;
 
             // Only the selection moves.
-            model.quantizeNotes({ 0, 1 }, 0.25);
+            const auto moved = model.quantizeNotes({ 0, 1 }, 0.25);
             auto result = model.getNotes();
+            check(moved == 2, "quantize reports how many notes it moved");
             check(undoPoints == 1, "quantizing a selection is exactly one undo step");
             check(result.size() == 3, "quantizing neither adds nor removes notes");
             check(std::abs(result[0].startBeat - 1.0) < 1.0e-9, "0.9 snaps to beat 1.0 on a quarter-beat grid");
@@ -4308,8 +4309,9 @@ int main()
 
             // Already on the grid: nothing changes, so no undo point either.
             undoPoints = 0;
-            model.quantizeNotes({}, 1.0);
+            const auto movedAgain = model.quantizeNotes({}, 1.0);
             check(undoPoints == 0, "quantizing notes that are already on the grid records no undo step");
+            check(movedAgain == 0, "and reports that nothing moved");
 
             // A grid of zero (snap off) cannot be quantized to.
             model.setNotes(loose);

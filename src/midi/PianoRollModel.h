@@ -42,9 +42,10 @@ public:
     /** Moves the given notes' starts to the nearest line of a `gridBeats`
         grid, keeping each note's length. An empty `indices` means every note
         in the clip, the way FL's quick quantize works with nothing selected.
-        Records no undo step when nothing would move.
+        Records no undo step when nothing would move. Returns how many notes
+        actually moved.
     */
-    void quantizeNotes(const juce::Array<int>& indices, double gridBeats);
+    int quantizeNotes(const juce::Array<int>& indices, double gridBeats);
     void deleteNoteAt(int index);
     void dragNote(int index, double startBeat, int pitch);
     void setNoteVelocity(int index, float velocity);

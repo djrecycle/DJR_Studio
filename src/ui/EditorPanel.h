@@ -33,6 +33,12 @@ public:
     void showPianoRoll();
     void showStepSequencer();
     bool isPianoRollVisible() const noexcept;
+    /** Quick quantize on the roll; the window's Ctrl+Q lands here when the
+        roll itself does not have keyboard focus.
+    */
+    void quantizeNotes();
+    /** How many notes a quantize moved, for the status bar. */
+    void setQuantizeCallback(std::function<void(int)> callback);
 
     /** Passes the snap choice down to the piano roll, which resolves it. */
     void setSnapUnit(SnapUnit unit);

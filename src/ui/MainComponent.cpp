@@ -260,6 +260,11 @@ MainComponent::MainComponent()
     // session - every other panel that cares (none yet, but the project file
     // does) reads it from there, not from the roll directly.
     editorPanel.setScaleChangedCallback([this] (Scale newScale) { sessionState.setScale(newScale); });
+    editorPanel.setQuantizeCallback([this] (int moved)
+    {
+        setStatusMessage(moved > 0 ? TRANS("Quantized notes: ") + juce::String(moved)
+                                   : TRANS("Notes are already on the grid"));
+    });
 
     wireUndoHooks();
 
@@ -836,6 +841,14 @@ bool MainComponent::keyPressed(const juce::KeyPress& key)
         if (character == 'o')
         {
             openProject();
+            return true;
+        }
+
+        // The roll handles Ctrl+Q itself when it has focus; this catches it
+        // after a click elsewhere (the snap box, the playlist) took focus away.
+        if (character == 'q' && editorPanel.isShowing() && editorPanel.isPianoRollVisible())
+        {
+            editorPanel.quantizeNotes();
             return true;
         }
 
