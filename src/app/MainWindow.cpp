@@ -18,15 +18,25 @@ MainWindow::MainWindow(juce::String name)
     setContentOwned(new MainComponent(), true);
     setResizeLimits(1024, 620, 10000, 10000);
 
-    // Never open larger than the available desktop, otherwise the window manager
-    // clamps the frame while the content keeps its oversized layout.
     auto userArea = juce::Rectangle<int>(1600, 1000);
     if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
         userArea = display->userArea;
 
-    centreWithSize(juce::jmin(1600, userArea.getWidth()),
-                   juce::jmin(1000, userArea.getHeight()));
+    // Never open as large as the whole screen. Under XWayland the "user area"
+    // is the full screen - the desktop's own panels are not reported - and
+    // KWin treats an X11 window exactly that size as legacy fullscreen: no
+    // title bar, so no close or minimise buttons, and its top row ends up
+    // under the panel. 90% leaves a normal window to restore back to.
+    const auto width = juce::jmin(1600, juce::roundToInt(userArea.getWidth() * 0.9));
+    const auto height = juce::jmin(1000, juce::roundToInt(userArea.getHeight() * 0.9));
+    centreWithSize(width, height);
     setVisible(true);
+
+    // On a screen no bigger than that default, start maximised instead -
+    // asked of the window manager (the native title bar makes setFullScreen
+    // send _NET_WM_STATE_MAXIMIZED), which knows where its panels are.
+    if (userArea.getWidth() <= 1600 || userArea.getHeight() <= 1000)
+        setFullScreen(true);
 
     // DocumentWindow::setIcon() only feeds JUCE's own title-bar painting,
     // which setUsingNativeTitleBar(true) above disables - the taskbar/
