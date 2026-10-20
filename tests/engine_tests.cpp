@@ -30,6 +30,7 @@
 #include "plugins/Lv2TtlInspector.h"
 #include "plugins/Lv2UiLibraryPinning.h"
 #include "plugins/MidiSamplerProcessor.h"
+#include "plugins/PluginScanner.h"
 #include "plugins/StarterKitSamples.h"
 #include "plugins/PluginWindow.h"
 
@@ -4257,6 +4258,70 @@ int main()
         }
     }
 
+    // --- Quantize: notes pulled onto the snap grid ------------------------
+    {
+        djr::Mixer quantizeMixer;
+        quantizeMixer.prepare(sampleRate, blockSize);
+
+        auto* track = findFirstMidiTrack(quantizeMixer);
+        check(track != nullptr, "there is a MIDI track for the quantize check");
+
+        if (track != nullptr)
+        {
+            djr::PianoRollModel model;
+            model.setTargetClip(&track->getClip());
+
+            int undoPoints = 0;
+            model.onBeforeEdit = [&undoPoints] { ++undoPoints; };
+
+            juce::Array<djr::MidiNote> loose;
+            djr::MidiNote early; early.pitch = 60; early.startBeat = 0.9;  early.lengthBeats = 0.3;
+            djr::MidiNote late;  late.pitch = 62;  late.startBeat = 2.13; late.lengthBeats = 0.5;
+            djr::MidiNote other; other.pitch = 64; other.startBeat = 3.6;  other.lengthBeats = 1.0;
+            loose.add(early);
+            loose.add(late);
+            loose.add(other);
+            model.setNotes(loose);
+            undoPoints = 0;
+
+            // Only the selection moves.
+            const auto moved = model.quantizeNotes({ 0, 1 }, 0.25);
+            auto result = model.getNotes();
+            check(moved == 2, "quantize reports how many notes it moved");
+            check(undoPoints == 1, "quantizing a selection is exactly one undo step");
+            check(result.size() == 3, "quantizing neither adds nor removes notes");
+            check(std::abs(result[0].startBeat - 1.0) < 1.0e-9, "0.9 snaps to beat 1.0 on a quarter-beat grid");
+            check(std::abs(result[1].startBeat - 2.25) < 1.0e-9, "2.13 snaps to the nearest grid line, 2.25");
+            check(std::abs(result[2].startBeat - 3.6) < 1.0e-9, "a note outside the selection is left alone");
+            check(std::abs(result[0].lengthBeats - 0.3) < 1.0e-9
+                      && std::abs(result[1].lengthBeats - 0.5) < 1.0e-9,
+                  "quantize moves note starts but keeps each note's length");
+
+            // An empty selection means every note, like FL's quick quantize.
+            model.setNotes(loose);
+            undoPoints = 0;
+            model.quantizeNotes({}, 1.0);
+            result = model.getNotes();
+            check(std::abs(result[0].startBeat - 1.0) < 1.0e-9
+                      && std::abs(result[1].startBeat - 2.0) < 1.0e-9
+                      && std::abs(result[2].startBeat - 4.0) < 1.0e-9,
+                  "with nothing selected, every note in the clip is quantized");
+
+            // Already on the grid: nothing changes, so no undo point either.
+            undoPoints = 0;
+            const auto movedAgain = model.quantizeNotes({}, 1.0);
+            check(undoPoints == 0, "quantizing notes that are already on the grid records no undo step");
+            check(movedAgain == 0, "and reports that nothing moved");
+
+            // A grid of zero (snap off) cannot be quantized to.
+            model.setNotes(loose);
+            undoPoints = 0;
+            model.quantizeNotes({}, 0.0);
+            check(undoPoints == 0 && std::abs(model.getNotes()[0].startBeat - 0.9) < 1.0e-9,
+                  "a zero grid is a no-op");
+        }
+    }
+
     // --- Track::onPluginAboutToBeRemoved: told before the instance is freed -
     {
         // clearPlugins(): an insert.
@@ -5058,6 +5123,66 @@ int main()
               "an editor that resizes itself within the grace period keeps its own editor, not the fallback");
     }
 
+    // --- PluginShell: a plugin with no editor and no parameters gets a -----
+    // notice explaining why - Carla's own LV2 plugins (Carla-Rack, etc.) get
+    // a specific, actionable one pointing at External Apps instead of the
+    // generic "nothing to show" every other such plugin gets. See
+    // isCarlaPlugin() and buildFallbackEditor() in PluginWindow.cpp - the
+    // field report that prompted this was a user hitting exactly the
+    // generic message after loading Carla as an insert plugin.
+    {
+        class StubNoEditorInstance final : public juce::AudioPluginInstance
+        {
+        public:
+            explicit StubNoEditorInstance(juce::String uri)
+                : juce::AudioPluginInstance(BusesProperties()), identifier(std::move(uri)) {}
+
+            const juce::String getName() const override { return "Stub"; }
+            void fillInPluginDescription(juce::PluginDescription& description) const override
+            {
+                description.pluginFormatName = "LV2";
+                description.fileOrIdentifier = identifier;
+            }
+            void prepareToPlay(double, int) override {}
+            void releaseResources() override {}
+            using juce::AudioProcessor::processBlock;
+            void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override {}
+            double getTailLengthSeconds() const override { return 0.0; }
+            bool acceptsMidi() const override { return false; }
+            bool producesMidi() const override { return false; }
+            bool hasEditor() const override { return false; }
+            juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+            int getNumPrograms() override { return 1; }
+            int getCurrentProgram() override { return 0; }
+            void setCurrentProgram(int) override {}
+            const juce::String getProgramName(int) override { return {}; }
+            void changeProgramName(int, const juce::String&) override {}
+            void getStateInformation(juce::MemoryBlock&) override {}
+            void setStateInformation(const void*, int) override {}
+
+        private:
+            juce::String identifier;
+        };
+
+        StubNoEditorInstance carlaInstance("http://kxstudio.sf.net/carla/plugins/carlarack");
+        djr::PluginShell carlaShell(&carlaInstance, nullptr);
+
+        const auto carlaText = carlaShell.getFallbackNoticeText();
+        std::cout << "DIAG Carla fallback notice: " << carlaText << "\n";
+        check(carlaText.containsIgnoreCase("External Apps"),
+              "Carla's own LV2 plugins get a notice pointing at External Apps, not the generic one");
+
+        StubNoEditorInstance otherInstance("http://example.invalid/some-other-plugin");
+        djr::PluginShell otherShell(&otherInstance, nullptr);
+
+        const auto otherText = otherShell.getFallbackNoticeText();
+        std::cout << "DIAG non-Carla fallback notice: " << otherText << "\n";
+        check(! otherText.containsIgnoreCase("External Apps"),
+              "a different plugin with no editor and no parameters still gets the generic notice");
+        check(otherText.isNotEmpty(), "the generic notice is not itself empty");
+    }
+
+
     // --- Lv2UiLibraryPinning: pins a bundle's libraries once, idempotently -
     // A synthetic bundle, not a real installed plugin: a real LV2 plugin
     // (AVLdrumkits, used to diagnose the bug this exists for) is a
@@ -5121,6 +5246,59 @@ int main()
 
         tempRoot.deleteRecursively();
     }
+
+    // --- PluginScanner: LADSPA gets the same "extra Linux locations" -------
+    // treatment as VST3/LV2 - neither of these is one of JUCE's own
+    // defaults (LADSPAPluginFormat::getDefaultLocationsToSearch() only
+    // covers /usr/lib/ladspa, /usr/local/lib/ladspa and ~/.ladspa), but real
+    // plugins live there: Debian/Ubuntu's multiarch package directory, and
+    // the private copy LMMS bundles for its own effects - see
+    // getExtraPathsFor().
+    {
+        const auto ladspaPaths = djr::PluginScanner::getExtraPathsFor("LADSPA");
+
+        juce::StringArray asStrings;
+        for (int i = 0; i < ladspaPaths.getNumPaths(); ++i)
+            asStrings.add(ladspaPaths[i].getFullPathName());
+
+        check(asStrings.contains("/usr/lib/x86_64-linux-gnu/ladspa"),
+              "LADSPA extra paths include Debian/Ubuntu's multiarch package directory");
+        check(asStrings.contains("/usr/lib/x86_64-linux-gnu/lmms/ladspa"),
+              "LADSPA extra paths include the private copy LMMS bundles for its own effects");
+    }
+
+    // --- PluginShell: the detach-window preference is per-plugin and -------
+    // persisted - a real file on disk (see Settings), not just in-memory for
+    // this run, so the choice survives closing and reopening the plugin.
+    // "DJR_TEST_FORMAT" is not a real plugin format DJR_Studio ever scans,
+    // so this can never collide with - or leave behind - a real preference
+    // of the user's own.
+    {
+        juce::PluginDescription pluginA;
+        pluginA.pluginFormatName = "DJR_TEST_FORMAT";
+        pluginA.fileOrIdentifier = "test://pluginA";
+
+        juce::PluginDescription pluginB;
+        pluginB.pluginFormatName = "DJR_TEST_FORMAT";
+        pluginB.fileOrIdentifier = "test://pluginB";
+
+        check(! djr::PluginShell::prefersDetachedWindow(pluginA),
+              "a plugin defaults to embedded, not detached");
+
+        djr::PluginShell::setPrefersDetachedWindow(pluginA, true);
+        check(djr::PluginShell::prefersDetachedWindow(pluginA),
+              "setting the preference is read back");
+        check(! djr::PluginShell::prefersDetachedWindow(pluginB),
+              "a different plugin's preference is untouched");
+
+        djr::PluginShell::setPrefersDetachedWindow(pluginA, false);
+        check(! djr::PluginShell::prefersDetachedWindow(pluginA),
+              "clearing the preference is read back too");
+
+        // Leaves nothing behind in the user's real settings file.
+        djr::PluginShell::setPrefersDetachedWindow(pluginB, false);
+    }
+
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
                                 : "\n" + std::to_string(failures) + " engine test(s) failed\n");

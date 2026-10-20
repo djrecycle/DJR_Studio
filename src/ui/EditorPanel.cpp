@@ -1,5 +1,6 @@
 #include "EditorPanel.h"
 
+#include "Icons.h"
 #include "Theme.h"
 
 #include <cmath>
@@ -47,6 +48,11 @@ EditorPanel::EditorPanel(PianoRollModel& modelToUse, Transport& transport)
     followButton.addListener(this);
     followButton.setTooltip(TRANS("Follow playhead during playback"));
     addAndMakeVisible(followButton);
+
+    quantizeButton.setCornerSize(3.0f);
+    quantizeButton.addListener(this);
+    quantizeButton.setTooltip(TRANS("Pick a grid to quantize notes to (Ctrl+Q repeats it)"));
+    addAndMakeVisible(quantizeButton);
 
     // The roll only knows the chord stamp flipped; the badge showing that
     // lives here now, so this is the only way it finds out to repaint.
@@ -130,6 +136,7 @@ void EditorPanel::refreshFollowButton()
     followButton.setIcon(pianoRoll.isFollowingPlayhead() ? Icon::chevronRight : Icon::minimise);
     // Following only means anything while the roll itself is on screen.
     followButton.setVisible(pianoRollVisible);
+    quantizeButton.setVisible(pianoRollVisible);
 }
 
 EditorPanel::~EditorPanel()
@@ -143,6 +150,7 @@ EditorPanel::~EditorPanel()
     stepSequencerTab.removeListener(this);
     velocityToggle.removeListener(this);
     followButton.removeListener(this);
+    quantizeButton.removeListener(this);
 }
 
 void EditorPanel::paint(juce::Graphics& g)
@@ -172,9 +180,26 @@ void EditorPanel::paint(juce::Graphics& g)
     g.setFont(Theme::ui(11.0f));
     g.drawText("Velocity", toggleArea, juce::Justification::centred, false);
 
+    // Drawn as a chip like the Key | Chord badge, so it reads as something
+    // to press rather than another label in the info cluster.
+    if (quantizeButton.isVisible())
+    {
+        const auto chip = quantizeButton.getBounds().toFloat();
+        g.setColour(Theme::control());
+        g.fillRoundedRectangle(chip, 3.0f);
+        g.setColour(Theme::outlineStrong());
+        g.drawRoundedRectangle(chip.reduced(0.5f), 3.0f, 1.0f);
+        auto content = quantizeButton.getBounds().reduced(6, 0);
+        const auto caret = content.removeFromRight(8).toFloat().withSizeKeepingCentre(8.0f, 8.0f);
+        g.setColour(Theme::text());
+        g.drawText(TRANS("Quantize"), content, juce::Justification::centred, false);
+        g.setColour(Theme::mutedText());
+        Icons::draw(g, Icon::caretDown, caret, 1.4f);
+    }
+
     // Stop short of the follow button too, whether or not it is shown for the
     // current tab - its slot in the strip is reserved either way.
-    info = info.withRight(followButton.getBounds().getX());
+    info = info.withRight(quantizeButton.getBounds().getX());
     drawDivider(info.removeFromRight(11));
 
     const auto notesText = juce::String(noteCount) + " notes";
@@ -554,6 +579,8 @@ void EditorPanel::resized()
 
     velocityToggle.setBounds(strip.removeFromRight(58).withSizeKeepingCentre(58, 16));
     followButton.setBounds(strip.removeFromRight(19).withSizeKeepingCentre(18, 18));
+    strip.removeFromRight(2);
+    quantizeButton.setBounds(strip.removeFromRight(72).withSizeKeepingCentre(72, 16));
     strip.removeFromRight(4);
 
     // Tools sit after the pattern controls, in the gap before the note count.
@@ -655,6 +682,16 @@ void EditorPanel::setKeyboardMessageCallback(std::function<void(const juce::Midi
     keyboardBridge.onMessage = std::move(callback);
 }
 
+void EditorPanel::quantizeNotes()
+{
+    pianoRoll.quantizeSelectedNotes();
+}
+
+void EditorPanel::setQuantizeCallback(std::function<void(int)> callback)
+{
+    pianoRoll.onQuantized = std::move(callback);
+}
+
 void EditorPanel::buttonClicked(juce::Button* button)
 {
     if (button == &pianoRollTab)
@@ -664,6 +701,10 @@ void EditorPanel::buttonClicked(juce::Button* button)
     else if (button == &velocityToggle)
     {
         setVelocityLaneVisible(! velocityLaneVisible);
+    }
+    else if (button == &quantizeButton)
+    {
+        pianoRoll.showQuantizeMenu(localAreaToGlobal(quantizeButton.getBounds()));
     }
     else if (button == &followButton)
     {

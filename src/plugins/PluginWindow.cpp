@@ -1,5 +1,6 @@
 #include "PluginWindow.h"
 
+#include "app/Settings.h"
 #include "audio/MidiTrack.h"
 #include "audio/Track.h"
 #include "ui/PreviewSynthPanel.h"
@@ -58,16 +59,86 @@ namespace
     class NoControlsNotice final : public juce::Component
     {
     public:
+        explicit NoControlsNotice(juce::String messageToShow) : message(std::move(messageToShow)) {}
+
         void paint(juce::Graphics& g) override
         {
             g.setColour(Theme::mutedText());
             g.setFont(Theme::ui(13.0f));
-            g.drawFittedText(
-                TRANS("This plugin's own window could not be shown, and it has no "
-                      "adjustable parameters to display here instead."),
-                getLocalBounds().reduced(24), juce::Justification::centred, 4);
+            g.drawFittedText(message, getLocalBounds().reduced(24), juce::Justification::centred, 4);
         }
+
+        const juce::String& getText() const noexcept { return message; }
+
+    private:
+        juce::String message;
     };
+
+    /** Carla's own LV2 plugins (Carla-Rack, Carla-Patchbay, and the smaller
+        utility ones it bundles alongside them) all share this URI prefix -
+        confirmed against carla.lv2's real manifest.ttl, which declares
+        every one of them under it. None of them expose a UI extension
+        JUCE's LV2 hosting can embed (hasEditor() comes back false, with no
+        automatable parameters either), and hosting Carla's own bundled
+        JUCE engine in-process at all risks a crash the moment a second
+        Carla plugin loads alongside the first - see
+        djr-studio-plugin-gui-embedding-issues memory. buildFallbackEditor()
+        uses this to say something more useful than "nothing to show" for
+        exactly this plugin family.
+    */
+    bool isCarlaPlugin(juce::AudioProcessor* processor)
+    {
+        if (auto* instance = dynamic_cast<juce::AudioPluginInstance*>(processor))
+            return instance->getPluginDescription().fileOrIdentifier.startsWith("http://kxstudio.sf.net/carla/");
+
+        return false;
+    }
+
+    /** Stands in for a plugin's own editor in the generator page while it is
+        detached - see PluginShell::setDetachedWindowActive(). A button
+        rather than just an explanation: the plugin's own window has no
+        taskbar entry of its own here, and is easy to lose behind this one or
+        minimise by accident with no way back short of this.
+    */
+    class DetachedEditorNotice final : public juce::Component
+    {
+    public:
+        explicit DetachedEditorNotice(std::function<void()> onBringToFront)
+        {
+            message.setText(
+                TRANS("This plugin is open in its own window, not embedded here."),
+                juce::dontSendNotification);
+            message.setJustificationType(juce::Justification::centred);
+            message.setColour(juce::Label::textColourId, Theme::mutedText());
+            message.setFont(Theme::ui(13.0f));
+            addAndMakeVisible(message);
+
+            bringToFrontButton.setButtonText(TRANS("Bring to front"));
+            bringToFrontButton.onClick = std::move(onBringToFront);
+            addAndMakeVisible(bringToFrontButton);
+        }
+
+        void resized() override
+        {
+            auto area = getLocalBounds().reduced(24);
+            message.setBounds(area.removeFromTop(area.getHeight() - 40));
+            area.removeFromTop(12);
+            bringToFrontButton.setBounds(area.withSizeKeepingCentre(140, 28));
+        }
+
+    private:
+        juce::Label message;
+        juce::TextButton bringToFrontButton;
+    };
+
+    /** One key per format, mirroring PluginScanner's own userPathsKeyFor -
+        a plugin's detach preference lives independently of every other
+        format's.
+    */
+    juce::String detachedPluginsKeyFor(const juce::String& formatName)
+    {
+        return "detachedPlugins." + formatName;
+    }
 }
 
 PluginShell::PluginShell(juce::AudioProcessor* processor, Track* track)
@@ -86,26 +157,38 @@ PluginShell::PluginShell(juce::AudioProcessor* processor, Track* track)
             if (auto* editor = audioProcessor->createEditorIfNeeded())
                 generatorEditor.reset(editor);
 
+        hasNativeEditor = generatorEditor != nullptr;
+
         if (generatorEditor == nullptr)
         {
             generatorEditor = buildFallbackEditor();
         }
-        else if (generatorEditor->getWidth() <= 0 || generatorEditor->getHeight() <= 0)
+        else
         {
-            // A plugin's own native GUI can come back from creation before it
-            // has actually sized itself: some LV2 UIs negotiate their real
-            // size asynchronously, once their own toolkit has had a chance to
-            // realise its window - which only happens once this editor is
-            // genuinely part of a visible window and the message loop is
-            // pumping, not yet, here. Rejecting it outright on the spot once
-            // broke a plugin (AVLdrumkits) that was, on that machine, actually
-            // working fine - its resize simply hadn't arrived yet. So it is
-            // embedded and given a grace period instead: componentMovedOrResized()
-            // below cancels this timer the moment a real size arrives, and only
-            // an editor still stuck at zero once the period elapses - genuinely
-            // never going to size itself, not just not-there-yet - gets swapped
-            // for the fallback, in timerCallback().
-            startTimer(editorSizeGracePeriodMs);
+            hasPluginIdentity = identityOf(audioProcessor, pluginIdentity);
+            detachedWindowActive = hasPluginIdentity && prefersDetachedWindow(pluginIdentity);
+
+            // A detached editor lives on its own, sized by the plugin and the
+            // window manager, not by this shell - the zero-size guard below
+            // exists only for the embedded case.
+            if (! detachedWindowActive
+                && (generatorEditor->getWidth() <= 0 || generatorEditor->getHeight() <= 0))
+            {
+                // A plugin's own native GUI can come back from creation before it
+                // has actually sized itself: some LV2 UIs negotiate their real
+                // size asynchronously, once their own toolkit has had a chance to
+                // realise its window - which only happens once this editor is
+                // genuinely part of a visible window and the message loop is
+                // pumping, not yet, here. Rejecting it outright on the spot once
+                // broke a plugin (AVLdrumkits) that was, on that machine, actually
+                // working fine - its resize simply hadn't arrived yet. So it is
+                // embedded and given a grace period instead: componentMovedOrResized()
+                // below cancels this timer the moment a real size arrives, and only
+                // an editor still stuck at zero once the period elapses - genuinely
+                // never going to size itself, not just not-there-yet - gets swapped
+                // for the fallback, in timerCallback().
+                startTimer(editorSizeGracePeriodMs);
+            }
         }
     }
     else if (auto* midiTrack = dynamic_cast<MidiTrack*>(channelTrack))
@@ -121,8 +204,13 @@ PluginShell::PluginShell(juce::AudioProcessor* processor, Track* track)
     generatorViewport.setScrollBarsShown(true, true);
     generatorPage.addAndMakeVisible(generatorViewport);
 
-    generatorHolder.addAndMakeVisible(generatorEditor.get());
-    generatorEditor->addComponentListener(this);
+    if (detachedWindowActive)
+        showGeneratorEditorDetached();
+    else
+    {
+        generatorHolder.addAndMakeVisible(generatorEditor.get());
+        generatorEditor->addComponentListener(this);
+    }
 
     buildTopStrip();
     buildEnvelopePage();
@@ -130,6 +218,113 @@ PluginShell::PluginShell(juce::AudioProcessor* processor, Track* track)
     loadTargetIntoControls();
     refreshControlStates();
     refreshPageVisibility();
+}
+
+bool PluginShell::identityOf(juce::AudioProcessor* processor, juce::PluginDescription& out)
+{
+    if (auto* instance = dynamic_cast<juce::AudioPluginInstance*>(processor))
+    {
+        out = instance->getPluginDescription();
+        return true;
+    }
+
+    return false;
+}
+
+bool PluginShell::prefersDetachedWindow(const juce::PluginDescription& description)
+{
+    const auto list = juce::StringArray::fromTokens(
+        Settings::get(detachedPluginsKeyFor(description.pluginFormatName)), ";", "");
+    return list.contains(description.fileOrIdentifier);
+}
+
+void PluginShell::setPrefersDetachedWindow(const juce::PluginDescription& description, bool detached)
+{
+    const auto key = detachedPluginsKeyFor(description.pluginFormatName);
+    auto list = juce::StringArray::fromTokens(Settings::get(key), ";", "");
+
+    list.removeString(description.fileOrIdentifier);
+
+    if (detached)
+        list.add(description.fileOrIdentifier);
+
+    Settings::set(key, list.joinIntoString(";"));
+}
+
+juce::Component* PluginShell::embeddedGeneratorContent() const noexcept
+{
+    return detachedWindowActive ? detachedNotice.get() : generatorEditor.get();
+}
+
+juce::String PluginShell::getFallbackNoticeText() const
+{
+    if (auto* notice = dynamic_cast<NoControlsNotice*>(generatorEditor.get()))
+        return notice->getText();
+
+    return {};
+}
+
+void PluginShell::showGeneratorEditorDetached()
+{
+    if (generatorEditor == nullptr)
+        return;
+
+    generatorEditor->removeComponentListener(this);
+    generatorHolder.removeChildComponent(generatorEditor.get());
+
+    generatorEditor->setName(audioProcessor != nullptr ? audioProcessor->getName() : TRANS("Plugin"));
+    generatorEditor->addToDesktop(juce::ComponentPeer::windowHasTitleBar
+                                  | juce::ComponentPeer::windowHasCloseButton
+                                  | juce::ComponentPeer::windowIsResizable
+                                  | juce::ComponentPeer::windowAppearsOnTaskbar);
+    generatorEditor->setVisible(true);
+    generatorEditor->toFront(true);
+
+    auto notice = std::make_unique<DetachedEditorNotice>([this] { bringDetachedEditorToFront(); });
+    notice->setSize(380, 180);
+    detachedNotice = std::move(notice);
+    generatorHolder.addAndMakeVisible(detachedNotice.get());
+}
+
+void PluginShell::showGeneratorEditorEmbedded()
+{
+    if (generatorEditor == nullptr)
+        return;
+
+    detachedNotice = nullptr;
+
+    generatorEditor->removeFromDesktop();
+    generatorHolder.addAndMakeVisible(generatorEditor.get());
+    generatorEditor->addComponentListener(this);
+}
+
+void PluginShell::bringDetachedEditorToFront()
+{
+    if (generatorEditor != nullptr && generatorEditor->isOnDesktop())
+        generatorEditor->toFront(true);
+}
+
+void PluginShell::setDetachedWindowActive(bool detached)
+{
+    if (detached == detachedWindowActive || generatorEditor == nullptr || ! hasNativeEditor)
+        return;
+
+    detachedWindowActive = detached;
+
+    if (hasPluginIdentity)
+        setPrefersDetachedWindow(pluginIdentity, detached);
+
+    if (detached)
+        showGeneratorEditorDetached();
+    else
+        showGeneratorEditorEmbedded();
+
+    detachButton.setHighlighted(detached);
+    resized();
+    repaint();
+
+    if (onPageChanged != nullptr)
+        onPageChanged();
 }
 
 std::unique_ptr<juce::Component> PluginShell::buildFallbackEditor() const
@@ -144,7 +339,15 @@ std::unique_ptr<juce::Component> PluginShell::buildFallbackEditor() const
     // genuinely nothing to show, not that something failed silently.
     if (audioProcessor->getParameters().isEmpty())
     {
-        auto notice = std::make_unique<NoControlsNotice>();
+        const auto message = isCarlaPlugin(audioProcessor)
+            ? TRANS("Carla has no window this app can embed, and hosting its own audio "
+                    "engine in this process risks a crash if a second Carla plugin is "
+                    "loaded alongside it. Use the External Apps panel instead to run "
+                    "Carla as its own separate application, connected in over JACK.")
+            : TRANS("This plugin's own window could not be shown, and it has no "
+                    "adjustable parameters to display here instead.");
+
+        auto notice = std::make_unique<NoControlsNotice>(message);
         notice->setSize(460, 200);
         return notice;
     }
@@ -195,6 +398,8 @@ PluginShell::~PluginShell()
 {
     for (auto* button : tabButtons)
         button->removeListener(this);
+
+    detachButton.removeListener(this);
 
     for (auto* chip : envelopeTabs)
         chip->removeListener(this);
@@ -284,6 +489,16 @@ void PluginShell::buildTopStrip()
     }
 
     tabButtons[0]->setHighlighted(true);
+
+    // Only worth showing for a plugin that actually has a native window to
+    // detach, and a stable identity for the choice to be remembered by - see
+    // setDetachedWindowActive().
+    detachButton.setCornerSize(5.0f);
+    detachButton.setTooltip(TRANS("Open this plugin's window on its own, instead of inside this shell"));
+    detachButton.addListener(this);
+    addChildComponent(detachButton);
+    detachButton.setVisible(hasNativeEditor && hasPluginIdentity);
+    detachButton.setHighlighted(detachedWindowActive);
 
     presetBox.addListener(this);
     presetBox.setTextWhenNothingSelected(TRANS("Preset"));
@@ -700,7 +915,10 @@ void PluginShell::refreshPageVisibility()
     // bounds and its peer - never its visibility. Hiding an ancestor left the
     // GUI mapped and drawing over whichever settings page was showing, so every
     // tab showed the plugin. Losing its peer is what unmaps it.
-    if (generatorEditor != nullptr)
+    // A detached editor is never this shell's child in the first place - see
+    // showGeneratorEditorDetached() - so there is nothing here to attach or
+    // detach on its behalf.
+    if (generatorEditor != nullptr && ! detachedWindowActive)
     {
         const auto wanted = currentPage == Page::generator;
         const auto attached = generatorEditor->getParentComponent() != nullptr;
@@ -726,14 +944,17 @@ juce::Rectangle<int> PluginShell::getPreferredBounds() const
 {
     auto wanted = juce::Rectangle<int>(settingsPageWidth, stripHeight + settingsPageHeight);
 
-    if (currentPage == Page::generator && generatorEditor != nullptr)
+    if (currentPage == Page::generator)
     {
-        // A plugin editor that has not sized itself yet reports nothing, and a
-        // window the height of its own title bar is worse than a rough guess.
-        const auto width = generatorEditor->getWidth() > 0 ? generatorEditor->getWidth() : 640;
-        const auto height = generatorEditor->getHeight() > 0 ? generatorEditor->getHeight() : 420;
+        if (auto* content = embeddedGeneratorContent())
+        {
+            // A plugin editor that has not sized itself yet reports nothing, and a
+            // window the height of its own title bar is worse than a rough guess.
+            const auto width = content->getWidth() > 0 ? content->getWidth() : 640;
+            const auto height = content->getHeight() > 0 ? content->getHeight() : 420;
 
-        wanted = { juce::jmax(460, width), stripHeight + height };
+            wanted = { juce::jmax(460, width), stripHeight + height };
+        }
     }
 
     // A GUI taller than the screen is one nobody can reach the bottom of, and
@@ -751,14 +972,16 @@ juce::Rectangle<int> PluginShell::getPreferredBounds() const
 
 juce::Rectangle<int> PluginShell::getMinimumBounds() const
 {
-    if (currentPage != Page::generator || generatorEditor == nullptr)
+    auto* content = currentPage == Page::generator ? embeddedGeneratorContent() : nullptr;
+
+    if (content == nullptr)
         return { 360, stripHeight + 160 };
 
     // The plugin's own size is the floor. Its GUI usually lives in a native
     // child window, which the viewport cannot clip: made any smaller, the GUI
     // spills over the window instead of scrolling inside it.
-    return { juce::jmax(360, generatorEditor->getWidth()),
-             stripHeight + juce::jmax(120, generatorEditor->getHeight()) };
+    return { juce::jmax(360, content->getWidth()),
+             stripHeight + juce::jmax(120, content->getHeight()) };
 }
 
 void PluginShell::componentMovedOrResized(juce::Component& component, bool, bool wasResized)
@@ -800,6 +1023,12 @@ void PluginShell::buttonClicked(juce::Button* button)
             showPage(static_cast<Page>(i));
             return;
         }
+    }
+
+    if (button == &detachButton)
+    {
+        setDetachedWindowActive(! detachedWindowActive);
+        return;
     }
 
     if (button == &onSwitch)
@@ -1006,6 +1235,12 @@ void PluginShell::resized()
         left.removeFromLeft(4);
     }
 
+    if (detachButton.isVisible())
+    {
+        left.removeFromLeft(6);
+        detachButton.setBounds(left.removeFromLeft(26).withSizeKeepingCentre(24, 24));
+    }
+
     // Right of the strip, in FL's order: ON, PAN, VOL, PITCH, then TRACK.
     // Every one of them gets the same column height so their captions sit on
     // one line; sizing a knob taller than the strip clipped it before.
@@ -1045,11 +1280,11 @@ void PluginShell::resized()
 
     generatorViewport.setBounds(generatorPage.getLocalBounds());
 
-    if (generatorEditor != nullptr && generatorEditor->getParentComponent() != nullptr)
+    if (auto* content = embeddedGeneratorContent(); content != nullptr && content->getParentComponent() != nullptr)
     {
         // The holder is whichever is bigger, so a small GUI sits centred in the
         // window and a large one gets somewhere to scroll to.
-        const auto editorSize = generatorEditor->getLocalBounds();
+        const auto editorSize = content->getLocalBounds();
         const auto visible = generatorViewport.getMaximumVisibleWidth() > 0
             ? juce::Rectangle<int>(generatorViewport.getMaximumVisibleWidth(),
                                    generatorViewport.getMaximumVisibleHeight())
@@ -1058,7 +1293,7 @@ void PluginShell::resized()
         generatorHolder.setSize(juce::jmax(editorSize.getWidth(), visible.getWidth()),
                                 juce::jmax(editorSize.getHeight(), visible.getHeight()));
 
-        generatorEditor->setTopLeftPosition(
+        content->setTopLeftPosition(
             (generatorHolder.getWidth() - editorSize.getWidth()) / 2,
             (generatorHolder.getHeight() - editorSize.getHeight()) / 2);
     }
