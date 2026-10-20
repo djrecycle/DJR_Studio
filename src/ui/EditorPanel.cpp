@@ -1,5 +1,6 @@
 #include "EditorPanel.h"
 
+#include "Icons.h"
 #include "Theme.h"
 
 #include <cmath>
@@ -50,7 +51,7 @@ EditorPanel::EditorPanel(PianoRollModel& modelToUse, Transport& transport)
 
     quantizeButton.setCornerSize(3.0f);
     quantizeButton.addListener(this);
-    quantizeButton.setTooltip(TRANS("Quantize notes to the snap grid (Ctrl+Q)"));
+    quantizeButton.setTooltip(TRANS("Pick a grid to quantize notes to (Ctrl+Q repeats it)"));
     addAndMakeVisible(quantizeButton);
 
     // The roll only knows the chord stamp flipped; the badge showing that
@@ -188,8 +189,12 @@ void EditorPanel::paint(juce::Graphics& g)
         g.fillRoundedRectangle(chip, 3.0f);
         g.setColour(Theme::outlineStrong());
         g.drawRoundedRectangle(chip.reduced(0.5f), 3.0f, 1.0f);
+        auto content = quantizeButton.getBounds().reduced(6, 0);
+        const auto caret = content.removeFromRight(8).toFloat().withSizeKeepingCentre(8.0f, 8.0f);
         g.setColour(Theme::text());
-        g.drawText(TRANS("Quantize"), quantizeButton.getBounds(), juce::Justification::centred, false);
+        g.drawText(TRANS("Quantize"), content, juce::Justification::centred, false);
+        g.setColour(Theme::mutedText());
+        Icons::draw(g, Icon::caretDown, caret, 1.4f);
     }
 
     // Stop short of the follow button too, whether or not it is shown for the
@@ -575,7 +580,7 @@ void EditorPanel::resized()
     velocityToggle.setBounds(strip.removeFromRight(58).withSizeKeepingCentre(58, 16));
     followButton.setBounds(strip.removeFromRight(19).withSizeKeepingCentre(18, 18));
     strip.removeFromRight(2);
-    quantizeButton.setBounds(strip.removeFromRight(58).withSizeKeepingCentre(58, 16));
+    quantizeButton.setBounds(strip.removeFromRight(72).withSizeKeepingCentre(72, 16));
     strip.removeFromRight(4);
 
     // Tools sit after the pattern controls, in the gap before the note count.
@@ -699,10 +704,7 @@ void EditorPanel::buttonClicked(juce::Button* button)
     }
     else if (button == &quantizeButton)
     {
-        quantizeNotes();
-        // Back to the roll, so Ctrl+Q and the note shortcuts work straight
-        // after without another click on the grid first.
-        pianoRoll.grabKeyboardFocus();
+        pianoRoll.showQuantizeMenu(localAreaToGlobal(quantizeButton.getBounds()));
     }
     else if (button == &followButton)
     {

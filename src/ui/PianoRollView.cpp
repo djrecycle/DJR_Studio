@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <vector>
 
 namespace djr
 {
@@ -910,7 +911,9 @@ int PianoRollView::quantizeSelectedNotes()
     // With snap off there is no grid to pull towards, so a sixteenth - FL's
     // own default step - stands in rather than the button doing nothing.
     const auto snap = model.getSnapBeats();
-    const auto grid = snap > 0.0 ? snap : 0.25;
+    const auto grid = quantizeGridBeats > 0.0 ? quantizeGridBeats
+                    : snap > 0.0             ? snap
+                                             : 0.25;
 
     if (onEditGesture)
         onEditGesture(true);
@@ -926,6 +929,53 @@ int PianoRollView::quantizeSelectedNotes()
         onQuantized(moved);
 
     return moved;
+}
+
+void PianoRollView::showQuantizeMenu(juce::Rectangle<int> screenAnchor)
+{
+    // Beats are quarter notes, so a sixteenth is a quarter of one. The bar
+    // entries follow the time signature rather than assuming 4/4.
+    const auto bar = transport.getBeatsPerBar();
+    struct Entry { juce::String name; double beats; };
+    const Entry entries[] {
+        { TRANS("Snap setting"), 0.0 },
+        { "1/16", 0.25 },
+        { "1/8", 0.5 },
+        { TRANS("1 beat"), 1.0 },
+        { TRANS("1/2 bar"), bar / 2.0 },
+        { TRANS("1 bar"), bar }
+    };
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader(selectedNotes.isEmpty() ? TRANS("Quantize all notes to")
+                                                  : TRANS("Quantize selected notes to"));
+
+    for (int i = 0; i < juce::numElementsInArray(entries); ++i)
+    {
+        menu.addItem(i + 1, entries[i].name, true,
+                     std::abs(entries[i].beats - quantizeGridBeats) < 1.0e-9);
+
+        if (i == 0)
+            menu.addSeparator();
+    }
+
+    std::vector<double> grids;
+    for (const auto& entry : entries)
+        grids.push_back(entry.beats);
+
+    menu.showMenuAsync(juce::PopupMenu::Options()
+                           .withTargetScreenArea(screenAnchor)
+                           .withMinimumWidth(170)
+                           .withStandardItemHeight(21),
+        [safeThis = juce::Component::SafePointer<PianoRollView>(this), grids] (int result)
+        {
+            if (safeThis == nullptr || result <= 0)
+                return;
+
+            safeThis->quantizeGridBeats = grids[static_cast<size_t>(result - 1)];
+            safeThis->quantizeSelectedNotes();
+            safeThis->grabKeyboardFocus();
+        });
 }
 
 void PianoRollView::arpeggiateSelectedNotes()

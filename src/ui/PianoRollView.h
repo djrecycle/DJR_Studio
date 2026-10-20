@@ -103,8 +103,9 @@ public:
     std::function<void()> onChordStampChanged;
 
     /** Pulls the selected notes - or every note, with nothing selected - onto
-        the current snap grid, falling back to a sixteenth when snap is off.
-        Ctrl+Q, and the Quantize button in the editor strip. Returns how many
+        the quantize grid: the last one picked from the Quantize menu, or the
+        snap grid until one is (a sixteenth when snap is off). Ctrl+Q, and
+        the Quantize menu in the editor strip. Returns how many
         notes moved, so the caller can say so - zero means they already sat
         on the grid.
     */
@@ -113,6 +114,10 @@ public:
         window-level shortcut alike, so the host can report it.
     */
     std::function<void(int)> onQuantized;
+    /** Lists the quantize grids, anchored at `screenAnchor`; picking one
+        remembers it for Ctrl+Q and quantizes straight away.
+    */
+    void showQuantizeMenu(juce::Rectangle<int> screenAnchor);
 
 private:
     void changeListenerCallback(juce::ChangeBroadcaster* source) override;
@@ -237,6 +242,8 @@ private:
         until it is turned on from its own badge.
     */
     bool chordModeEnabled = false;
+    /** Grid picked from the Quantize menu, in beats; zero follows the snap. */
+    double quantizeGridBeats = 0.0;
     ChordType activeChordType = ChordType::major;
     /** Where the roll is and how much of it is showing - the same two bars the
         playlist has, so navigating one is navigating the other.
