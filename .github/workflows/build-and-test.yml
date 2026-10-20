@@ -23,7 +23,7 @@ jobs:
           sudo apt-get install -y build-essential cmake git pkg-config \
             libasound2-dev libjack-jackd2-dev libfreetype6-dev libfontconfig1-dev \
             libx11-dev libxext-dev libxinerama-dev libxcursor-dev libxrandr-dev \
-            libgl1-mesa-dev libcurl4-openssl-dev
+            libgl1-mesa-dev libcurl4-openssl-dev ladspa-sdk
 
       # JUCE is pulled in fresh via FetchContent and takes most of the build
       # time; caching it keyed on CMakeLists.txt means a run only re-fetches
