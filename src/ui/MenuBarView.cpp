@@ -166,7 +166,7 @@ void MenuBarView::showMenuFor(int menuIndex, juce::Button& source)
             menu.addSeparator();
             menu.addItem(5, "Project Manager...", true, false);
             menu.addSeparator();
-            menu.addItem(7, "Export Audio (WAV)...", true, false);
+            menu.addItem(7, "Export Audio...", true, false);
             menu.addSeparator();
             menu.addItem(6, "Quit", true, false);
             break;

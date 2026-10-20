@@ -1,5 +1,7 @@
 #include "MainComponent.h"
 
+#include "app/Settings.h"
+
 #include "Theme.h"
 #include "plugins/MidiSamplerProcessor.h"
 #include "plugins/StarterKitSamples.h"
@@ -1326,27 +1328,102 @@ double MainComponent::getSongLengthBeats()
 
 void MainComponent::exportAudio()
 {
+    using Format = ExportManager::Format;
+
+    // The last choices come back next time: someone delivering FLAC masters
+    // should not have to pick FLAC again for every bounce.
+    const auto savedFormat = Settings::get("exportFormat", "wav");
+    const auto format = savedFormat == "flac" ? Format::flac
+                      : savedFormat == "aiff" ? Format::aiff
+                                              : Format::wav;
+    const auto bitDepth = ExportManager::resolveBitDepth(format, Settings::get("exportBitDepth", "24").getIntValue());
+    const auto normalise = Settings::get("exportNormalise", "0") == "1";
+
+    auto* window = new juce::AlertWindow(TRANS("Export audio"),
+                                         TRANS("Choose the file format for the mixdown."),
+                                         juce::AlertWindow::NoIcon);
+
+    window->addComboBox("format", { "WAV", "FLAC", "AIFF" }, TRANS("Format"));
+    window->addComboBox("depth", { "16-bit", "24-bit", "32-bit float" }, TRANS("Bit depth"));
+    window->addComboBox("normalise", { TRANS("Off"), TRANS("On (peak at -0.3 dBFS)") }, TRANS("Normalise"));
+
+    auto* formatBox = window->getComboBoxComponent("format");
+    auto* depthBox = window->getComboBoxComponent("depth");
+    auto* normaliseBox = window->getComboBoxComponent("normalise");
+
+    // Combo ids are 1-based: format 1-3 follows the enum, depth 1-3 is 16/24/32.
+    formatBox->setSelectedId(static_cast<int>(format) + 1, juce::dontSendNotification);
+    depthBox->setSelectedId(bitDepth == 16 ? 1 : bitDepth == 32 ? 3 : 2, juce::dontSendNotification);
+    normaliseBox->setSelectedId(normalise ? 2 : 1, juce::dontSendNotification);
+
+    // Float only exists for wav, so it is greyed out rather than silently
+    // turned into 24 bit after the user picked it.
+    const auto refreshDepths = [formatBox, depthBox]
+    {
+        const auto isWav = formatBox->getSelectedId() == 1;
+        depthBox->setItemEnabled(3, isWav);
+
+        if (! isWav && depthBox->getSelectedId() == 3)
+            depthBox->setSelectedId(2, juce::dontSendNotification);
+    };
+
+    refreshDepths();
+    formatBox->onChange = refreshDepths;
+
+    window->addButton(TRANS("Next..."), 1, juce::KeyPress(juce::KeyPress::returnKey));
+    window->addButton(TRANS("Cancel"), 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+    window->enterModalState(true,
+        juce::ModalCallbackFunction::create([this, window] (int result)
+        {
+            std::unique_ptr<juce::AlertWindow> owned(window);
+
+            if (result != 1)
+                return;
+
+            ExportManager::Options choices;
+            choices.format = static_cast<Format>(window->getComboBoxComponent("format")->getSelectedId() - 1);
+
+            const auto depthId = window->getComboBoxComponent("depth")->getSelectedId();
+            choices.bitDepth = ExportManager::resolveBitDepth(choices.format, depthId == 1 ? 16 : depthId == 3 ? 32 : 24);
+            choices.normalise = window->getComboBoxComponent("normalise")->getSelectedId() == 2;
+
+            Settings::set("exportFormat", choices.format == Format::flac ? "flac"
+                                        : choices.format == Format::aiff ? "aiff"
+                                                                         : "wav");
+            Settings::set("exportBitDepth", juce::String(choices.bitDepth));
+            Settings::set("exportNormalise", choices.normalise ? "1" : "0");
+
+            exportAudioTo(choices);
+        }),
+        false);
+}
+
+void MainComponent::exportAudioTo(const ExportManager::Options& choices)
+{
+    const auto extension = ExportManager::extensionFor(choices.format);
+
     auto start = projectManager.getProject().projectFile;
     start = start.existsAsFile()
-        ? start.getSiblingFile(start.getFileNameWithoutExtension() + ".wav")
-        : FileUtils::getDefaultProjectRoot().getChildFile("Export.wav");
+        ? start.getSiblingFile(start.getFileNameWithoutExtension() + extension)
+        : FileUtils::getDefaultProjectRoot().getChildFile("Export" + extension);
 
-    fileChooser = std::make_unique<juce::FileChooser>(TRANS("Export audio to WAV"), start, "*.wav");
+    fileChooser = std::make_unique<juce::FileChooser>(TRANS("Export audio"), start, "*" + extension);
 
     fileChooser->launchAsync(juce::FileBrowserComponent::saveMode
                            | juce::FileBrowserComponent::canSelectFiles
                            | juce::FileBrowserComponent::warnAboutOverwriting,
-        [this] (const juce::FileChooser& chooser)
+        [this, choices, extension] (const juce::FileChooser& chooser)
         {
             auto file = chooser.getResult();
 
             if (file == juce::File())
                 return;
 
-            if (! file.hasFileExtension(".wav"))
-                file = file.withFileExtension(".wav");
+            if (! file.hasFileExtension(extension))
+                file = file.withFileExtension(extension);
 
-            ExportManager::Options options;
+            auto options = choices;
             options.sampleRate = audioEngine.getCurrentSampleRate();
             options.blockSize = audioEngine.getCurrentBufferSize();
             options.tempoBpm = audioEngine.getTransport().getTempoBpm();
