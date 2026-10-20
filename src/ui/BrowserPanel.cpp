@@ -93,8 +93,44 @@ void BrowserPanel::RowsModel::listBoxItemDoubleClicked(int row, const juce::Mous
         return;
     }
 
+    if (item.externalAppIndex >= 0)
+    {
+        if (owner.externalAppActivatedCallback)
+            owner.externalAppActivatedCallback(item.externalAppIndex);
+
+        return;
+    }
+
     if (item.file.existsAsFile() && owner.fileActivatedCallback)
         owner.fileActivatedCallback(item.file);
+}
+
+void BrowserPanel::RowsModel::listBoxItemClicked(int row, const juce::MouseEvent& event)
+{
+    if (! event.mods.isPopupMenu())
+        return;
+
+    if (! juce::isPositiveAndBelow(row, static_cast<int>(owner.rows.size())))
+        return;
+
+    const auto appIndex = owner.rows[static_cast<size_t>(row)].externalAppIndex;
+
+    if (appIndex < 0)
+        return;
+
+    const auto& apps = ExternalAppBridge::knownApps();
+    const auto running = juce::isPositiveAndBelow(appIndex, static_cast<int>(apps.size()))
+                        && ExternalAppBridge::isRunning(apps[static_cast<size_t>(appIndex)]);
+
+    juce::PopupMenu menu;
+    menu.addItem(1, TRANS("Quit"), running);
+
+    menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition(),
+        [this, appIndex] (int result)
+        {
+            if (result == 1 && owner.externalAppQuitRequestedCallback)
+                owner.externalAppQuitRequestedCallback(appIndex);
+        });
 }
 
 juce::var BrowserPanel::RowsModel::getDragSourceDescription(const juce::SparseSet<int>& rows)
@@ -371,6 +407,16 @@ void BrowserPanel::setPluginActivatedCallback(std::function<void(int)> callback)
     pluginActivatedCallback = std::move(callback);
 }
 
+void BrowserPanel::setExternalAppActivatedCallback(std::function<void(int)> callback)
+{
+    externalAppActivatedCallback = std::move(callback);
+}
+
+void BrowserPanel::setExternalAppQuitRequestedCallback(std::function<void(int)> callback)
+{
+    externalAppQuitRequestedCallback = std::move(callback);
+}
+
 void BrowserPanel::setPluginList(const juce::Array<juce::PluginDescription>& plugins)
 {
     pluginNames.clear();
@@ -470,6 +516,31 @@ void BrowserPanel::rebuildRows()
         case 1: appendFolder(root.getChildFile("Samples"), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg"); break;
         case 2: appendFolder(root.getChildFile("Recordings"), "*.wav;*.flac"); break;
         case 3: appendFolder(root.getChildFile("Presets"), "*.djrp;*.xml"); break;
+
+        case 5:
+        {
+            // Real, separate JACK applications, not plugins this app hosts -
+            // see ExternalAppBridge. The dot doubles as a running indicator,
+            // the same colour language the mixer already uses for a track's
+            // own mute/solo state elsewhere in this app.
+            const auto& apps = ExternalAppBridge::knownApps();
+
+            for (int i = 0; i < static_cast<int>(apps.size()); ++i)
+            {
+                const auto& app = apps[static_cast<size_t>(i)];
+                const auto installed = ExternalAppBridge::isInstalled(app);
+                const auto running = installed && ExternalAppBridge::isRunning(app);
+
+                const auto meta = ! installed ? TRANS("not installed")
+                                 : running ? TRANS("running")
+                                           : TRANS("installed");
+
+                rows.push_back({ app.displayName, meta, false, {},
+                                 running ? Theme::cyan() : Theme::mutedText(), -1, i });
+            }
+
+            break;
+        }
 
         default:
         {

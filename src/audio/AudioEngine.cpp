@@ -14,7 +14,7 @@ AudioEngine::~AudioEngine()
 
 bool AudioEngine::initialise()
 {
-    const auto error = deviceManager.initialise(2, 2, nullptr, true);
+    const auto error = deviceManager.initialise(maxInputChannels, 2, nullptr, true);
     if (error.isNotEmpty())
     {
         Logger::write("Audio device initialise failed: " + error);
@@ -29,6 +29,21 @@ bool AudioEngine::initialise()
 void AudioEngine::shutdown()
 {
     deviceManager.removeAudioCallback(this);
+}
+
+void AudioEngine::switchToJack()
+{
+    deviceManager.setCurrentAudioDeviceType("JACK", true);
+
+    auto setup = deviceManager.getAudioDeviceSetup();
+    setup.useDefaultInputChannels = false;
+    setup.inputChannels.clear();
+    setup.inputChannels.setRange(0, maxInputChannels, true);
+    setup.useDefaultOutputChannels = false;
+    setup.outputChannels.clear();
+    setup.outputChannels.setRange(0, 2, true);
+
+    deviceManager.setAudioDeviceSetup(setup, true);
 }
 
 juce::AudioDeviceManager& AudioEngine::getDeviceManager() noexcept

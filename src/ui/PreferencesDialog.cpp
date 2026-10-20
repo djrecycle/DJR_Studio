@@ -99,7 +99,7 @@ PreferencesDialog::PreferencesDialog(juce::AudioDeviceManager& deviceManagerToUs
     }
 
     audioSelector = std::make_unique<juce::AudioDeviceSelectorComponent>(
-        deviceManager, 0, 2, 0, 2, false, false, true, false);
+        deviceManager, 0, AudioEngine::maxInputChannels, 0, 2, false, false, true, false);
     addChildComponent(audioSelector.get());
 
     midiSelector = std::make_unique<juce::AudioDeviceSelectorComponent>(
