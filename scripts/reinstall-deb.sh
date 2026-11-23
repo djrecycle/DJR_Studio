@@ -65,6 +65,22 @@ if [[ ! -f "${PACKAGE_PATH}" ]]; then
 fi
 
 echo "[DJR_Studio] Install ulang package..."
-sudo apt install -y "${PACKAGE_PATH}"
+
+# sudo asks for a password on the terminal. Run without one - from an editor's
+# task runner, or Claude Code's "!" prompt - it fails with "a terminal is
+# required to authenticate" after the whole build has already succeeded. Only
+# try when it can actually work: stdin is a terminal, or sudo needs no
+# password right now (cached credentials or NOPASSWD). Otherwise stop here
+# with the package built and the one command still left to run.
+if [[ -t 0 ]] || sudo -n true 2>/dev/null; then
+    sudo apt install -y "${PACKAGE_PATH}"
+else
+    echo "[DJR_Studio] Paket sudah jadi, tapi BELUM di-install: sudo butuh terminal untuk password."
+    echo "[DJR_Studio] Jalankan perintah ini di terminal (mis. Konsole):"
+    echo
+    echo "    sudo apt install -y \"${PACKAGE_PATH}\""
+    echo
+    exit 0
+fi
 
 echo "[DJR_Studio] Selesai. Jalankan dengan command: djr_studio"
