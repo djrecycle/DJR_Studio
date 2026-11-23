@@ -28,7 +28,10 @@ PanelWindow& PanelHost::addPanel(const juce::String& panelId,
     panel->onLayoutChanged = [this] (PanelWindow&)
     {
         if (! applyingLayout)
+        {
             userArranged = true;
+            layoutSize = getLocalBounds();
+        }
 
         notifyStateChanged();
     };
@@ -98,6 +101,7 @@ void PanelHost::resetLayout()
 
     layoutBuilder(*this, getLocalBounds());
     userArranged = false;
+    layoutSize = getLocalBounds();
     notifyStateChanged();
 }
 
@@ -125,6 +129,10 @@ juce::var PanelHost::getLayoutState() const
         object->setProperty("open", panel->isVisible());
         object->setProperty("rolledUp", panel->isRolledUp());
         object->setProperty("maximised", panel->isMaximised());
+        // What window the bounds were made for, so they can be fitted to
+        // whichever window the project is opened in.
+        object->setProperty("hostWidth", getWidth());
+        object->setProperty("hostHeight", getHeight());
         entries.add(object);
     }
 
@@ -140,12 +148,26 @@ void PanelHost::applyLayoutState(const juce::var& state)
 
     const juce::ScopedValueSetter<bool> guard(applyingLayout, true);
 
+    // The size of window this layout was made for: stored since the host size
+    // was saved with it, otherwise read off the open panels' own extent.
+    juce::Rectangle<int> savedFor;
+
     for (const auto& entry : *entries)
     {
         auto* object = entry.getDynamicObject();
 
         if (object == nullptr)
             continue;
+
+        const auto hostWidth = static_cast<int>(object->getProperty("hostWidth"));
+        const auto hostHeight = static_cast<int>(object->getProperty("hostHeight"));
+
+        if (hostWidth > 0 && hostHeight > 0)
+            savedFor = { hostWidth, hostHeight };
+        else if (static_cast<bool>(object->getProperty("open")))
+            savedFor = savedFor.getUnion({ 0, 0,
+                                           static_cast<int>(object->getProperty("x")) + static_cast<int>(object->getProperty("width")),
+                                           static_cast<int>(object->getProperty("y")) + static_cast<int>(object->getProperty("height")) });
 
         auto* panel = findPanel(object->getProperty("id").toString());
 
@@ -164,13 +186,59 @@ void PanelHost::applyLayoutState(const juce::var& state)
         panel->setVisible(static_cast<bool>(object->getProperty("open")));
         panel->setRolledUp(static_cast<bool>(object->getProperty("rolledUp")));
         panel->setMaximised(static_cast<bool>(object->getProperty("maximised")));
-
-        keepPanelOnScreen(*panel);
     }
 
-    // A restored layout is the user's own arrangement, so stop auto re-tiling.
+    // A restored layout is the user's own arrangement, so stop auto re-tiling -
+    // but fit it to this window rather than keep the size it was saved at.
     userArranged = true;
+    layoutSize = savedFor;
+    fitLayoutToHost();
+
+    for (auto* panel : panels)
+        if (! panel->isMaximised())
+            keepPanelOnScreen(*panel);
+
     notifyStateChanged();
+}
+
+void PanelHost::fitLayoutToHost()
+{
+    const auto host = getLocalBounds();
+
+    if (host.isEmpty() || layoutSize.isEmpty()
+        || (layoutSize.getWidth() == host.getWidth() && layoutSize.getHeight() == host.getHeight()))
+    {
+        if (! host.isEmpty())
+            layoutSize = host;
+
+        return;
+    }
+
+    const auto sx = static_cast<double>(host.getWidth()) / layoutSize.getWidth();
+    const auto sy = static_cast<double>(host.getHeight()) / layoutSize.getHeight();
+
+    for (auto* panel : panels)
+    {
+        const auto restored = panel->getRestoredBounds();
+
+        if (restored.isEmpty())
+            continue;
+
+        const auto left = juce::roundToInt(restored.getX() * sx);
+        const auto right = juce::roundToInt(restored.getRight() * sx);
+        const auto y0 = juce::roundToInt(restored.getY() * sy);
+        const auto bottom = juce::roundToInt(restored.getBottom() * sy);
+        const juce::Rectangle<int> scaled(left, y0, juce::jmax(180, right - left), juce::jmax(60, bottom - y0));
+
+        panel->setRestoredBounds(scaled);
+
+        if (panel->isMaximised())
+            panel->setBounds(host);
+        else if (panel->isRolledUp())
+            panel->setBounds(scaled.withHeight(panel->getHeight()));
+    }
+
+    layoutSize = host;
 }
 
 void PanelHost::paint(juce::Graphics& g)
@@ -197,6 +265,8 @@ void PanelHost::resized()
         resetLayout();
         return;
     }
+
+    fitLayoutToHost();
 
     for (auto* panel : panels)
     {

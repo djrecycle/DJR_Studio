@@ -14,6 +14,9 @@ void Project::reset()
     samplesFolder = juce::File();
     recordingsFolder = juce::File();
     tracks.clear();
+    // Cleared with the rest: left over, the previous session's arrangement
+    // would be applied to the next project opened, as if it were that one's.
+    panelLayout = juce::var();
     patternNames.clear();
     patternLengths.clear();
     scaleRoot = 0;
@@ -117,6 +120,10 @@ void Project::fromVar(const juce::var& value)
     if (auto* patternLengthArray = root->getProperty("patternLengths").getArray())
         for (const auto& length : *patternLengthArray)
             patternLengths.add(static_cast<double>(length));
+
+    // Written since panels became floating, but never read back - so opening a
+    // project applied whatever the current session last captured instead.
+    panelLayout = root->getProperty("panelLayout");
 
     scaleRoot = static_cast<int>(getOr(*root, "scaleRoot", 0));
     scaleType = static_cast<int>(getOr(*root, "scaleType", 0));

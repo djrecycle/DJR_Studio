@@ -46,6 +46,11 @@ public:
 private:
     void keepPanelOnScreen(PanelWindow& panel);
     void notifyStateChanged();
+    /** Stretches every panel's restored bounds from `layoutSize` to the host's
+        current size, edges scaled rather than sizes so panels that touched
+        keep touching.
+    */
+    void fitLayoutToHost();
 
     juce::OwnedArray<PanelWindow> panels;
     juce::StringArray panelIds;
@@ -53,6 +58,11 @@ private:
     /** Until the user arranges a panel by hand, resizing the host re-tiles. */
     bool userArranged = false;
     bool applyingLayout = false;
+    /** The host size the current arrangement was made for. A user or restored
+        layout is scaled from this when the window changes size, so it keeps
+        filling the window instead of staying at the size it was made at.
+    */
+    juce::Rectangle<int> layoutSize;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PanelHost)
 };
