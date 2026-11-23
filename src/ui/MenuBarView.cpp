@@ -1,5 +1,6 @@
 #include "MenuBarView.h"
 
+#include "Icons.h"
 #include "Theme.h"
 
 namespace djr
@@ -8,7 +9,7 @@ namespace djr
 namespace
 {
     const char* const menuNames[] = { "File", "Edit", "View", "Tools", "Help" };
-    constexpr int logoBadgeSize = 14;
+    constexpr int logoBadgeSize = 20;
     constexpr int logoTextWidth = 84;
     constexpr int itemHeight = 18;
 }
@@ -41,12 +42,10 @@ void MenuBarView::paint(juce::Graphics& g)
     g.fillRect(bounds.removeFromBottom(1));
 
     // Logo badge -------------------------------------------------------------
-    auto logo = juce::Rectangle<int>(8, (getHeight() - logoBadgeSize) / 2, logoBadgeSize, logoBadgeSize).toFloat();
-    g.setGradientFill(juce::ColourGradient(Theme::cyan(), logo.getX(), logo.getY(),
-                                           Theme::purple(), logo.getRight(), logo.getBottom(), false));
-    g.fillRoundedRectangle(logo, 4.0f);
-    g.setColour(Theme::windowBackground());
-    g.fillRoundedRectangle(logo.withSizeKeepingCentre(5.0f, 5.0f), 1.5f);
+    Icons::drawLogoMark(g,
+                        juce::Rectangle<int>(8, (getHeight() - logoBadgeSize) / 2, logoBadgeSize, logoBadgeSize).toFloat(),
+                        Theme::cyan(),
+                        Theme::purple());
 
     g.setColour(Theme::text());
     g.setFont(Theme::display(15.0f));

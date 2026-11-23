@@ -50,7 +50,7 @@ ArrangementView::ArrangementView(Mixer& mixerToUse, Transport& transportToUse)
 
     buildToolButtons();
 
-    snapButton.setIconInset(3.5f);
+    snapButton.setIconInset(2.5f);
     snapButton.addListener(this);
     addAndMakeVisible(snapButton);
 
@@ -2642,8 +2642,8 @@ void ArrangementView::buildToolButtons()
     {
         auto* button = toolButtons.add(new IconChipButton(juce::translate(definition.tooltip), definition.icon));
         // The default inset leaves a 6px glyph on an 18px chip - far too small
-        // to tell a razor from a magnet.
-        button->setIconInset(3.5f);
+        // to tell a razor from a magnet. 2.5 gives a 14px glyph on the 19px chip.
+        button->setIconInset(2.5f);
         button->addListener(this);
         addAndMakeVisible(button);
     }

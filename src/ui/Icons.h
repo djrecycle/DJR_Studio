@@ -54,6 +54,15 @@ enum class Icon
 class Icons
 {
 public:
+    /** The DJR logo cut down to what still reads at menu-bar size: the two
+        "recycle" arrows circling, and the music note from the middle of the
+        R. The letters, waveforms and wordmark of the full logo
+        (docs/branding/logo.png) turn to mush below ~48 px. Drawn as paths
+        rather than a shrunk PNG so it stays sharp at every interface scale.
+    */
+    static void drawLogoMark(juce::Graphics& g, juce::Rectangle<float> area,
+                             juce::Colour from, juce::Colour to);
+
     /** Builds the icon path inside the given bounds. */
     static juce::Path path(Icon icon, juce::Rectangle<float> bounds);
 

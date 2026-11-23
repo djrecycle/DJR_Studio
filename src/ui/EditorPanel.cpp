@@ -105,8 +105,9 @@ void EditorPanel::buildToolButtons()
     for (const auto& definition : definitions)
     {
         auto* button = toolButtons.add(new IconChipButton(juce::translate(definition.tooltip), definition.icon));
-        // Small chips need a tighter inset or the glyph is unreadable.
-        button->setIconInset(3.5f);
+        // Small chips need a tighter inset or the glyph is unreadable: 2.5
+        // gives a 14px glyph on the 19px chip.
+        button->setIconInset(2.5f);
         button->addListener(this);
         addAndMakeVisible(button);
     }
@@ -192,7 +193,7 @@ void EditorPanel::paint(juce::Graphics& g)
         auto content = quantizeButton.getBounds().reduced(6, 0);
         const auto caret = content.removeFromRight(8).toFloat().withSizeKeepingCentre(8.0f, 8.0f);
         g.setColour(Theme::text());
-        g.drawText(TRANS("Quantize"), content, juce::Justification::centred, false);
+        g.drawText(compactQuantize ? juce::String("Q") : TRANS("Quantize"), content, juce::Justification::centred, false);
         g.setColour(Theme::mutedText());
         Icons::draw(g, Icon::caretDown, caret, 1.4f);
     }
@@ -202,13 +203,19 @@ void EditorPanel::paint(juce::Graphics& g)
     info = info.withRight(quantizeButton.getBounds().getX());
     drawDivider(info.removeFromRight(11));
 
+    // Only an at-a-glance count, so it is the first thing to go when the
+    // strip is too narrow - rather than being drawn under the Key | Chord badge.
     const auto notesText = juce::String(noteCount) + " notes";
     const auto notesWidth = Theme::textWidth(Theme::ui(11.0f), notesText);
-    g.setColour(Theme::mutedText());
-    g.setFont(Theme::ui(11.0f));
-    g.drawText(notesText, info.removeFromRight(notesWidth), juce::Justification::centredRight, false);
 
-    drawDivider(info.removeFromRight(11));
+    if (info.getRight() - notesWidth - 11 >= getLeftClusterRight() + 8)
+    {
+        g.setColour(Theme::mutedText());
+        g.setFont(Theme::ui(11.0f));
+        g.drawText(notesText, info.removeFromRight(notesWidth), juce::Justification::centredRight, false);
+
+        drawDivider(info.removeFromRight(11));
+    }
 
     // Pattern selector: which clip every editor here is looking at.
     const auto drawArrow = [&g] (juce::Rectangle<int> area, const juce::String& glyph, bool enabled)
@@ -310,6 +317,14 @@ juce::Rectangle<int> EditorPanel::getPatternLengthBounds() const
                                                + juce::jmin(110, Theme::textWidth(Theme::ui(10.5f), trackName) + 4));
     return juce::Rectangle<int>(name.getRight() + 8, name.getY(), 48, name.getHeight());
 }
+int EditorPanel::getLeftClusterRight() const
+{
+    // The tools and the Key | Chord badge only show on the piano roll; the
+    // step sequencer's strip ends at the pattern length.
+    return pianoRollVisible ? getHelperBadgeBounds().getRight()
+                            : getPatternLengthBounds().getRight();
+}
+
 juce::Rectangle<int> EditorPanel::getHelperBadgeBounds() const
 {
     // Right after the tool chips, level with the Piano Roll tab rather than
@@ -403,6 +418,9 @@ void EditorPanel::setPatternName(const juce::String& name)
         return;
 
     patternName = name;
+    // Its width moves the tools, the Key | Chord badge and whether
+    // "Quantize" still fits beside them.
+    resized();
     repaint();
 }
 
@@ -515,6 +533,9 @@ void EditorPanel::setActivePattern(int patternIndex)
         return;
 
     activePattern = clamped;
+    // Its width moves the tools, the Key | Chord badge and whether
+    // "Quantize" still fits beside them.
+    resized();
     repaint();
 }
 
@@ -580,7 +601,17 @@ void EditorPanel::resized()
     velocityToggle.setBounds(strip.removeFromRight(58).withSizeKeepingCentre(58, 16));
     followButton.setBounds(strip.removeFromRight(19).withSizeKeepingCentre(18, 18));
     strip.removeFromRight(2);
-    quantizeButton.setBounds(strip.removeFromRight(72).withSizeKeepingCentre(72, 16));
+
+    // The right-hand cluster is laid out from the right and the tools and
+    // Key | Chord badge from the left, so on a narrow panel (a 1366 px screen
+    // with the browser and plugin panels open) they met and the badge was
+    // painted over the middle of "Quantize". paint() drops the note count
+    // first; if the full chip still does not fit, it shrinks to "Q".
+    constexpr int fullQuantizeWidth = 72;
+    constexpr int compactQuantizeWidth = 30;
+    compactQuantize = strip.getRight() - fullQuantizeWidth < getLeftClusterRight() + 8;
+    const auto quantizeWidth = compactQuantize ? compactQuantizeWidth : fullQuantizeWidth;
+    quantizeButton.setBounds(strip.removeFromRight(quantizeWidth).withSizeKeepingCentre(quantizeWidth, 16));
     strip.removeFromRight(4);
 
     // Tools sit after the pattern controls, in the gap before the note count.
