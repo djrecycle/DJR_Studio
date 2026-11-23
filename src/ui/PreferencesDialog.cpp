@@ -1,5 +1,6 @@
 #include "PreferencesDialog.h"
 
+#include "app/UiScale.h"
 #include "audio/AudioEngine.h"
 #include "plugins/PluginScanner.h"
 
@@ -51,12 +52,15 @@ PreferencesDialog::PreferencesDialog(juce::AudioDeviceManager& deviceManagerToUs
     scanButton.addListener(this);
     addChildComponent(scanButton);
 
-    scaleSlider.setSliderStyle(juce::Slider::LinearHorizontal);
-    scaleSlider.setTextBoxStyle(juce::Slider::NoTextBox, true, 0, 0);
-    scaleSlider.setRange(60.0, 140.0, 5.0);
-    scaleSlider.setValue(100.0, juce::dontSendNotification);
-    scaleSlider.addListener(this);
-    addChildComponent(scaleSlider);
+    for (const auto choice : UiScale::getChoices())
+    {
+        auto* chip = scaleChips.add(new TabChip(choice == UiScale::autoChoice ? TRANS("Auto")
+                                                                              : juce::String(choice) + "%"));
+        chip->setClickingTogglesState(true);
+        chip->setRadioGroupId(0xC24);
+        chip->addListener(this);
+        addChildComponent(chip);
+    }
 
     for (auto* toggle : { &tooltipsSwitch, &autoScrollSwitch, &autoOpenEditorSwitch })
     {
@@ -114,7 +118,9 @@ PreferencesDialog::~PreferencesDialog()
 {
     closeButton.removeListener(this);
     scanButton.removeListener(this);
-    scaleSlider.removeListener(this);
+
+    for (auto* chip : scaleChips)
+        chip->removeListener(this);
 
     for (auto* toggle : { &tooltipsSwitch, &autoScrollSwitch, &autoOpenEditorSwitch })
         toggle->removeListener(this);
@@ -311,12 +317,18 @@ void PreferencesDialog::paint(juce::Graphics& g)
     auto scaleCaption = content.withTrimmedTop(themeCardHeight + 18).withHeight(16);
     Theme::drawCaption(g, scaleCaption, "Interface scale");
 
-    g.setColour(Theme::text());
-    g.setFont(Theme::mono(12.5f));
-    g.drawText(juce::String(juce::roundToInt(scaleSlider.getValue())) + "%",
-               juce::Rectangle<int>(scaleSlider.getRight() + 12, scaleSlider.getY(), 50, scaleSlider.getHeight()),
-               juce::Justification::centredLeft,
-               false);
+    if (! scaleChips.isEmpty())
+    {
+        // What the selection actually came out as - Auto's pick, or a fixed
+        // size lowered because this screen cannot fit it.
+        const auto lastChip = scaleChips.getLast()->getBounds();
+        g.setColour(Theme::textSoft());
+        g.setFont(Theme::mono(12.0f));
+        g.drawText("= " + juce::String(effectiveScalePercent) + "%",
+                   juce::Rectangle<int>(lastChip.getRight() + 10, lastChip.getY(), 70, lastChip.getHeight()),
+                   juce::Justification::centredLeft,
+                   false);
+    }
 
     for (int i = 0; i < 3; ++i)
     {
@@ -406,7 +418,14 @@ void PreferencesDialog::resized()
                                  .withSizeKeepingCentre(indonesianChip.getPreferredWidth(), 18));
 
     const auto scaleTop = page.getY() + 16 + themeCardHeight + 18 + 16 + 6;
-    scaleSlider.setBounds(page.getX(), scaleTop, page.getWidth() - 70, 20);
+    auto scaleRow = juce::Rectangle<int>(page.getX(), scaleTop, page.getWidth() - 80, 20);
+
+    for (auto* chip : scaleChips)
+    {
+        const auto width = chip->getPreferredWidth();
+        chip->setBounds(scaleRow.removeFromLeft(width).withSizeKeepingCentre(width, 18));
+        scaleRow.removeFromLeft(4);
+    }
 
     for (int i = 0; i < 3; ++i)
     {
@@ -465,9 +484,25 @@ void PreferencesDialog::showPage(int pageIndex)
     repaint();
 }
 
-void PreferencesDialog::setScalePercent(int percent)
+void PreferencesDialog::setInterfaceScale(int choice, int effectivePercent)
 {
-    scaleSlider.setValue(juce::jlimit(60, 140, percent), juce::dontSendNotification);
+    const auto& choices = UiScale::getChoices();
+    const auto metrics = UiScale::measurePrimaryDisplay();
+
+    for (int i = 0; i < scaleChips.size(); ++i)
+    {
+        auto* chip = scaleChips[i];
+        chip->setToggleState(choices[i] == choice, juce::dontSendNotification);
+
+        // A size the minimum window would not fit on this screen at all.
+        const auto usable = choices[i] == UiScale::autoChoice
+                         || ! metrics.has_value()
+                         || UiScale::fits(choices[i], *metrics);
+        chip->setEnabled(usable);
+        chip->setAlpha(usable ? 1.0f : 0.35f);
+    }
+
+    effectiveScalePercent = effectivePercent;
     repaint();
 }
 
@@ -590,6 +625,13 @@ void PreferencesDialog::buttonClicked(juce::Button* button)
 
         repaint();
     }
+    else if (const auto scaleIndex = scaleChips.indexOf(dynamic_cast<TabChip*>(button)); scaleIndex >= 0)
+    {
+        // A radio group also notifies the chip it switched off; only the one
+        // now on carries the new choice.
+        if (button->getToggleState() && scaleChangedCallback)
+            scaleChangedCallback(UiScale::getChoices()[scaleIndex]);
+    }
     else if (button == &englishChip || button == &indonesianChip)
     {
         // The resulting state, not which chip was clicked: a radio group also
@@ -644,16 +686,6 @@ void PreferencesDialog::setTypingOctaveCallback(std::function<void(int)> callbac
     typingOctaveCallback = std::move(callback);
 }
 
-void PreferencesDialog::sliderValueChanged(juce::Slider* slider)
-{
-    if (slider != &scaleSlider)
-        return;
-
-    if (scaleChangedCallback)
-        scaleChangedCallback(juce::roundToInt(scaleSlider.getValue()));
-
-    repaint();
-}
 
 void PreferencesDialog::refreshPluginPaths()
 {
@@ -793,7 +825,10 @@ void PreferencesDialog::refreshPageVisibility()
 
     for (auto* button : addPathButtons)
         button->setVisible(currentPage == 2);
-    scaleSlider.setVisible(currentPage == 3);
+
+    for (auto* chip : scaleChips)
+        chip->setVisible(currentPage == 3);
+
     tooltipsSwitch.setVisible(currentPage == 3);
     autoScrollSwitch.setVisible(currentPage == 3);
     autoOpenEditorSwitch.setVisible(currentPage == 3);

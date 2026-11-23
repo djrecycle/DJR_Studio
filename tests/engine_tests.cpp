@@ -34,6 +34,7 @@
 #include "plugins/PluginScanner.h"
 #include "plugins/StarterKitSamples.h"
 #include "plugins/PluginWindow.h"
+#include "app/UiScale.h"
 
 #include <algorithm>
 #include <iostream>
@@ -5508,6 +5509,58 @@ int main()
         const auto* midiBridgePort = find("Midi-Bridge:Midi Through:(capture_0) Midi Through Port-0");
         check(midiBridgePort != nullptr && midiBridgePort->isOutput && ! midiBridgePort->isAudio,
               "a port name with its own colons and spaces is kept whole, not split on the first colon");
+    }
+
+    // --- UiScale::chooseAutoFactor / resolveFactor: real monitor geometry ---
+    // Sizes and DPIs are what xrandr reports for common panels (DPI from the
+    // EDID millimetres, the way JUCE's Linux Displays computes it). The point
+    // of Auto is the 1440p/4K case, where the desktop reports scale 1 and the
+    // app used to come up at its 1080p size; just as important is that it
+    // leaves ordinary 1080p screens and small laptops alone.
+    {
+        const auto screen = [] (int width, int height, double dpi, double platform = 1.0)
+        {
+            djr::UiScale::Metrics metrics;
+            metrics.physicalTotalArea = { 0, 0, width, height };
+            metrics.physicalUserArea = metrics.physicalTotalArea;
+            metrics.dpi = dpi;
+            metrics.platformScale = platform;
+            return metrics;
+        };
+
+        const auto near = [] (double a, double b) { return std::abs(a - b) < 1.0e-9; };
+        using djr::UiScale::chooseAutoFactor;
+        using djr::UiScale::resolveFactor;
+        using djr::UiScale::fits;
+
+        check(near(chooseAutoFactor(screen(1920, 1080, 92.0)), 1.0), "auto: 24\" 1080p monitor stays at 100%");
+        check(near(chooseAutoFactor(screen(1920, 1080, 141.0)), 1.0),
+              "auto: 15.6\" 1080p laptop stays at 100% - its high DPI does not cramp the layout");
+        check(near(chooseAutoFactor(screen(1366, 768, 125.0)), 1.0), "auto: 1366x768 laptop stays at 100%, never below");
+        check(near(chooseAutoFactor(screen(2560, 1440, 109.0)), 1.0), "auto: 27\" 1440p monitor stays at 100%");
+        check(near(chooseAutoFactor(screen(2560, 1440, 210.0)), 1.25), "auto: 14\" 1440p laptop goes to 125%");
+        check(near(chooseAutoFactor(screen(3840, 2160, 163.0)), 1.5), "auto: 27\" 4K monitor goes to 150%");
+        check(near(chooseAutoFactor(screen(3840, 2160, 183.0)), 1.75), "auto: 24\" 4K monitor goes to 175%");
+        check(near(chooseAutoFactor(screen(3840, 2160, 137.0)), 1.25), "auto: 32\" 4K monitor goes to 125%");
+        check(near(chooseAutoFactor(screen(5120, 2880, 218.0)), 2.25), "auto: 27\" 5K monitor goes to 225%");
+        check(near(chooseAutoFactor(screen(3840, 2160, 0.0)), 2.0),
+              "auto: 4K with no usable DPI (TV/projector EDID) falls back to resolution, 200%");
+        check(near(chooseAutoFactor(screen(3840, 2160, 163.0, 2.0)), 1.0),
+              "auto: a desktop already at 200% is not scaled a second time on top");
+        check(near(chooseAutoFactor(screen(3840, 2160, 0.0, 1.5)), 1.25),
+              "auto: on top of a desktop at 150%, only the remainder is added");
+
+        const auto laptop = screen(1366, 768, 125.0);
+        check(near(resolveFactor(djr::UiScale::autoChoice, laptop), 1.0), "resolve: Auto choice goes through chooseAutoFactor");
+        check(near(resolveFactor(75, laptop), 0.75), "resolve: a choice below 100% is taken as is");
+        check(near(resolveFactor(250, laptop), 768.0 / 720.0),
+              "resolve: 250% saved on a big screen is lowered to what the layout still fits on a laptop");
+        check(near(resolveFactor(200, screen(3840, 2160, 163.0)), 2.0), "resolve: 200% on 4K is honoured exactly");
+        check(fits(75, laptop) && fits(100, laptop), "fits: 75% and 100% always fit");
+        check(! fits(125, laptop), "fits: 125% does not fit a 1366x768 screen - the layout ran off its edges there");
+        check(fits(150, screen(1920, 1080, 92.0)) && ! fits(175, screen(1920, 1080, 92.0)),
+              "fits: a 1080p screen takes up to 150%, not 175%");
+        check(fits(250, screen(3840, 2160, 163.0)), "fits: 250% fits on 4K");
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

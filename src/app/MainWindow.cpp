@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "UiScale.h"
 #include "ui/MainComponent.h"
 #include "ui/Theme.h"
 
@@ -16,7 +17,7 @@ MainWindow::MainWindow(juce::String name)
     setUsingNativeTitleBar(true);
     setResizable(true, true);
     setContentOwned(new MainComponent(), true);
-    setResizeLimits(1024, 620, 10000, 10000);
+    setResizeLimits(UiScale::minimumWindowWidth, UiScale::minimumWindowHeight, 10000, 10000);
 
     auto userArea = juce::Rectangle<int>(1600, 1000);
     if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())

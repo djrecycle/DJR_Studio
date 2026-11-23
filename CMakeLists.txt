@@ -125,6 +125,7 @@ set(DJR_STUDIO_SOURCES
     src/app/Localisation.cpp
     src/app/Settings.cpp
     src/app/TypingKeyboard.cpp
+    src/app/UiScale.cpp
     src/audio/AudioEngine.cpp
     src/audio/ExternalAppBridge.cpp
     src/plugins/PluginManager.cpp
