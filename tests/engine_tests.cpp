@@ -35,6 +35,7 @@
 #include "plugins/StarterKitSamples.h"
 #include "plugins/PluginWindow.h"
 #include "app/UiScale.h"
+#include "ui/PanelHost.h"
 
 #include <algorithm>
 #include <iostream>
@@ -5561,6 +5562,64 @@ int main()
         check(fits(150, screen(1920, 1080, 92.0)) && ! fits(175, screen(1920, 1080, 92.0)),
               "fits: a 1080p screen takes up to 150%, not 175%");
         check(fits(250, screen(3840, 2160, 163.0)), "fits: 250% fits on 4K");
+    }
+
+    // --- Saved panel layouts: read back from the project, fitted to the window ---
+    // Found on a 1366x768 screen: the panels stopped at ~1225 px with an empty
+    // strip on the right. Opening a project applied a layout captured while
+    // the window was still at its 90% startup size (Project::fromVar never
+    // read the saved one), and an applied layout froze the panels at that size
+    // for good - a maximise afterwards no longer reached them.
+    {
+        djr::Project saved;
+        saved.panelLayout = juce::JSON::parse(R"([{"id":"playlist","x":4,"y":8,"width":300,"height":200,"open":true,"rolledUp":false,"maximised":false}])");
+        djr::Project reopened;
+        reopened.fromVar(saved.toVar());
+        check(reopened.panelLayout.isArray() && reopened.panelLayout.size() == 1,
+              "layout: a project's saved panel layout is read back when it is opened");
+        reopened.reset();
+        check(reopened.panelLayout.isVoid() || reopened.panelLayout.size() == 0,
+              "layout: a reset project carries no panel layout over from the last one");
+    }
+
+    {
+        juce::Component leftContent, rightContent;
+        djr::PanelHost host;
+        host.addPanel("left", "Left", djr::Icon::grid, leftContent);
+        host.addPanel("right", "Right", djr::Icon::grid, rightContent);
+        host.setLayoutBuilder([] (djr::PanelHost& h, juce::Rectangle<int> area)
+        {
+            h.findPanel("left")->setRestoredBounds(area.removeFromLeft(area.getWidth() * 2 / 3));
+            h.findPanel("right")->setRestoredBounds(area);
+        });
+
+        auto* left = host.findPanel("left");
+        auto* right = host.findPanel("right");
+
+        host.setSize(1016, 608);
+        const auto layoutAtStartupSize = host.getLayoutState();
+
+        host.setSize(1153, 625);
+        check(right->getRight() == 1153, "layout: the default tiling follows the window");
+
+        host.applyLayoutState(layoutAtStartupSize);
+        std::cout << "DIAG applied layout right edge " << right->getRight() << " bottom " << right->getBottom() << "\n";
+        check(right->getRight() == 1153 && right->getBottom() == 625,
+              "layout: a layout saved at another window size is fitted to this one");
+
+        host.setSize(1366, 700);
+        std::cout << "DIAG after grow right edge " << right->getRight() << " bottom " << right->getBottom() << "\n";
+        check(right->getRight() == 1366 && right->getBottom() == 700,
+              "layout: an applied layout keeps filling the window when it is maximised");
+        check(left->getRight() == right->getX(),
+              "layout: panels that touched still touch after scaling");
+
+        // A project saved before the host size was stored: only the panels'
+        // own extent says what window they were made for.
+        auto oldFormat = juce::JSON::parse(R"([{"id":"left","x":0,"y":0,"width":677,"height":608,"open":true,"rolledUp":false,"maximised":false},{"id":"right","x":677,"y":0,"width":339,"height":608,"open":true,"rolledUp":false,"maximised":false}])");
+        host.applyLayoutState(oldFormat);
+        check(right->getRight() == 1366 && right->getBottom() == 700,
+              "layout: an older project's layout is fitted too, from its panels' extent");
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

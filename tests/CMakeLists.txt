@@ -40,6 +40,11 @@ target_sources(djr_studio_engine_tests PRIVATE
     # engine_tests.cpp) are plain arithmetic on a measured screen - no
     # display is ever asked.
     ${CMAKE_SOURCE_DIR}/src/app/UiScale.cpp
+    # PanelHost's layout save/restore and window-resize fitting (see its test
+    # block in engine_tests.cpp) is plain Component geometry with no peer, so
+    # it is headless-testable the same way.
+    ${CMAKE_SOURCE_DIR}/src/ui/PanelWindow.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/PanelHost.cpp
     ${CMAKE_SOURCE_DIR}/src/plugins/PluginScanner.cpp
     # ExternalAppBridge::parseJackLspOutput() (see its test block in
     # engine_tests.cpp) is plain text parsing with no process ever started
