@@ -162,6 +162,8 @@ private:
         tab rather than crammed into one of the roll's own corners.
     */
     juce::Rectangle<int> getHelperBadgeBounds() const;
+    /** Where the left-aligned part of the tab strip ends. */
+    int getLeftClusterRight() const;
     void showPatternLengthMenu();
     void showTrackMenu();
 
@@ -178,6 +180,10 @@ private:
     double patternLengthBeats = 4.0;
     bool patternLengthLocked = false;
     bool pianoRollVisible = true;
+    /** Set by resized() when the strip is too narrow for the full "Quantize"
+        chip next to the Key | Chord badge; it then shrinks to "Q".
+    */
+    bool compactQuantize = false;
     bool velocityLaneVisible = true;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(EditorPanel)

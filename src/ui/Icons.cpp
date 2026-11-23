@@ -347,11 +347,86 @@ void Icons::draw(juce::Graphics& g, Icon icon, juce::Rectangle<float> bounds, fl
     const auto shape = path(icon, bounds);
 
     if (isFilled(icon))
+    {
         g.fillPath(shape);
-    else
-        g.strokePath(shape, juce::PathStrokeType(strokeThickness,
-                                                 juce::PathStrokeType::curved,
-                                                 juce::PathStrokeType::rounded));
+        return;
+    }
+
+    // A fixed 1.7px line closes up the gaps inside a 11-14px glyph - the
+    // magnet's jaws, the marquee's corners, the zoom lens - until it reads as
+    // a blob. Thin the line on small glyphs instead, to about a ninth of the
+    // glyph, never below what still renders as a solid line.
+    const auto glyphSize = juce::jmin(bounds.getWidth(), bounds.getHeight());
+    const auto thickness = juce::jmin(strokeThickness, juce::jmax(1.15f, glyphSize * 0.105f));
+
+    g.strokePath(shape, juce::PathStrokeType(thickness,
+                                             juce::PathStrokeType::curved,
+                                             juce::PathStrokeType::rounded));
+}
+
+void Icons::drawLogoMark(juce::Graphics& g, juce::Rectangle<float> area, juce::Colour from, juce::Colour to)
+{
+    area = area.withSizeKeepingCentre(juce::jmin(area.getWidth(), area.getHeight()),
+                                      juce::jmin(area.getWidth(), area.getHeight()));
+    const auto size = area.getWidth();
+    const auto centre = area.getCentre();
+    const auto stroke = size * 0.13f;
+    const auto radius = size * 0.5f - stroke * 0.5f - size * 0.05f;
+    constexpr auto pi = juce::MathConstants<float>::pi;
+
+    // Angles as JUCE's arcs take them: 0 at twelve o'clock, clockwise.
+    const auto pointAt = [&] (float angle, float r)
+    {
+        return centre + juce::Point<float>(std::sin(angle), -std::cos(angle)) * r;
+    };
+
+    juce::Path mark;
+
+    const auto addArrow = [&] (float fromAngle, float toAngle)
+    {
+        juce::Path arc, band;
+        arc.addCentredArc(centre.x, centre.y, radius, radius, 0.0f, fromAngle, toAngle, true);
+        juce::PathStrokeType(stroke, juce::PathStrokeType::curved, juce::PathStrokeType::butt)
+            .createStrokedPath(band, arc);
+        mark.addPath(band);
+
+        // Head at the clockwise end, pointing along the circle.
+        const auto halfWidth = stroke * 1.3f;
+        juce::Path head;
+        head.addTriangle(pointAt(toAngle, radius - halfWidth),
+                         pointAt(toAngle, radius + halfWidth),
+                         pointAt(toAngle + 0.17f * pi, radius));
+        mark.addPath(head);
+    };
+
+    addArrow(-0.70f * pi, -0.02f * pi);  // upper-left, heading for one o'clock
+    addArrow(0.30f * pi, 0.98f * pi);    // lower-right, heading for seven o'clock
+
+    // An eighth note: head low-left, stem, flag curling right. Built on a
+    // unit grid, then fitted into the middle of the ring so it never touches
+    // the arrowheads.
+    juce::Path note;
+    juce::Path noteHead;
+    noteHead.addEllipse(-2.4f, -1.75f, 4.8f, 3.5f);
+    noteHead.applyTransform(juce::AffineTransform::rotation(-0.35f).translated(-1.7f, 3.0f));
+    note.addPath(noteHead);
+    note.addRectangle(0.25f, -5.2f, 1.6f, 8.4f);
+
+    juce::Path flag;
+    flag.startNewSubPath(1.6f, -5.2f);
+    flag.quadraticTo(2.0f, -3.0f, 4.6f, -2.0f);
+    flag.lineTo(4.0f, -0.4f);
+    flag.quadraticTo(2.0f, -1.4f, 1.6f, -2.4f);
+    flag.closeSubPath();
+    note.addPath(flag);
+
+    const auto noteBox = juce::Rectangle<float>(size * 0.40f, size * 0.46f).withCentre(centre);
+    note.applyTransform(note.getTransformToScaleToFit(noteBox, true));
+    mark.addPath(note);
+
+    g.setGradientFill(juce::ColourGradient(from, area.getX(), area.getY(),
+                                           to, area.getRight(), area.getBottom(), false));
+    g.fillPath(mark);
 }
 
 } // namespace djr
