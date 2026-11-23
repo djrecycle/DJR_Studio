@@ -18,8 +18,7 @@ class AudioEngine;
     shortcut reference.
 */
 class PreferencesDialog final : public juce::Component,
-                                private juce::Button::Listener,
-                                private juce::Slider::Listener
+                                private juce::Button::Listener
 {
 public:
     explicit PreferencesDialog(juce::AudioDeviceManager& deviceManager,
@@ -31,11 +30,13 @@ public:
     void mouseDown(const juce::MouseEvent& event) override;
 
     void showPage(int pageIndex);
-    void setScalePercent(int percent);
+    /** Selects a UiScale choice and shows the factor it came out as. */
+    void setInterfaceScale(int choice, int effectivePercent);
     void setToggleStates(bool tooltips, bool autoScroll, bool autoOpenEditor);
 
     void setCloseCallback(std::function<void()> callback);
     void setThemeChangedCallback(std::function<void(ThemeVariant)> callback);
+    /** Called with UiScale::autoChoice or a percentage. */
     void setScaleChangedCallback(std::function<void(int)> callback);
     void setTooltipsChangedCallback(std::function<void(bool)> callback);
     void setAutoScrollChangedCallback(std::function<void(bool)> callback);
@@ -65,7 +66,6 @@ private:
     };
 
     void buttonClicked(juce::Button* button) override;
-    void sliderValueChanged(juce::Slider* slider) override;
     void refreshPageVisibility();
 
     /** Rebuilds the row list and the buttons that go with it, after a path is
@@ -102,7 +102,12 @@ private:
     IconChipButton octaveDownButton { TRANS("Octave down"), Icon::chevronLeft };
     IconChipButton octaveUpButton { TRANS("Octave up"), Icon::chevronRight };
     int typingOctave = 4;
-    juce::Slider scaleSlider;
+    /** One per UiScale::getChoices() entry, in that order. A click changes
+        the whole interface's size at once, which is why these are chips and
+        not a slider: a slider would rescale under the pointer mid-drag.
+    */
+    juce::OwnedArray<TabChip> scaleChips;
+    int effectiveScalePercent = 100;
     SwitchButton tooltipsSwitch { "tooltips" };
     SwitchButton autoScrollSwitch { "autoScroll" };
     SwitchButton autoOpenEditorSwitch { "autoOpenEditor" };

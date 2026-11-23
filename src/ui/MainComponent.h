@@ -76,7 +76,8 @@ private:
     void layoutWorkspace();
     void buildDefaultPanelLayout(PanelHost& host, juce::Rectangle<int> area);
     void handleCommand(AppCommand command);
-    void setDisplayScalePercent(int percent);
+    /** UiScale::autoChoice or a percentage; saved, and applied live. */
+    void setInterfaceScaleChoice(int choice);
     void applyThemeVariant(ThemeVariant variant);
     /** Installs a language and re-reads every caption that is not redrawn by a
         plain repaint - button texts and tooltips are set once, so they have to
@@ -310,7 +311,6 @@ private:
     bool waitingForCountIn = false;
     /** Whether the click was already on, so the count-in can put it back. */
     bool metronomeWasEnabled = false;
-    float displayScale = 1.0f;
     BrowserDockPosition browserDockPosition = BrowserDockPosition::left;
     bool browserCollapsed = false;
     bool browserMinimized = false;

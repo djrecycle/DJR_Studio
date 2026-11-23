@@ -3,6 +3,7 @@
 #include "BinaryData.h"
 #include "Localisation.h"
 #include "MainWindow.h"
+#include "UiScale.h"
 #include "utils/Logger.h"
 
 namespace djr
@@ -31,6 +32,13 @@ void DJRStudioApplication::initialise(const juce::String& commandLine)
 {
     juce::ignoreUnused(commandLine);
     Logger::write("Starting DJR_Studio " + getApplicationVersion());
+
+    // Before the splash and the window, so both open at their final size
+    // instead of appearing small and then jumping.
+    const auto scaleChoice = UiScale::loadSavedChoice();
+    const auto scaleFactor = UiScale::apply(scaleChoice);
+    Logger::write("Interface scale: " + juce::String(juce::roundToInt(scaleFactor * 100.0)) + "%"
+                  + (scaleChoice == UiScale::autoChoice ? " (auto)" : ""));
 
     // Up first, before anything that takes real time to build - plugin
     // scanning and MainComponent's own panel tree included - the way a DAW's

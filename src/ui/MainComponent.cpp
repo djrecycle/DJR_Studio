@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 
 #include "app/Settings.h"
+#include "app/UiScale.h"
 
 #include "Theme.h"
 #include "plugins/MidiSamplerProcessor.h"
@@ -373,7 +374,7 @@ MainComponent::MainComponent()
 
     preferencesDialog.setCloseCallback([this] { closeDialogs(); });
     preferencesDialog.setThemeChangedCallback([this] (ThemeVariant variant) { applyThemeVariant(variant); });
-    preferencesDialog.setScaleChangedCallback([this] (int percent) { setDisplayScalePercent(percent); });
+    preferencesDialog.setScaleChangedCallback([this] (int choice) { setInterfaceScaleChoice(choice); });
     preferencesDialog.setScanRequestedCallback([this] { handleCommand(AppCommand::scanPlugins); });
     preferencesDialog.setTooltipsChangedCallback([this] (bool enabled)
     {
@@ -388,6 +389,8 @@ MainComponent::MainComponent()
         autoOpenPluginEditor = enabled;
     });
     preferencesDialog.setToggleStates(true, arrangementView.isFollowingPlayhead(), autoOpenPluginEditor);
+    preferencesDialog.setInterfaceScale(UiScale::loadSavedChoice(),
+                                        juce::roundToInt(juce::Desktop::getInstance().getGlobalScaleFactor() * 100.0f));
     preferencesDialog.setLanguageIndex(Localisation::getLanguage() == Localisation::Language::indonesian ? 1 : 0);
     preferencesDialog.setTypingKeyboardState(typingKeyboard.isEnabled(),
                                              typingKeyboard.getKeymap() == TypingKeyboard::Keymap::simple ? 1 : 0,
@@ -450,14 +453,10 @@ void MainComponent::paint(juce::Graphics& g)
 
 void MainComponent::resized()
 {
-    workspace.setTransform(juce::AffineTransform());
-
-    const auto area = getLocalBounds();
-    const auto scaledWidth = juce::jmax(1, juce::roundToInt(static_cast<float>(area.getWidth()) / displayScale));
-    const auto scaledHeight = juce::jmax(1, juce::roundToInt(static_cast<float>(area.getHeight()) / displayScale));
-    workspace.setBounds(0, 0, scaledWidth, scaledHeight);
-    workspace.setTransform(juce::AffineTransform::scale(displayScale));
-
+    // Interface scale is the desktop's global factor (UiScale), not a
+    // transform here - a transform only reached this window, leaving popup
+    // menus, tooltips and every other window at their small size.
+    workspace.setBounds(getLocalBounds());
     layoutWorkspace();
 }
 
@@ -628,13 +627,32 @@ void MainComponent::handleCommand(AppCommand command)
     }
 }
 
-void MainComponent::setDisplayScalePercent(int percent)
+void MainComponent::setInterfaceScaleChoice(int choice)
 {
-    const auto clamped = juce::jlimit(60, 140, percent);
-    displayScale = static_cast<float>(clamped) / 100.0f;
-    preferencesDialog.setScalePercent(clamped);
-    resized();
-    repaint();
+    UiScale::saveChoice(choice);
+    const auto factor = UiScale::apply(choice);
+    preferencesDialog.setInterfaceScale(choice, juce::roundToInt(factor * 100.0));
+
+    // The window keeps its size in device pixels, so at a bigger scale it is
+    // now logically smaller - but at a smaller one it may have grown past
+    // the screen. A maximised window is the window manager's to size.
+    if (auto* window = findParentComponentOfClass<juce::ResizableWindow>())
+    {
+        if (! window->isFullScreen() && ! window->isMinimised())
+        {
+            if (const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect(window->getScreenBounds()))
+            {
+                const auto bounds = window->getBounds();
+                const auto fitted = bounds.constrainedWithin(display->userArea);
+
+                if (fitted != bounds)
+                    window->setBounds(fitted);
+            }
+        }
+    }
+
+    setStatusMessage(TRANS("Interface scale: ") + juce::String(juce::roundToInt(factor * 100.0)) + "%"
+                     + (choice == UiScale::autoChoice ? " (" + TRANS("auto") + ")" : juce::String()));
 }
 
 void MainComponent::applyLanguage(Localisation::Language language)

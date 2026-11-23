@@ -36,6 +36,10 @@ target_sources(djr_studio_engine_tests PRIVATE
     # pulled in only because PluginScanner.cpp's other (untested here)
     # methods reference it.
     ${CMAKE_SOURCE_DIR}/src/app/Settings.cpp
+    # UiScale::chooseAutoFactor()/resolveFactor() (see its test block in
+    # engine_tests.cpp) are plain arithmetic on a measured screen - no
+    # display is ever asked.
+    ${CMAKE_SOURCE_DIR}/src/app/UiScale.cpp
     ${CMAKE_SOURCE_DIR}/src/plugins/PluginScanner.cpp
     # ExternalAppBridge::parseJackLspOutput() (see its test block in
     # engine_tests.cpp) is plain text parsing with no process ever started
