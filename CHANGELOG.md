@@ -4,6 +4,33 @@ Semua perubahan penting ke DJR_Studio dicatat di sini. Format mengikuti
 gaya [Keep a Changelog](https://keepachangelog.com/), versi mengikuti
 [Semantic Versioning](https://semver.org/).
 
+## [v1.3.0] - 2026-11-23
+
+### Ditambahkan
+- **Skala tampilan otomatis untuk layar besar** — di monitor 1440p/4K
+  aplikasi tidak lagi tampil kecil. Mode **Auto** memilih skala dari resolusi
+  dan DPI layar (mis. 150% di 4K 27"), tanpa menggandakan skala yang sudah
+  diterapkan desktop. Preferences → Appearance → *Interface scale*:
+  Auto, 75–250%, berlaku langsung dan diingat. Semua jendela ikut — menu,
+  tooltip, dialog, panel terpisah.
+- **Logo DJR di menu bar** — versi sederhana logo (panah recycle + not musik)
+  menggantikan kotak gradien, digambar sebagai vektor sehingga tajam di semua
+  skala.
+
+### Diperbaiki
+- **Ikon toolbar** Playlist dan Editor terlalu rapat sampai menggumpal —
+  sekarang lebih besar dengan garis yang menyesuaikan ukuran ikon.
+- Tombol **Quantize** tertimpa badge Key | Chord di layar sempit; sekarang
+  jumlah not disembunyikan dulu, lalu tombol diringkas menjadi "Q".
+- **Layout panel** tidak mengisi jendela (strip kosong di kanan) setelah
+  sebuah project dibuka. Layout yang tersimpan di project juga tidak pernah
+  dipulihkan — sekarang dipulihkan dan diskalakan ke ukuran jendela, juga
+  saat jendela diubah ukurannya.
+
+### Lainnya
+- `scripts/reinstall-deb.sh` yang dijalankan tanpa terminal berhenti rapi
+  setelah paket jadi dan menampilkan perintah install, alih-alih gagal di `sudo`.
+
 ## [v1.2.0] - 2026-10-20
 
 ### Ditambahkan
