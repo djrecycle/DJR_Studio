@@ -9,6 +9,9 @@ namespace
 {
     ThemeVariant currentVariant = ThemeVariant::neonDark;
 
+    /** The bottom of every level meter, in dBFS. */
+    constexpr float meterFloorDb = -60.0f;
+
     juce::Colour hex(const char* argb)
     {
         return juce::Colour::fromString(juce::String("ff") + argb);
@@ -208,7 +211,7 @@ float Theme::meterPosition(float amplitude) noexcept
     // -60 dBFS at the bottom, 0 at the top. A note played through the preview
     // synth peaks around -17 dBFS, which is a normal level and a fifth of the
     // bar drawn linearly - so the meter looked broken while the sound was fine.
-    constexpr auto floorDb = -60.0f;
+    constexpr auto floorDb = meterFloorDb;
 
     if (amplitude <= 0.0f)
         return 0.0f;
@@ -217,6 +220,13 @@ float Theme::meterPosition(float amplitude) noexcept
     // module, and this file is the one place the look of things is decided.
     const auto db = 20.0f * std::log10(amplitude);
     return juce::jlimit(0.0f, 1.0f, (db - floorDb) / -floorDb);
+}
+
+float Theme::meterPositionToDecibels(float position) noexcept
+{
+    // A straight line from the floor at 0 to 0 dBFS at 1, the same line
+    // meterPosition draws, walked the other way.
+    return (juce::jlimit(0.0f, 1.0f, position) - 1.0f) * -meterFloorDb;
 }
 
 void Theme::drawLevelMeter(juce::Graphics& g,
