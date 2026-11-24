@@ -644,11 +644,15 @@ juce::String TransportBar::getTimeText() const
 
 juce::String TransportBar::getMasterDbText() const
 {
-    const auto peak = juce::jmax(smoothedMasterLeft, smoothedMasterRight);
-    if (peak <= 0.0001f)
+    // The smoothed values are meter positions, already on a dB scale - not
+    // amplitudes. Converting them to dB a second time squashed the readout:
+    // a mix at -12.8 dBFS showed -2.1, and a 6 dB move in a fader or in the
+    // notes' velocity changed the number by about one.
+    const auto position = juce::jmax(smoothedMasterLeft, smoothedMasterRight);
+    if (position <= 0.0f)
         return "-inf";
 
-    return juce::String(juce::Decibels::gainToDecibels(peak), 1);
+    return juce::String(Theme::meterPositionToDecibels(position), 1);
 }
 
 } // namespace djr

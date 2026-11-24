@@ -3830,6 +3830,21 @@ int main()
               "and raising the fader moves it up");
         check(juce::approximatelyEqual(djr::Theme::meterPosition(0.001f), 0.0f),
               "-60 dBFS is the floor");
+
+        // The number beside the master meter is read back from the meter's
+        // position. Treating that position as an amplitude converted it to dB
+        // a second time: a mix at -12.8 dBFS read as -2.1, and pulling a fader
+        // or the velocity down 6 dB moved the number by barely one.
+        const auto backToDb = [] (float amplitude)
+        {
+            return djr::Theme::meterPositionToDecibels(djr::Theme::meterPosition(amplitude));
+        };
+
+        check(std::abs(backToDb(0.229f) - -12.8f) < 0.05f,
+              "the master readout shows the level the master bus is at");
+        check(std::abs((backToDb(0.25f) - backToDb(0.5f)) - -6.02f) < 0.05f,
+              "and halving the level takes 6 dB off it, not 1");
+        check(std::abs(backToDb(1.0f)) < 0.001f, "full scale reads 0 dB");
     }
 
     // --- A loop coming round must not leave a note held down -----------------

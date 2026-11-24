@@ -114,6 +114,11 @@ public:
         riding a fader barely moved it.
     */
     static float meterPosition(float amplitude) noexcept;
+    /** The level, in dBFS, a meter position stands for - meterPosition the
+        other way round. For a readout taken from a smoothed meter position,
+        which is not an amplitude and must not be converted to dB again.
+    */
+    static float meterPositionToDecibels(float position) noexcept;
     /** Green -> cyan -> amber -> red level meter. `fill` is a position from
         meterPosition, already smoothed by the caller - not a raw amplitude.
     */
