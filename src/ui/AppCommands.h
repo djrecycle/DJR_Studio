@@ -14,6 +14,7 @@ enum class AppCommand
     saveProjectAs,
     showProjectManager,
     exportAudio,
+    exportStems,
     showPreferences,
     quit,
 

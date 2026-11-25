@@ -166,6 +166,7 @@ void MenuBarView::showMenuFor(int menuIndex, juce::Button& source)
             menu.addItem(5, "Project Manager...", true, false);
             menu.addSeparator();
             menu.addItem(7, "Export Audio...", true, false);
+            menu.addItem(8, "Export Stems...", true, false);
             menu.addSeparator();
             menu.addItem(6, "Quit", true, false);
             break;
@@ -235,6 +236,7 @@ void MenuBarView::showMenuFor(int menuIndex, juce::Button& source)
                 case 5:  invoke(AppCommand::showProjectManager); break;
                 case 6:  invoke(AppCommand::quit); break;
                 case 7:  invoke(AppCommand::exportAudio); break;
+                case 8:  invoke(AppCommand::exportStems); break;
                 case 10: invoke(AppCommand::showPreferences); break;
                 case 11: invoke(AppCommand::audioSettings); break;
                 case 20: invoke(AppCommand::togglePlaylist); break;

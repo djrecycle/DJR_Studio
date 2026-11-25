@@ -552,6 +552,10 @@ void MainComponent::handleCommand(AppCommand command)
             exportAudio();
             break;
 
+        case AppCommand::exportStems:
+            exportAudio(true);
+            break;
+
         case AppCommand::showProjectManager:
             projectManagerDialog.refresh();
             showDialog(&projectManagerDialog);
@@ -1354,7 +1358,7 @@ double MainComponent::getSongLengthBeats()
     return juce::jmax(barBeats, std::ceil(last / barBeats) * barBeats);
 }
 
-void MainComponent::exportAudio()
+void MainComponent::exportAudio(bool stems)
 {
     using Format = ExportManager::Format;
 
@@ -1367,22 +1371,32 @@ void MainComponent::exportAudio()
     const auto bitDepth = ExportManager::resolveBitDepth(format, Settings::get("exportBitDepth", "24").getIntValue());
     const auto normalise = Settings::get("exportNormalise", "0") == "1";
 
-    auto* window = new juce::AlertWindow(TRANS("Export audio"),
-                                         TRANS("Choose the file format for the mixdown."),
-                                         juce::AlertWindow::NoIcon);
+    auto* window = stems
+        ? new juce::AlertWindow(TRANS("Export stems"),
+                                TRANS("One file per track, with its fader, pan, inserts and buses - the stems add up to the mixdown. "
+                                      "Muted and empty tracks are left out."),
+                                juce::AlertWindow::NoIcon)
+        : new juce::AlertWindow(TRANS("Export audio"),
+                                TRANS("Choose the file format for the mixdown."),
+                                juce::AlertWindow::NoIcon);
 
     window->addComboBox("format", { "WAV", "FLAC", "AIFF" }, TRANS("Format"));
     window->addComboBox("depth", { "16-bit", "24-bit", "32-bit float" }, TRANS("Bit depth"));
-    window->addComboBox("normalise", { TRANS("Off"), TRANS("On (peak at -0.3 dBFS)") }, TRANS("Normalise"));
+
+    // Stems are never normalised - scaling each one to its own peak would stop
+    // them adding up to the mix - so the choice is not offered at all.
+    if (! stems)
+        window->addComboBox("normalise", { TRANS("Off"), TRANS("On (peak at -0.3 dBFS)") }, TRANS("Normalise"));
 
     auto* formatBox = window->getComboBoxComponent("format");
     auto* depthBox = window->getComboBoxComponent("depth");
-    auto* normaliseBox = window->getComboBoxComponent("normalise");
 
     // Combo ids are 1-based: format 1-3 follows the enum, depth 1-3 is 16/24/32.
     formatBox->setSelectedId(static_cast<int>(format) + 1, juce::dontSendNotification);
     depthBox->setSelectedId(bitDepth == 16 ? 1 : bitDepth == 32 ? 3 : 2, juce::dontSendNotification);
-    normaliseBox->setSelectedId(normalise ? 2 : 1, juce::dontSendNotification);
+
+    if (auto* normaliseBox = window->getComboBoxComponent("normalise"))
+        normaliseBox->setSelectedId(normalise ? 2 : 1, juce::dontSendNotification);
 
     // Float only exists for wav, so it is greyed out rather than silently
     // turned into 24 bit after the user picked it.
@@ -1402,7 +1416,7 @@ void MainComponent::exportAudio()
     window->addButton(TRANS("Cancel"), 0, juce::KeyPress(juce::KeyPress::escapeKey));
 
     window->enterModalState(true,
-        juce::ModalCallbackFunction::create([this, window] (int result)
+        juce::ModalCallbackFunction::create([this, window, stems] (int result)
         {
             std::unique_ptr<juce::AlertWindow> owned(window);
 
@@ -1414,15 +1428,22 @@ void MainComponent::exportAudio()
 
             const auto depthId = window->getComboBoxComponent("depth")->getSelectedId();
             choices.bitDepth = ExportManager::resolveBitDepth(choices.format, depthId == 1 ? 16 : depthId == 3 ? 32 : 24);
-            choices.normalise = window->getComboBoxComponent("normalise")->getSelectedId() == 2;
+
+            if (auto* normaliseBox = window->getComboBoxComponent("normalise"))
+            {
+                choices.normalise = normaliseBox->getSelectedId() == 2;
+                Settings::set("exportNormalise", choices.normalise ? "1" : "0");
+            }
 
             Settings::set("exportFormat", choices.format == Format::flac ? "flac"
                                         : choices.format == Format::aiff ? "aiff"
                                                                          : "wav");
             Settings::set("exportBitDepth", juce::String(choices.bitDepth));
-            Settings::set("exportNormalise", choices.normalise ? "1" : "0");
 
-            exportAudioTo(choices);
+            if (stems)
+                exportStemsTo(choices);
+            else
+                exportAudioTo(choices);
         }),
         false);
 }
@@ -1451,13 +1472,7 @@ void MainComponent::exportAudioTo(const ExportManager::Options& choices)
             if (! file.hasFileExtension(extension))
                 file = file.withFileExtension(extension);
 
-            auto options = choices;
-            options.sampleRate = audioEngine.getCurrentSampleRate();
-            options.blockSize = audioEngine.getCurrentBufferSize();
-            options.tempoBpm = audioEngine.getTransport().getTempoBpm();
-            options.startBeat = 0.0;
-            options.lengthBeats = getSongLengthBeats();
-            options.songMode = sessionState.isSongMode();
+            const auto options = withSessionSettings(choices);
 
             setStatusMessage("Rendering "
                            + juce::String(options.lengthBeats / audioEngine.getTransport().getBeatsPerBar(), 1)
@@ -1481,6 +1496,77 @@ void MainComponent::exportAudioTo(const ExportManager::Options& choices)
             browserPanel.refreshContent();
             setStatusMessage(TRANS("Export finished: ") + file.getFileName()
                                  + " (" + juce::File::descriptionOfSizeInBytes(file.getSize()) + ")");
+        });
+}
+
+ExportManager::Options MainComponent::withSessionSettings(ExportManager::Options options)
+{
+    options.sampleRate = audioEngine.getCurrentSampleRate();
+    options.blockSize = audioEngine.getCurrentBufferSize();
+    options.tempoBpm = audioEngine.getTransport().getTempoBpm();
+    options.startBeat = 0.0;
+    options.lengthBeats = getSongLengthBeats();
+    options.songMode = sessionState.isSongMode();
+    return options;
+}
+
+void MainComponent::exportStemsTo(const ExportManager::Options& choices)
+{
+    const auto projectFile = projectManager.getProject().projectFile;
+    const auto start = projectFile.existsAsFile() ? projectFile.getParentDirectory()
+                                                  : FileUtils::getDefaultProjectRoot();
+
+    fileChooser = std::make_unique<juce::FileChooser>(TRANS("Choose a folder for the stems"), start);
+
+    fileChooser->launchAsync(juce::FileBrowserComponent::openMode
+                           | juce::FileBrowserComponent::canSelectDirectories,
+        [this, choices, projectFile] (const juce::FileChooser& chooser)
+        {
+            const auto parent = chooser.getResult();
+
+            if (parent == juce::File())
+                return;
+
+            // The stems get a folder of their own, named after the project, so
+            // they neither scatter across the chosen folder nor overwrite an
+            // earlier export: a second export goes into "... Stems (2)".
+            const auto baseName = projectFile.existsAsFile() ? projectFile.getFileNameWithoutExtension()
+                                                             : juce::String("Export");
+            auto folder = parent.getChildFile(juce::File::createLegalFileName(baseName + " Stems"));
+
+            if (folder.exists())
+                folder = folder.getNonexistentSibling(true);
+
+            const auto options = withSessionSettings(choices);
+
+            setStatusMessage(TRANS("Rendering stems..."));
+
+            std::vector<ExportManager::Stem> stems;
+            juce::StringArray skipped;
+            juce::String error;
+            auto succeeded = false;
+
+            audioEngine.renderOffline([&]
+            {
+                succeeded = exportManager.renderStems(audioEngine.getMixer(), folder, options,
+                                                      stems, skipped, error);
+            });
+
+            browserPanel.refreshContent();
+
+            if (! succeeded)
+            {
+                showError(TRANS("Stem export failed"), error);
+                return;
+            }
+
+            auto message = juce::String(static_cast<int>(stems.size())) + TRANS(" stems exported to ")
+                         + folder.getFullPathName();
+
+            if (! skipped.isEmpty())
+                message << " (" << TRANS("silent, skipped: ") << skipped.joinIntoString(", ") << ")";
+
+            setStatusMessage(message);
         });
 }
 

@@ -1234,6 +1234,153 @@ int main()
         }
     }
 
+    // --- Stem export: one file per track, adding back up to the mixdown -----
+    {
+        djr::Mixer stemMixer;
+        stemMixer.prepare(sampleRate, blockSize);
+
+        // Default tracks: Drums, Bass, Pad, Vox, FX, Keys.
+        auto* bass = dynamic_cast<djr::MidiTrack*>(stemMixer.getTrack(1));
+        auto* pad = dynamic_cast<djr::MidiTrack*>(stemMixer.getTrack(2));
+        auto* keys = dynamic_cast<djr::MidiTrack*>(stemMixer.getTrack(5));
+        auto* bus = stemMixer.addTrack(std::make_unique<djr::BusTrack>("Glue Bus"));
+        check(bass != nullptr && pad != nullptr && keys != nullptr && bus != nullptr,
+              "the stem session has its tracks");
+
+        if (bass != nullptr && pad != nullptr && keys != nullptr && bus != nullptr)
+        {
+            bass->setClipNotes(makeFourBarChord());
+            pad->setClipNotes(makeFourBarChord());
+            keys->setClipNotes(makeFourBarChord());
+
+            // Fader, pan and a bus with its own fader all have to end up in
+            // the stem, or the stems would not add back up to the mix.
+            pad->setVolume(0.4f);
+            pad->setPan(-0.6f);
+            check(stemMixer.setTrackOutput(1, stemMixer.indexOf(bus)), "bass can be routed through the bus");
+            bus->setVolume(0.5f);
+            keys->setMuted(true);
+
+            const auto stemIndices = djr::ExportManager::stemTrackIndices(stemMixer);
+            check(std::find(stemIndices.begin(), stemIndices.end(), 5) == stemIndices.end(),
+                  "a muted track gets no stem");
+            check(std::find(stemIndices.begin(), stemIndices.end(), stemMixer.indexOf(bus)) == stemIndices.end(),
+                  "a bus gets no stem of its own");
+
+            const auto root = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                  .getChildFile("djr_engine_test_stems");
+            root.deleteRecursively();
+
+            djr::ExportManager exporter;
+            djr::ExportManager::Options options;
+            options.sampleRate = sampleRate;
+            options.blockSize = blockSize;
+            options.tempoBpm = tempoBpm;
+            options.lengthBeats = 4.0;
+            options.songMode = false;
+            options.bitDepth = 32;
+            options.trimSilentTail = false;
+
+            const auto mixFile = root.getChildFile("mix.wav");
+            juce::String mixError;
+            check(exporter.render(stemMixer, mixFile, options, mixError),
+                  "the reference mixdown renders" + (mixError.isEmpty() ? juce::String() : ": " + mixError));
+
+            // Normalising would scale each stem on its own; renderStems must
+            // ignore it so the levels still match the mix.
+            auto stemRequest = options;
+            stemRequest.normalise = true;
+            stemRequest.trimSilentTail = true;
+
+            const auto folder = root.getChildFile("stems");
+            std::vector<djr::ExportManager::Stem> stems;
+            juce::StringArray skipped;
+            juce::String stemError;
+            auto lastProgress = 0.0;
+            const auto rendered = exporter.renderStems(stemMixer, folder, stemRequest, stems, skipped, stemError,
+                                                       [&lastProgress] (double p) { lastProgress = p; });
+
+            check(rendered, "stem export reports success" + (stemError.isEmpty() ? juce::String() : ": " + stemError));
+            check(lastProgress > 0.99, "stem progress reaches the end");
+            check(stemMixer.getIsolatedTrack() == -1, "the mixer plays every track again afterwards");
+            check(stems.size() == 2, "only the two audible tracks get a stem (got "
+                                         + juce::String(static_cast<int>(stems.size())) + ")");
+            check(skipped.contains("Drums") && skipped.contains("Vox") && skipped.contains("FX"),
+                  "empty tracks are reported as skipped, not written: " + skipped.joinIntoString(", "));
+            check(folder.getNumberOfChildFiles(juce::File::findFiles) == static_cast<int>(stems.size()),
+                  "no empty files are left behind in the stem folder");
+
+            if (stems.size() == 2)
+            {
+                check(stems[0].file.getFileName() == "02 Bass.wav" && stems[1].file.getFileName() == "03 Pad.wav",
+                      "stems are named by mixer position: " + stems[0].file.getFileName()
+                          + ", " + stems[1].file.getFileName());
+            }
+
+            juce::AudioFormatManager formats;
+            formats.registerBasicFormats();
+
+            const auto readAll = [&formats] (const juce::File& file)
+            {
+                juce::AudioBuffer<float> buffer;
+                std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(file));
+
+                if (reader != nullptr)
+                {
+                    buffer.setSize(static_cast<int>(reader->numChannels), static_cast<int>(reader->lengthInSamples));
+                    reader->read(&buffer, 0, buffer.getNumSamples(), 0, true, true);
+                }
+
+                return buffer;
+            };
+
+            const auto mix = readAll(mixFile);
+            juce::AudioBuffer<float> sum(mix.getNumChannels(), mix.getNumSamples());
+            sum.clear();
+            auto lengthsMatch = mix.getNumSamples() > 0;
+            auto everyStemSounds = true;
+
+            for (const auto& stem : stems)
+            {
+                const auto audio = readAll(stem.file);
+                lengthsMatch = lengthsMatch && audio.getNumSamples() == mix.getNumSamples()
+                                            && audio.getNumChannels() == mix.getNumChannels();
+                everyStemSounds = everyStemSounds && ! isSilent(audio.getMagnitude(0, audio.getNumSamples()));
+
+                if (audio.getNumSamples() == sum.getNumSamples() && audio.getNumChannels() == sum.getNumChannels())
+                    for (int channel = 0; channel < sum.getNumChannels(); ++channel)
+                        sum.addFrom(channel, 0, audio, channel, 0, sum.getNumSamples());
+            }
+
+            check(lengthsMatch, "every stem is exactly as long as the mixdown");
+            check(everyStemSounds, "every stem written has sound in it");
+
+            auto worst = 0.0f;
+            for (int channel = 0; channel < sum.getNumChannels(); ++channel)
+                for (int i = 0; i < sum.getNumSamples(); ++i)
+                    worst = std::max(worst, std::abs(sum.getSample(channel, i) - mix.getSample(channel, i)));
+
+            check(! isSilent(mix.getMagnitude(0, mix.getNumSamples())), "the reference mixdown has sound in it");
+            check(worst < 1.0e-4f, "the stems add up to the mixdown (worst error "
+                                       + juce::String(worst, 7) + ")");
+
+            // The user's own solo does not decide what a stem contains.
+            pad->setSoloed(true);
+            const auto soloFolder = root.getChildFile("solo");
+            check(exporter.renderStems(stemMixer, soloFolder, options, stems, skipped, stemError)
+                      && stems.size() == 2,
+                  "a soloed track does not silence the other stems");
+            pad->setSoloed(false);
+
+            check(djr::ExportManager::stemFileName(9, "  Lead/Synth: 1 ", djr::ExportManager::Format::flac)
+                      == "10 LeadSynth 1.flac",
+                  "stem file names drop characters a file system refuses: "
+                      + djr::ExportManager::stemFileName(9, "  Lead/Synth: 1 ", djr::ExportManager::Format::flac));
+
+            root.deleteRecursively();
+        }
+    }
+
     // --- Export formats, bit depths and normalising --------------------------
     {
         using Format = djr::ExportManager::Format;

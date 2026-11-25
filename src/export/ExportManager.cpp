@@ -83,6 +83,147 @@ bool ExportManager::render(Mixer& mixer,
                            juce::String& errorOut,
                            std::function<void(double)> onProgress) const
 {
+    auto peak = 0.0f;
+    return renderWithPeak(mixer, outputFile, options, errorOut, peak, std::move(onProgress));
+}
+
+std::vector<int> ExportManager::stemTrackIndices(const Mixer& mixer)
+{
+    std::vector<int> indices;
+    const auto count = mixer.getNumTracks();
+
+    // A track is heard only if it and every bus on its way to master are
+    // unmuted. The walk is bounded by the track count: routing validation keeps
+    // the graph acyclic, but a bad file should not be able to hang an export.
+    const auto reachesMasterUnmuted = [&mixer, count] (int index)
+    {
+        for (int steps = 0; steps <= count && juce::isPositiveAndBelow(index, count); ++steps)
+        {
+            const auto* track = mixer.getTrack(index);
+
+            if (track == nullptr || track->isMuted())
+                return false;
+
+            index = track->getOutputDestination();
+        }
+
+        return true;
+    };
+
+    for (int index = 0; index < count; ++index)
+    {
+        const auto* track = mixer.getTrack(index);
+
+        if (track != nullptr && track->getKind() != TrackKind::bus && reachesMasterUnmuted(index))
+            indices.push_back(index);
+    }
+
+    return indices;
+}
+
+juce::String ExportManager::stemFileName(int trackIndex, const juce::String& trackName, Format format)
+{
+    auto name = juce::File::createLegalFileName(trackName.trim());
+
+    if (name.isEmpty())
+        name = "Track";
+
+    return juce::String(trackIndex + 1).paddedLeft('0', 2) + " " + name + extensionFor(format);
+}
+
+bool ExportManager::renderStems(Mixer& mixer,
+                                const juce::File& folder,
+                                const Options& options,
+                                std::vector<Stem>& stemsOut,
+                                juce::StringArray& skippedOut,
+                                juce::String& errorOut,
+                                std::function<void(double)> onProgress) const
+{
+    stemsOut.clear();
+    skippedOut.clear();
+
+    if (! folder.createDirectory())
+    {
+        errorOut = TRANS("The destination folder could not be created: ") + folder.getFullPathName();
+        return false;
+    }
+
+    const auto indices = stemTrackIndices(mixer);
+
+    if (indices.empty())
+    {
+        errorOut = TRANS("There is no audible track to export as a stem.");
+        return false;
+    }
+
+    auto stemOptions = options;
+    stemOptions.normalise = false;
+    stemOptions.trimSilentTail = false;
+
+    // Whatever happens below, the mixer must not be left playing one track.
+    struct IsolationReset
+    {
+        Mixer& mixer;
+        ~IsolationReset() { mixer.setIsolatedTrack(-1); }
+    } isolationReset { mixer };
+
+    const auto total = static_cast<double>(indices.size());
+
+    for (size_t i = 0; i < indices.size(); ++i)
+    {
+        const auto index = indices[i];
+        const auto* track = mixer.getTrack(index);
+
+        if (track == nullptr)
+            continue;
+
+        const auto name = track->getName();
+        const auto file = folder.getChildFile(stemFileName(index, name, options.format));
+
+        mixer.setIsolatedTrack(index);
+
+        auto peak = 0.0f;
+        juce::String error;
+        const auto rendered = renderWithPeak(mixer, file, stemOptions, error, peak,
+            [&onProgress, i, total] (double p)
+            {
+                if (onProgress)
+                    onProgress((static_cast<double>(i) + p) / total);
+            });
+
+        if (! rendered)
+        {
+            errorOut = name + ": " + error;
+            return false;
+        }
+
+        // An empty track in the mixer would otherwise turn up as a file of
+        // nothing, which is clutter at best and confusing at worst.
+        if (peak <= 1.0e-5f)
+        {
+            file.deleteFile();
+            skippedOut.add(name);
+            continue;
+        }
+
+        stemsOut.push_back({ index, name, file });
+    }
+
+    if (onProgress)
+        onProgress(1.0);
+
+    return true;
+}
+
+bool ExportManager::renderWithPeak(Mixer& mixer,
+                                   const juce::File& outputFile,
+                                   const Options& options,
+                                   juce::String& errorOut,
+                                   float& peakOut,
+                                   std::function<void(double)> onProgress) const
+{
+    peakOut = 0.0f;
+
     if (options.sampleRate <= 0.0 || options.blockSize <= 0 || options.tempoBpm <= 0.0)
     {
         errorOut = TRANS("The export settings are not valid.");
@@ -198,11 +339,12 @@ bool ExportManager::render(Mixer& mixer,
 
         tailWritten += samplesThisBlock;
 
-        if (blockPeak <= 1.0e-5f)
+        if (options.trimSilentTail && blockPeak <= 1.0e-5f)
             break;
     }
 
     scratchWriter.reset();
+    peakOut = peak;
 
     // --- Pass 2: the scratch file, scaled if asked, in the chosen format.
     std::unique_ptr<juce::AudioFormatReader> reader(
