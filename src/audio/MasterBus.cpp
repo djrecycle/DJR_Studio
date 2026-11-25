@@ -36,6 +36,11 @@ float MasterBus::getPeakLevel(int channel) const noexcept
     return getPeakLevel();
 }
 
+void MasterBus::resetGainRamp() noexcept
+{
+    lastGain = getGain();
+}
+
 void MasterBus::process(juce::AudioBuffer<float>& buffer) noexcept
 {
     const auto currentGain = getGain();

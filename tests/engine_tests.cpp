@@ -1234,6 +1234,79 @@ int main()
         }
     }
 
+    // --- A render starts at the faders, not ramping in from the last block --
+    {
+        djr::Mixer repeatMixer;
+        repeatMixer.prepare(sampleRate, blockSize);
+
+        auto* lead = dynamic_cast<djr::MidiTrack*>(repeatMixer.getTrack(1));
+        check(lead != nullptr, "the repeat-render session has a MIDI track");
+
+        if (lead != nullptr)
+        {
+            lead->setClipNotes(makeFourBarChord());
+
+            // Moved after prepare and before anything was processed: the first
+            // render used to ramp in from the old positions, the second not.
+            lead->setVolume(0.3f);
+            lead->setPan(0.5f);
+            repeatMixer.getMasterBus().setGain(0.5f);
+
+            const auto root = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                  .getChildFile("djr_engine_test_repeat_render");
+            root.deleteRecursively();
+
+            djr::ExportManager exporter;
+            djr::ExportManager::Options options;
+            options.sampleRate = sampleRate;
+            options.blockSize = blockSize;
+            options.tempoBpm = tempoBpm;
+            options.lengthBeats = 2.0;
+            options.songMode = false;
+            options.bitDepth = 32;
+            options.trimSilentTail = false;
+
+            const auto first = root.getChildFile("first.wav");
+            const auto second = root.getChildFile("second.wav");
+            juce::String error;
+            check(exporter.render(repeatMixer, first, options, error)
+                      && exporter.render(repeatMixer, second, options, error),
+                  "both renders succeed" + (error.isEmpty() ? juce::String() : ": " + error));
+
+            juce::AudioFormatManager formats;
+            formats.registerBasicFormats();
+            std::unique_ptr<juce::AudioFormatReader> firstReader(formats.createReaderFor(first));
+            std::unique_ptr<juce::AudioFormatReader> secondReader(formats.createReaderFor(second));
+            check(firstReader != nullptr && secondReader != nullptr
+                      && firstReader->lengthInSamples == secondReader->lengthInSamples
+                      && firstReader->lengthInSamples > 0,
+                  "both renders are read back at the same length");
+
+            if (firstReader != nullptr && secondReader != nullptr
+                && firstReader->lengthInSamples == secondReader->lengthInSamples)
+            {
+                const auto channels = static_cast<int>(firstReader->numChannels);
+                const auto length = static_cast<int>(firstReader->lengthInSamples);
+                juce::AudioBuffer<float> a(channels, length), b(channels, length);
+                firstReader->read(&a, 0, length, 0, true, true);
+                secondReader->read(&b, 0, length, 0, true, true);
+
+                auto worst = 0.0f;
+                for (int channel = 0; channel < channels; ++channel)
+                    for (int i = 0; i < length; ++i)
+                        worst = std::max(worst, std::abs(a.getSample(channel, i) - b.getSample(channel, i)));
+
+                check(! isSilent(a.getMagnitude(0, length)), "the repeated render has sound in it");
+                check(worst < 1.0e-6f, "rendering the same mix twice gives the same file (worst error "
+                                           + juce::String(worst, 7) + ")");
+            }
+
+            firstReader.reset();
+            secondReader.reset();
+            root.deleteRecursively();
+        }
+    }
+
     // --- Stem export: one file per track, adding back up to the mixdown -----
     {
         djr::Mixer stemMixer;

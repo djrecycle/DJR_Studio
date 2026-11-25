@@ -582,6 +582,13 @@ void Track::prepare(double sampleRate, int blockSize)
     preparedBlockSize.store(blockSize, std::memory_order_release);
     instrumentScratch.setSize(PluginChain::maxPluginChannels, juce::jmax(1, blockSize), false, false, true);
 
+    // A fresh start begins at the fader, not ramping in from wherever the last
+    // processed block left it: otherwise a fader moved while this track went
+    // unprocessed bleeds a ramp into the first block of the next render, and
+    // two renders of the same mix stop being identical.
+    lastManualVolume = getVolume();
+    lastManualPan = getPan();
+
     {
         const juce::SpinLock::ScopedLockType scoped(pluginLock);
         pluginChain.prepare(sampleRate, blockSize);

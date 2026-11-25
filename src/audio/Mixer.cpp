@@ -101,6 +101,8 @@ void Mixer::prepare(double sampleRate, int blockSize, int numChannels)
     for (auto& track : tracks)
         track->prepare(sampleRate, blockSize);
 
+    masterBus.resetGainRamp();
+
     rebuildProcessOrder();
 }
 
