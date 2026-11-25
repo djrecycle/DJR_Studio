@@ -312,6 +312,7 @@ juce::String Localisation::getIndonesianTranslations()
         + "\" stems exported to \" = \" stem diekspor ke \"\n"
         + "\"silent, skipped: \" = \"senyap, dilewati: \"\n"
         + "\"There is no audible track to export as a stem.\" = \"Tidak ada track yang terdengar untuk diekspor sebagai stem.\"\n"
+        + "\"Every track rendered silent, so no stem was written.\" = \"Semua track menghasilkan senyap, jadi tidak ada stem yang ditulis.\"\n"
         + "\"Export finished: \" = \"Export selesai: \"\n"
         + "\"The export settings are not valid.\" = \"Pengaturan export tidak valid.\"\n"
         + "\"Export length is zero - there is nothing to render.\" = \"Panjang export nol - tidak ada yang bisa dirender.\"\n"

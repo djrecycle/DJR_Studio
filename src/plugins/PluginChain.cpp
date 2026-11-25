@@ -16,8 +16,15 @@ void PluginChain::prepare(double sampleRate, int blockSize)
     // Allocated up front so the audio thread never resizes it.
     scratch.setSize(maxPluginChannels, juce::jmax(1, blockSize), false, false, true);
 
+    // reset() as well: many delays and reverbs keep their buffers through
+    // prepareToPlay when the rate and block size have not changed, and a fresh
+    // start - an export, one stem after another - must not begin with the tail
+    // of whatever played through them last.
     for (auto& slot : plugins)
+    {
         slot.plugin->prepareToPlay(currentSampleRate, currentBlockSize);
+        slot.plugin->reset();
+    }
 }
 
 void PluginChain::configureAndPrepare(juce::AudioPluginInstance& plugin,

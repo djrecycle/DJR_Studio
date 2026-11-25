@@ -142,7 +142,6 @@ private:
     void saveProject(bool forceChooser);
     void openProject();
     void openProjectFile(const juce::File& file);
-    /** Asks for format, bit depth and normalising, then where to save. */
     /** Asks for format and bit depth, then for where to put the result: one
         mixdown file, or with `stems` a folder of one file per track.
     */

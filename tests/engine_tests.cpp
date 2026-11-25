@@ -265,6 +265,61 @@ namespace
         void setStateInformation(const void*, int) override {}
         void fillInPluginDescription(juce::PluginDescription&) const override {}
     };
+
+    /** A feedback echo one block long, decaying slowly enough to still ring
+        well past an export's 1.5 s tail. Like many real delays and reverbs it
+        keeps its memory through prepareToPlay at an unchanged rate and block
+        size, and only reset() clears it - so a render that does not reset its
+        plugins starts with whatever the previous one left behind.
+    */
+    class FakeEchoPluginInstance final : public juce::AudioPluginInstance
+    {
+    public:
+        const juce::String getName() const override { return "Fake Echo"; }
+
+        void prepareToPlay(double, int maximumBlockSize) override
+        {
+            if (memory.getNumSamples() != maximumBlockSize)
+                memory.setSize(2, maximumBlockSize);
+        }
+
+        void reset() override { memory.clear(); }
+        void releaseResources() override {}
+
+        void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
+        {
+            const auto channels = juce::jmin(buffer.getNumChannels(), memory.getNumChannels());
+            const auto samples = juce::jmin(buffer.getNumSamples(), memory.getNumSamples());
+
+            for (int channel = 0; channel < channels; ++channel)
+            {
+                auto* io = buffer.getWritePointer(channel);
+                auto* echo = memory.getWritePointer(channel);
+
+                for (int i = 0; i < samples; ++i)
+                {
+                    io[i] += 0.98f * echo[i];
+                    echo[i] = io[i];
+                }
+            }
+        }
+
+        juce::AudioBuffer<float> memory;
+        using juce::AudioProcessor::processBlock;
+        double getTailLengthSeconds() const override { return 0.0; }
+        bool acceptsMidi() const override { return false; }
+        bool producesMidi() const override { return false; }
+        juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+        bool hasEditor() const override { return false; }
+        int getNumPrograms() override { return 0; }
+        int getCurrentProgram() override { return 0; }
+        void setCurrentProgram(int) override {}
+        const juce::String getProgramName(int) override { return {}; }
+        void changeProgramName(int, const juce::String&) override {}
+        void getStateInformation(juce::MemoryBlock&) override {}
+        void setStateInformation(const void*, int) override {}
+        void fillInPluginDescription(juce::PluginDescription&) const override {}
+    };
 }
 
 int main()
@@ -1452,6 +1507,175 @@ int main()
 
             root.deleteRecursively();
         }
+    }
+
+    // --- Stems: sends, shared bus effects, and nothing to export ------------
+    {
+        const auto root = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                              .getChildFile("djr_engine_test_stems_routing");
+        root.deleteRecursively();
+
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+
+        const auto readAll = [&formats] (const juce::File& file)
+        {
+            juce::AudioBuffer<float> buffer;
+            std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(file));
+
+            if (reader != nullptr)
+            {
+                buffer.setSize(static_cast<int>(reader->numChannels), static_cast<int>(reader->lengthInSamples));
+                reader->read(&buffer, 0, buffer.getNumSamples(), 0, true, true);
+            }
+
+            return buffer;
+        };
+
+        djr::ExportManager::Options options;
+        options.sampleRate = sampleRate;
+        options.blockSize = blockSize;
+        options.tempoBpm = tempoBpm;
+        options.lengthBeats = 4.0;
+        options.songMode = false;
+        options.bitDepth = 32;
+        options.trimSilentTail = false;
+
+        // Renders the mixdown, then the stems, and returns how far the stems'
+        // sum strays from the mixdown (or -1 when either could not be read).
+        const auto stemsVersusMix = [&] (djr::Mixer& mixer, const juce::String& name,
+                                         std::vector<djr::ExportManager::Stem>& stems)
+        {
+            djr::ExportManager exporter;
+            const auto mixFile = root.getChildFile(name + " mix.wav");
+            juce::String error;
+            juce::StringArray skipped;
+
+            if (! exporter.render(mixer, mixFile, options, error)
+                || ! exporter.renderStems(mixer, root.getChildFile(name), options, stems, skipped, error))
+                return -1.0f;
+
+            const auto mix = readAll(mixFile);
+            juce::AudioBuffer<float> sum(mix.getNumChannels(), mix.getNumSamples());
+            sum.clear();
+
+            for (const auto& stem : stems)
+            {
+                const auto audio = readAll(stem.file);
+
+                if (audio.getNumSamples() != sum.getNumSamples() || audio.getNumChannels() != sum.getNumChannels())
+                    return -1.0f;
+
+                for (int channel = 0; channel < sum.getNumChannels(); ++channel)
+                    sum.addFrom(channel, 0, audio, channel, 0, sum.getNumSamples());
+            }
+
+            auto worst = 0.0f;
+            for (int channel = 0; channel < sum.getNumChannels(); ++channel)
+                for (int i = 0; i < sum.getNumSamples(); ++i)
+                    worst = std::max(worst, std::abs(sum.getSample(channel, i) - mix.getSample(channel, i)));
+
+            return isSilent(mix.getMagnitude(0, mix.getNumSamples())) ? -1.0f : worst;
+        };
+
+        // A track whose main output goes into a muted group but which still
+        // sends to an open reverb bus is heard in the mix - so it needs a stem.
+        {
+            djr::Mixer mixer;
+            mixer.prepare(sampleRate, blockSize);
+            auto* bass = dynamic_cast<djr::MidiTrack*>(mixer.getTrack(1));
+            auto* group = mixer.addTrack(std::make_unique<djr::BusTrack>("Group"));
+            auto* reverb = mixer.addTrack(std::make_unique<djr::BusTrack>("Reverb"));
+            check(bass != nullptr && group != nullptr && reverb != nullptr, "the send session has its tracks");
+
+            if (bass != nullptr && group != nullptr && reverb != nullptr)
+            {
+                bass->setClipNotes(makeFourBarChord());
+                check(mixer.setTrackOutput(1, mixer.indexOf(group)), "bass can go into the group");
+                check(mixer.setTrackSend(1, 0, djr::TrackSend { mixer.indexOf(reverb), 0.5f, false }),
+                      "bass can send to the reverb bus");
+                group->setMuted(true);
+
+                const auto indices = djr::ExportManager::stemTrackIndices(mixer);
+                check(std::find(indices.begin(), indices.end(), 1) != indices.end(),
+                      "a track heard only through a send still gets a stem");
+
+                std::vector<djr::ExportManager::Stem> stems;
+                const auto worst = stemsVersusMix(mixer, "send", stems);
+                check(stems.size() == 1 && worst >= 0.0f && worst < 1.0e-4f,
+                      "the send-only stem adds up to the mixdown (stems "
+                          + juce::String(static_cast<int>(stems.size())) + ", worst error " + juce::String(worst, 7) + ")");
+
+                // And with the send switched off nothing of it reaches master.
+                mixer.setTrackSend(1, 0, djr::TrackSend {});
+                const auto none = djr::ExportManager::stemTrackIndices(mixer);
+                check(std::find(none.begin(), none.end(), 1) == none.end(),
+                      "a track routed only into a muted bus gets no stem");
+            }
+        }
+
+        // An echo on a bus that two stems run through must not carry the end
+        // of one render into the start of the next.
+        {
+            djr::Mixer mixer;
+            mixer.prepare(sampleRate, blockSize);
+            auto* bass = dynamic_cast<djr::MidiTrack*>(mixer.getTrack(1));
+            auto* pad = dynamic_cast<djr::MidiTrack*>(mixer.getTrack(2));
+            auto* bus = mixer.addTrack(std::make_unique<djr::BusTrack>("Echo Bus"));
+            check(bass != nullptr && pad != nullptr && bus != nullptr, "the echo session has its tracks");
+
+            if (bass != nullptr && pad != nullptr && bus != nullptr)
+            {
+                bass->setClipNotes(makeFourBarChord());
+                pad->setClipNotes(makeFourBarChord());
+                mixer.setTrackOutput(1, mixer.indexOf(bus));
+                mixer.setTrackOutput(2, mixer.indexOf(bus));
+
+                auto echo = std::make_unique<FakeEchoPluginInstance>();
+                echo->prepareToPlay(sampleRate, blockSize);
+                bus->addPlugin(std::move(echo));
+
+                std::vector<djr::ExportManager::Stem> stems;
+                const auto worst = stemsVersusMix(mixer, "echo", stems);
+                check(stems.size() == 2 && worst >= 0.0f && worst < 1.0e-4f,
+                      "stems through a shared echo bus add up to the mixdown (stems "
+                          + juce::String(static_cast<int>(stems.size())) + ", worst error " + juce::String(worst, 7) + ")");
+            }
+        }
+
+        // Nothing to export leaves no empty folder behind, and is not
+        // reported as a success.
+        {
+            djr::Mixer mixer;               // default tracks, no notes: audible but silent
+            mixer.prepare(sampleRate, blockSize);
+
+            djr::ExportManager exporter;
+            std::vector<djr::ExportManager::Stem> stems;
+            juce::StringArray skipped;
+            juce::String error;
+            const auto silentFolder = root.getChildFile("all silent");
+            const auto ok = exporter.renderStems(mixer, silentFolder, options, stems, skipped, error);
+            check(! ok && error.isNotEmpty() && stems.empty(),
+                  "a project where every track renders silent is an error, not \"0 stems exported\"");
+            check(! silentFolder.exists(), "and it leaves no empty stem folder behind");
+
+            for (int index = 0; index < mixer.getNumTracks(); ++index)
+                mixer.getTrack(index)->setMuted(true);
+
+            const auto mutedFolder = root.getChildFile("all muted");
+            error.clear();
+            check(! exporter.renderStems(mixer, mutedFolder, options, stems, skipped, error) && error.isNotEmpty(),
+                  "a project with every track muted has nothing to export");
+            check(! mutedFolder.exists(), "and creates no stem folder either");
+
+            // A folder that was already there is the user's: it stays.
+            const auto existing = root.getChildFile("existing");
+            existing.createDirectory();
+            exporter.renderStems(mixer, existing, options, stems, skipped, error);
+            check(existing.isDirectory(), "a folder that already existed is never removed");
+        }
+
+        root.deleteRecursively();
     }
 
     // --- Export formats, bit depths and normalising --------------------------

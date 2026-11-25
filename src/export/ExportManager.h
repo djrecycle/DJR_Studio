@@ -83,7 +83,13 @@ public:
         stems of the tracks feeding them - and neither does a track that is
         muted, or routed into a muted bus, since it is not in the mix either.
         A track that renders to pure silence is left out rather than written as
-        an empty file; `skippedOut` receives the names of those.
+        an empty file; `skippedOut` receives the names of those. If that leaves
+        no stem at all it is an error, and `folder` is removed again when this
+        call was the one that created it.
+
+        Every stem starts from a freshly prepared mixer, plugins reset, so a
+        delay or reverb on a shared bus does not carry one stem's tail into
+        the next.
 
         Normalising is ignored: scaling every stem to its own peak would stop
         them adding up to the mix.
@@ -100,7 +106,9 @@ public:
                      std::function<void(double)> onProgress = {}) const;
 
     /** Tracks that get a stem, in mixer order: everything that makes a sound
-        of its own and can be heard in the mix.
+        of its own and can be heard in the mix - through its main output or
+        through any active send, as long as that route reaches master without
+        passing a muted track.
     */
     static std::vector<int> stemTrackIndices(const Mixer& mixer);
     /** "03 Lead Synth.wav" - numbered by mixer position so the files sort in

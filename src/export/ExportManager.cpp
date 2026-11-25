@@ -92,22 +92,44 @@ std::vector<int> ExportManager::stemTrackIndices(const Mixer& mixer)
     std::vector<int> indices;
     const auto count = mixer.getNumTracks();
 
-    // A track is heard only if it and every bus on its way to master are
-    // unmuted. The walk is bounded by the track count: routing validation keeps
-    // the graph acyclic, but a bad file should not be able to hang an export.
-    const auto reachesMasterUnmuted = [&mixer, count] (int index)
+    // A track is heard if any of its routes - the main output or an active
+    // send - reaches master without passing through a muted track: a track
+    // whose group is muted but which still sends to an open reverb bus is in
+    // the mix through that reverb. Each bus is visited once, so a bad file
+    // with a routing loop cannot hang the export.
+    const auto reachesMasterUnmuted = [&mixer, count] (int start)
     {
-        for (int steps = 0; steps <= count && juce::isPositiveAndBelow(index, count); ++steps)
+        std::vector<bool> seen(static_cast<size_t>(count), false);
+        std::vector<int> pending { start };
+
+        while (! pending.empty())
         {
+            const auto index = pending.back();
+            pending.pop_back();
+
+            if (! juce::isPositiveAndBelow(index, count))
+                return true;            // past the last bus: master
+
+            if (seen[static_cast<size_t>(index)])
+                continue;
+
+            seen[static_cast<size_t>(index)] = true;
             const auto* track = mixer.getTrack(index);
 
             if (track == nullptr || track->isMuted())
-                return false;
+                continue;
 
-            index = track->getOutputDestination();
+            pending.push_back(track->getOutputDestination());
+
+            for (int slot = 0; slot < Track::maxSends; ++slot)
+                // A send only ever feeds a bus; one pointing nowhere is dropped
+                // by the mixer, not played to master.
+                if (const auto send = track->getSend(slot);
+                    send.isActive() && juce::isPositiveAndBelow(send.destination, count))
+                    pending.push_back(send.destination);
         }
 
-        return true;
+        return false;
     };
 
     for (int index = 0; index < count; ++index)
@@ -142,17 +164,21 @@ bool ExportManager::renderStems(Mixer& mixer,
     stemsOut.clear();
     skippedOut.clear();
 
-    if (! folder.createDirectory())
-    {
-        errorOut = TRANS("The destination folder could not be created: ") + folder.getFullPathName();
-        return false;
-    }
-
     const auto indices = stemTrackIndices(mixer);
 
     if (indices.empty())
     {
         errorOut = TRANS("There is no audible track to export as a stem.");
+        return false;
+    }
+
+    // Created only now there is something to put in it, and removed again
+    // below if every stem turns out silent - but only if this call made it.
+    const auto folderExisted = folder.isDirectory();
+
+    if (! folder.createDirectory())
+    {
+        errorOut = TRANS("The destination folder could not be created: ") + folder.getFullPathName();
         return false;
     }
 
@@ -211,6 +237,16 @@ bool ExportManager::renderStems(Mixer& mixer,
 
     if (onProgress)
         onProgress(1.0);
+
+    if (stemsOut.empty())
+    {
+        if (! folderExisted && folder.getNumberOfChildFiles(juce::File::findFilesAndDirectories
+                                                             | juce::File::ignoreHiddenFiles) == 0)
+            folder.deleteRecursively();
+
+        errorOut = TRANS("Every track rendered silent, so no stem was written.");
+        return false;
+    }
 
     return true;
 }

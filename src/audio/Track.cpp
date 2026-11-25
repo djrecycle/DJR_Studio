@@ -596,7 +596,10 @@ void Track::prepare(double sampleRate, int blockSize)
 
     const juce::SpinLock::ScopedLockType scoped(instrumentLock);
     if (instrument != nullptr)
+    {
         PluginChain::configureAndPrepare(*instrument, true, sampleRate, blockSize);
+        instrument->reset();        // no voice still ringing from the last render, as for the inserts
+    }
 }
 
 void Track::processAudio(juce::AudioBuffer<float>& buffer,
