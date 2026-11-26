@@ -11,8 +11,8 @@
 namespace djr
 {
 
-/** One mixer channel: pan knob, fader, stereo meters, its sends, mute/solo/arm
-    and the level readout. Also renders the master bus when constructed with one.
+/** One mixer channel: pan knob, its insert effects, fader, stereo meters, its
+    sends, mute/solo/arm and the level readout. Also renders the master bus when constructed with one.
 */
 class MixerChannelStrip final : public juce::Component,
                                 public juce::TooltipClient,
@@ -62,6 +62,32 @@ public:
     */
     std::function<void(int slot)> onCreateBusForSend;
 
+    /** "+ FX": the owner offers the plugin library and loads the choice as
+        an insert on this strip's track.
+    */
+    std::function<void()> onAddInsert;
+    /** Clicking an insert's name opens that plugin's window. */
+    std::function<void(int insertIndex)> onOpenInsert;
+    /** After an insert is bypassed, moved or removed from this strip, so other
+        views of the chain (the Insert Chain panel) can catch up.
+    */
+    std::function<void()> onInsertsChanged;
+    /** "... N more": the chain is longer than the strip shows. */
+    std::function<void()> onShowInsertChain;
+
+    /** How many insert rows a strip shows before folding the rest into a
+        "... N more" row.
+    */
+    static constexpr int maxVisibleInserts = 4;
+    /** Row markers in what getInsertRows() lists, besides insert indices. */
+    static constexpr int addInsertRow = -1;
+    static constexpr int moreInsertsRow = -2;
+    /** What the insert section lists for a chain of `pluginCount`: the
+        inserts (the first maxVisibleInserts - 1 and a "more" row past
+        maxVisibleInserts), then "+ FX".
+    */
+    static std::vector<int> insertRowsFor(int pluginCount);
+
     /** Send level limits: 1.5 is +3.5 dB, the same headroom as the fader. */
     static constexpr float maxSendLevel = 1.5f;
     /** Where a send row of `width` pixels fills up to for `level`, 0..1. */
@@ -88,6 +114,18 @@ private:
     void showAutomationMenu(bool forPan);
     /** Where this track's audio goes, and what its sends are doing. */
     void showRoutingMenu();
+    /** Name and pan rows plus the insert section: where the fader starts. */
+    int getHeightAboveFader() const;
+    std::vector<int> getInsertRows() const;
+    int getInsertSectionHeight() const;
+    juce::Rectangle<int> getInsertRowBounds(int rowIndex) const;
+    /** Index into getInsertRows() under `position`, or -1. */
+    int getInsertRowAt(juce::Point<int> position) const;
+    /** The on/off dot at the left of an insert row. */
+    static juce::Rectangle<int> getBypassDotArea(juce::Rectangle<int> row);
+    void showInsertMenu(int insertIndex);
+    void notifyInsertsChanged();
+
     /** Slots that actually point somewhere, in slot order. */
     std::vector<int> getAssignedSends() const;
     /** What the send section lists, top to bottom: each assigned slot, then

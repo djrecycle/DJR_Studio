@@ -181,6 +181,8 @@ private:
     /** "Quit" from an External Apps row's right-click menu. */
     void quitExternalApp(int appIndex);
     void openTrackPluginEditor(int trackIndex);
+    /** "+ FX" on a mixer strip: the plugin library's effects, by format and maker. */
+    void showAddInsertMenu(int trackIndex);
     void openTrackPlugin(int trackIndex, PluginSlot slot, int insertIndex);
     /** `plugin` may be nullptr: a channel with no generator still has a window. */
     void showPluginWindow(juce::AudioProcessor* plugin, Track* track);
