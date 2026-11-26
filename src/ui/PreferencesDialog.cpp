@@ -106,7 +106,10 @@ PreferencesDialog::PreferencesDialog(juce::AudioDeviceManager& deviceManagerToUs
 
     audioSelector = std::make_unique<juce::AudioDeviceSelectorComponent>(
         deviceManager, 0, AudioEngine::maxInputChannels, 0, 2, false, false, true, false);
-    addChildComponent(audioSelector.get());
+    audioViewport.setViewedComponent(audioSelector.get(), false);
+    audioViewport.setScrollBarsShown(true, false);
+    audioViewport.setScrollBarThickness(8);
+    addChildComponent(audioViewport);
 
     for (const auto frames : AudioEngine::getBufferSizeChoices())
     {
@@ -133,6 +136,7 @@ PreferencesDialog::PreferencesDialog(juce::AudioDeviceManager& deviceManagerToUs
 
 PreferencesDialog::~PreferencesDialog()
 {
+    audioViewport.setViewedComponent(nullptr, false);
     deviceManager.removeChangeListener(this);
     useJackButton.removeListener(this);
 
@@ -424,8 +428,11 @@ void PreferencesDialog::resized()
 
     if (audioSelector != nullptr)
     {
-        // The latency block and the input meter sit under the device list.
-        audioSelector->setBounds(page.withTrimmedBottom(inputMeterHeight + latencySectionHeight));
+        // The latency block and the input meter sit under the device list,
+        // which scrolls when it is taller than what is left.
+        audioViewport.setBounds(page.withTrimmedBottom(inputMeterHeight + latencySectionHeight));
+        audioSelector->setSize(audioViewport.getWidth() - audioViewport.getScrollBarThickness() - 2,
+                               juce::jmax(audioSelector->getHeight(), 1));
     }
 
     {
@@ -922,8 +929,10 @@ void PreferencesDialog::chooseFolderForFormat(const juce::String& formatName)
 
 void PreferencesDialog::refreshPageVisibility()
 {
+    audioViewport.setVisible(currentPage == 0);
+
     if (audioSelector != nullptr)
-        audioSelector->setVisible(currentPage == 0);
+        audioSelector->setVisible(true);
 
     for (auto* chip : bufferChips)
         chip->setVisible(currentPage == 0);

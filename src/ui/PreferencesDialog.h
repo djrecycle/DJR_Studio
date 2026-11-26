@@ -124,6 +124,11 @@ private:
     SwitchButton autoScrollSwitch { "autoScroll" };
     SwitchButton autoOpenEditorSwitch { "autoOpenEditor" };
 
+    /** JUCE's selector sizes itself to its own content - taller than the page
+        once the input list is open - so it scrolls in here instead of running
+        under the latency block below it.
+    */
+    juce::Viewport audioViewport;
     std::unique_ptr<juce::AudioDeviceSelectorComponent> audioSelector;
     /** One per AudioEngine::getBufferSizeChoices() entry, in that order. */
     juce::OwnedArray<TabChip> bufferChips;
