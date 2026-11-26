@@ -142,6 +142,8 @@ private:
     bool patternMode = true;
     float smoothedMasterLeft = 0.0f;
     float smoothedMasterRight = 0.0f;
+    /** What was last painted, so the timer repaints only what changed. */
+    juce::String lastStaticKey, lastPositionKey, lastMeterKey;
     double tempoDragStart = 120.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TransportBar)

@@ -88,4 +88,12 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PanelWindow)
 };
 
+/** True when `component` sits in a PanelWindow that another open panel, above
+    it in the workspace, covers completely - a maximised playlist over the
+    mixer, say. JUCE still paints a covered component whenever it asks for a
+    repaint (and everything over it in that area with it), so timers that only
+    animate - meters, playheads - should skip their repaint while this holds.
+*/
+bool isCoveredByPanelAbove(const juce::Component& component);
+
 } // namespace djr

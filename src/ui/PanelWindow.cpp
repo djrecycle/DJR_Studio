@@ -320,6 +320,31 @@ void PanelWindow::applyRestoredBounds()
     setBounds(restoredBounds);
 }
 
+bool isCoveredByPanelAbove(const juce::Component& component)
+{
+    const auto* panel = dynamic_cast<const PanelWindow*>(&component);
+
+    if (panel == nullptr)
+        panel = component.findParentComponentOfClass<PanelWindow>();
+
+    if (panel == nullptr)
+        return false;
+
+    const auto* host = panel->getParentComponent();
+
+    if (host == nullptr)
+        return false;
+
+    const auto area = host->getLocalArea(&component, component.getLocalBounds());
+
+    for (auto i = host->getIndexOfChildComponent(panel) + 1; i < host->getNumChildComponents(); ++i)
+        if (const auto* above = host->getChildComponent(i); above != nullptr && above->isVisible()
+                                                            && above->getBounds().contains(area))
+            return true;
+
+    return false;
+}
+
 void PanelWindow::notifyLayoutChanged()
 {
     if (onLayoutChanged)

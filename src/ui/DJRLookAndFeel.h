@@ -42,6 +42,8 @@ public:
     void drawPopupMenuBackground(juce::Graphics& g, int width, int height) override;
 
     void drawTooltip(juce::Graphics& g, const juce::String& text, int width, int height) override;
+    juce::Rectangle<int> getTooltipBounds(const juce::String& tipText, juce::Point<int> screenPos,
+                                          juce::Rectangle<int> parentArea) override;
 };
 
 } // namespace djr

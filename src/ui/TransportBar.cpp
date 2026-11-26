@@ -54,12 +54,20 @@ TransportBar::TransportButton::TransportButton(const juce::String& buttonName, I
 
 void TransportBar::TransportButton::setIcon(Icon icon)
 {
+    // Called from the transport timer every tick: repaint only on a change.
+    if (iconKind == icon)
+        return;
+
     iconKind = icon;
     repaint();
 }
 
 void TransportBar::TransportButton::setActiveColour(juce::Colour colour)
 {
+    // Called from the transport timer every tick: repaint only on a change.
+    if (activeColour == colour)
+        return;
+
     activeColour = colour;
     repaint();
 }
@@ -75,6 +83,10 @@ void TransportBar::TransportButton::setActive(bool shouldBeActive)
 
 void TransportBar::TransportButton::setIconColour(juce::Colour colour)
 {
+    // Called from the transport timer every tick: repaint only on a change.
+    if (iconColour == colour)
+        return;
+
     iconColour = colour;
     repaint();
 }
@@ -490,7 +502,36 @@ void TransportBar::timerCallback()
                                      smoothedMasterRight - decay);
 
     refreshButtons();
-    repaint();
+
+    // Only what actually moved. Repainting the whole bar thirty times a second
+    // while nothing changed kept the message thread busy enough that mouse
+    // events queued up behind it - tooltips and clicks landed where the
+    // pointer had been rather than where it was.
+    const auto staticKey = juce::String(transport.getTempoBpm(), 1) + "|"
+                         + juce::String(transport.getTimeSignatureNumerator()) + "/"
+                         + juce::String(transport.getTimeSignatureDenominator()) + "|"
+                         + getSnapUnitLabel(snapUnit) + "|" + (patternMode ? "p" : "s");
+    const auto positionKey = getPositionText() + "|" + getTimeText();
+    const auto meterKey = juce::String(juce::roundToInt(smoothedMasterLeft * 400.0f)) + "|"
+                        + juce::String(juce::roundToInt(smoothedMasterRight * 400.0f)) + "|"
+                        + getMasterDbText();
+
+    if (staticKey != lastStaticKey)
+    {
+        repaint();
+    }
+    else
+    {
+        if (positionKey != lastPositionKey)
+            repaint(positionPod);
+
+        if (meterKey != lastMeterKey)
+            repaint(masterPod);
+    }
+
+    lastStaticKey = staticKey;
+    lastPositionKey = positionKey;
+    lastMeterKey = meterKey;
 }
 
 void TransportBar::refreshButtons()

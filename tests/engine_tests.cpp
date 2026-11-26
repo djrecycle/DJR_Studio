@@ -36,6 +36,7 @@
 #include "plugins/PluginWindow.h"
 #include "app/UiScale.h"
 #include "ui/PanelHost.h"
+#include "ui/DJRLookAndFeel.h"
 
 #include <algorithm>
 #include <iostream>
@@ -6079,6 +6080,73 @@ int main()
         host.applyLayoutState(oldFormat);
         check(right->getRight() == 1366 && right->getBottom() == 700,
               "layout: an older project's layout is fitted too, from its panels' extent");
+    }
+
+    // --- A panel buried under another skips its animation repaints ----------
+    // The mixer's meters, the playlist's playhead and the master readout ask
+    // "is anything above me covering me completely?" before repainting. Under
+    // a maximised playlist they used to repaint 24-30 times a second anyway,
+    // making JUCE redraw the playlist over them each time - enough to back the
+    // message thread up until the mouse lagged behind the pointer.
+    {
+        juce::Component leftContent, rightContent;
+        djr::PanelHost host;
+        host.addPanel("left", "Left", djr::Icon::grid, leftContent);
+        host.addPanel("right", "Right", djr::Icon::grid, rightContent);
+        host.setSize(1000, 600);
+
+        auto* left = host.findPanel("left");
+        auto* right = host.findPanel("right");
+        left->setRestoredBounds({ 0, 0, 600, 600 });
+        right->setRestoredBounds({ 600, 0, 400, 600 });
+
+        check(! djr::isCoveredByPanelAbove(rightContent) && ! djr::isCoveredByPanelAbove(leftContent),
+              "covered: side-by-side panels are neither of them covered");
+
+        left->setMaximised(true);
+        check(djr::isCoveredByPanelAbove(rightContent),
+              "covered: a panel under a maximised one counts as covered");
+        check(! djr::isCoveredByPanelAbove(leftContent),
+              "covered: the maximised panel itself is not covered");
+
+        left->setMaximised(false);
+        check(! djr::isCoveredByPanelAbove(rightContent),
+              "covered: restoring the maximised panel uncovers the one beneath");
+
+        // Overlapping only partly is not covered: part of it is on screen.
+        right->setRestoredBounds({ 500, 0, 400, 600 });
+        left->toFront(false);
+        check(! djr::isCoveredByPanelAbove(rightContent),
+              "covered: a panel only partly overlapped still repaints");
+
+        host.setPanelOpen("left", false);
+        left->setMaximised(true);
+        check(! djr::isCoveredByPanelAbove(rightContent),
+              "covered: a closed panel covers nothing");
+
+        juce::Component loose;
+        check(! djr::isCoveredByPanelAbove(loose), "covered: a component in no panel is never covered");
+    }
+
+    // --- Tooltips hang just under the pointer -------------------------------
+    // JUCE's default put them 24 px to the right, sized with a font the tip
+    // is not drawn in: on screen it read as belonging to the next button.
+    {
+        djr::DJRLookAndFeel lnf;
+        const juce::Rectangle<int> parent(0, 0, 1366, 708);
+        const juce::Point<int> pointer(333, 100);
+        const auto tip = lnf.getTooltipBounds("Mute - silence a clip", pointer, parent);
+
+        check(tip.getY() > pointer.y && tip.getY() - pointer.y <= 24,
+              "tooltip: sits just below the pointer, not beside it");
+        check(std::abs(tip.getX() - pointer.x) <= 8,
+              "tooltip: starts under the pointer's tip rather than 24 px to its right");
+        check(tip.getWidth() < 150,
+              "tooltip: is sized to its text, not wider");
+
+        const auto nearCorner = lnf.getTooltipBounds("Mute - silence a clip", { 1360, 700 }, parent);
+        check(parent.contains(nearCorner) && nearCorner.getBottom() <= 700,
+              "tooltip: near the bottom-right corner it flips above and stays on screen");
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

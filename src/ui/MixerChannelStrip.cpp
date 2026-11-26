@@ -1,4 +1,5 @@
 #include "MixerChannelStrip.h"
+#include "PanelWindow.h"
 
 #include "Theme.h"
 
@@ -647,9 +648,41 @@ void MixerChannelStrip::timerCallback()
     const auto right = Theme::meterPosition(track != nullptr ? track->getPeakLevel(1)
                                                              : masterBus->getPeakLevel(1));
 
-    smoothedLeft = juce::jmax(left, smoothedLeft - decay);
-    smoothedRight = juce::jmax(right, smoothedRight - decay);
-    repaint();
+    const auto newLeft = juce::jmax(left, smoothedLeft - decay);
+    const auto newRight = juce::jmax(right, smoothedRight - decay);
+
+    // Under a maximised playlist the strip is not seen at all, yet every
+    // repaint here would still make JUCE redraw the playlist over it.
+    if (isCoveredByPanelAbove(*this))
+    {
+        smoothedLeft = newLeft;
+        smoothedRight = newRight;
+        return;
+    }
+
+    // Fader, pan and buttons can be moved from elsewhere - automation during
+    // playback, M/S in the playlist - so they are checked too, but only the
+    // meters animate: a silent strip asks for no repaint at all.
+    auto stateKey = getDisplayName() + "|" + juce::String(getLevel(), 4) + "|" + juce::String(getPan(), 3);
+
+    if (track != nullptr)
+        stateKey << "|" << (int) track->isMuted() << (int) track->isSoloed() << (int) track->isRecordArmed()
+                 << (int) track->isVolumeAutomated() << "|" << getOutputDestinationName();
+
+    const auto metersMoved = std::abs(newLeft - smoothedLeft) > 0.002f || std::abs(newRight - smoothedRight) > 0.002f;
+
+    smoothedLeft = newLeft;
+    smoothedRight = newRight;
+
+    if (stateKey != lastStateKey)
+    {
+        lastStateKey = stateKey;
+        repaint();
+    }
+    else if (metersMoved)
+    {
+        repaint(getMeterArea());
+    }
 }
 
 int MixerChannelStrip::getFaderRowHeight() const
