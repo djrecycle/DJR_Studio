@@ -35,6 +35,13 @@ public:
 
     bool isMaster() const noexcept;
 
+    /** The shortest the strip can be with every row readable and a fader
+        still worth dragging. A mixer panel shorter than this scrolls rather
+        than stacking the buttons over the readout.
+    */
+    int getMinimumHeight() const;
+    static constexpr int minimumFaderHeight = 64;
+
     /** Highlights this strip as the one the rest of the session is following. */
     void setSelected(bool shouldBeSelected);
 
@@ -74,6 +81,8 @@ public:
     std::function<void()> onInsertsChanged;
     /** "... N more": the chain is longer than the strip shows. */
     std::function<void()> onShowInsertChain;
+    /** After the channel EQ is changed from this strip - to mark the project. */
+    std::function<void()> onEqChanged;
 
     /** How many insert rows a strip shows before folding the rest into a
         "... N more" row.
@@ -114,6 +123,12 @@ private:
     void showAutomationMenu(bool forPan);
     /** Where this track's audio goes, and what its sends are doing. */
     void showRoutingMenu();
+    /** The channel EQ row, between pan and the inserts; empty on master. */
+    juce::Rectangle<int> getEqRowBounds() const;
+    void showEqEditor();
+    void showEqMenu();
+    void setEqEnabled(bool shouldBeEnabled);
+
     /** Name and pan rows plus the insert section: where the fader starts. */
     int getHeightAboveFader() const;
     std::vector<int> getInsertRows() const;
@@ -145,6 +160,8 @@ private:
 
     /** The fader/meter block absorbs whatever height the strip has spare. */
     int getFaderRowHeight() const;
+    /** Everything but the fader/meter block. */
+    int getFixedRowsHeight() const;
     juce::Rectangle<int> getFaderColumn() const;
     juce::Rectangle<int> getFaderHandle() const;
     juce::Rectangle<int> getMeterArea() const;

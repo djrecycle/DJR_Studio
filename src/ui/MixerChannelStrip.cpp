@@ -1,4 +1,5 @@
 #include "MixerChannelStrip.h"
+#include "ChannelEqEditor.h"
 #include "PanelWindow.h"
 
 #include "Theme.h"
@@ -206,6 +207,34 @@ void MixerChannelStrip::paint(juce::Graphics& g)
         drawButton(getArmBounds(), "R", track->isRecordArmed(), Theme::pink(), true);
     }
 
+    // Channel EQ -------------------------------------------------------------
+    // One row: an on/off dot, "EQ" and the response in miniature, so a
+    // channel that is being EQ'd says so at a glance.
+    if (const auto eqRow = getEqRowBounds(); ! eqRow.isEmpty())
+    {
+        const auto settings = track->getChannelEq().getSettings();
+        const auto hovered = eqRow.contains(hoverPosition);
+
+        g.setColour(Theme::inset().brighter(hovered ? 0.15f : 0.0f));
+        g.fillRoundedRectangle(eqRow.toFloat(), 2.5f);
+
+        const auto dot = getBypassDotArea(eqRow).toFloat().withSizeKeepingCentre(5.0f, 5.0f);
+        g.setColour(settings.enabled ? colour : Theme::faintText());
+
+        if (settings.enabled)
+            g.fillEllipse(dot);
+        else
+            g.drawEllipse(dot, 1.0f);
+
+        auto content = eqRow.withTrimmedLeft(12);
+        g.setFont(Theme::mono(8.0f, settings.enabled));
+        g.setColour(settings.enabled ? Theme::textSoft() : Theme::faintText());
+        g.drawText("EQ", content.removeFromLeft(14), juce::Justification::centredLeft, false);
+
+        ChannelEqEditor::drawCurve(g, content.reduced(2, 2).toFloat(), settings,
+                                   track->getPreparedSampleRate(), colour, false);
+    }
+
     // Inserts ----------------------------------------------------------------
     // Above the fader, in the order the signal meets them: plugin, then fader,
     // then sends. A dot per insert says on (track colour) or bypassed.
@@ -345,9 +374,11 @@ void MixerChannelStrip::mouseMove(const juce::MouseEvent& event)
 {
     const auto sendBefore = getSendRowAt(hoverPosition);
     const auto insertBefore = getInsertRowAt(hoverPosition);
+    const auto eqBefore = getEqRowBounds().contains(hoverPosition);
     hoverPosition = event.getPosition();
 
-    if (getSendRowAt(hoverPosition) != sendBefore || getInsertRowAt(hoverPosition) != insertBefore)
+    if (getSendRowAt(hoverPosition) != sendBefore || getInsertRowAt(hoverPosition) != insertBefore
+        || getEqRowBounds().contains(hoverPosition) != eqBefore)
         repaint();
 }
 
@@ -355,7 +386,8 @@ void MixerChannelStrip::mouseExit(const juce::MouseEvent& event)
 {
     juce::ignoreUnused(event);
 
-    if (getSendRowAt(hoverPosition) >= 0 || getInsertRowAt(hoverPosition) >= 0)
+    if (getSendRowAt(hoverPosition) >= 0 || getInsertRowAt(hoverPosition) >= 0
+        || getEqRowBounds().contains(hoverPosition))
         repaint();
 
     hoverPosition = { -1, -1 };
@@ -382,6 +414,9 @@ void MixerChannelStrip::mouseWheelMove(const juce::MouseEvent& event, const juce
 
 juce::String MixerChannelStrip::getTooltip()
 {
+    if (getEqRowBounds().contains(hoverPosition))
+        return TRANS("Channel EQ - click: edit - dot: on/off - right-click: reset");
+
     if (const auto row = getInsertRowAt(hoverPosition); row >= 0 && track != nullptr)
     {
         const auto kind = getInsertRows()[(size_t) row];
@@ -431,6 +466,106 @@ std::vector<int> MixerChannelStrip::getAssignedSends() const
     return assigned;
 }
 
+juce::Rectangle<int> MixerChannelStrip::getEqRowBounds() const
+{
+    if (track == nullptr || isMaster())
+        return {};
+
+    auto area = getLocalBounds().reduced(stripPadding);
+    area.removeFromTop(nameRowHeight + rowGap + panRowHeight + rowGap);
+    return area.withHeight(sendSlotHeight);
+}
+
+void MixerChannelStrip::setEqEnabled(bool shouldBeEnabled)
+{
+    if (track == nullptr)
+        return;
+
+    auto settings = track->getChannelEq().getSettings();
+    settings.enabled = shouldBeEnabled;
+    track->getChannelEq().setSettings(settings);
+
+    if (onEqChanged)
+        onEqChanged();
+
+    repaint();
+}
+
+void MixerChannelStrip::showEqEditor()
+{
+    if (track == nullptr)
+        return;
+
+    auto editor = std::make_unique<ChannelEqEditor>(track->getChannelEq(), track->getName(), colour,
+                                                    track->getPreparedSampleRate());
+
+    // The strip may be rebuilt while the call-out is open (a track added or
+    // removed elsewhere), so the editor reaches back through a SafePointer.
+    editor->onChange = [safeThis = juce::Component::SafePointer<MixerChannelStrip>(this)]
+    {
+        if (safeThis == nullptr)
+            return;
+
+        if (safeThis->onEqChanged)
+            safeThis->onEqChanged();
+
+        safeThis->repaint();
+    };
+
+    auto* top = getTopLevelComponent();
+    const auto area = top != nullptr ? top->getLocalArea(this, getEqRowBounds()) : getEqRowBounds();
+    juce::CallOutBox::launchAsynchronously(std::move(editor), area, top);
+}
+
+void MixerChannelStrip::showEqMenu()
+{
+    if (track == nullptr)
+        return;
+
+    const auto settings = track->getChannelEq().getSettings();
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader("EQ - " + track->getName());
+    menu.addItem(1, TRANS("Edit EQ..."));
+    menu.addItem(2, TRANS("EQ on"), true, settings.enabled);
+    menu.addItem(3, TRANS("Reset to flat"), settings.lowDb != 0.0f || settings.midDb != 0.0f || settings.highDb != 0.0f
+                                                || settings.midHz != ChannelEq::defaultMidHz);
+
+    menu.showMenuAsync(juce::PopupMenu::Options()
+                           .withMousePosition()
+                           .withMinimumWidth(160)
+                           .withStandardItemHeight(21),
+        [this] (int result)
+        {
+            if (track == nullptr || result == 0)
+                return;
+
+            if (result == 1)
+            {
+                showEqEditor();
+                return;
+            }
+
+            if (result == 2)
+            {
+                setEqEnabled(! track->getChannelEq().getSettings().enabled);
+                return;
+            }
+
+            if (result == 3)
+            {
+                ChannelEq::Settings flat;
+                flat.enabled = track->getChannelEq().getSettings().enabled;
+                track->getChannelEq().setSettings(flat);
+
+                if (onEqChanged)
+                    onEqChanged();
+
+                repaint();
+            }
+        });
+}
+
 std::vector<int> MixerChannelStrip::getInsertRows() const
 {
     if (track == nullptr || isMaster())
@@ -449,6 +584,9 @@ int MixerChannelStrip::getHeightAboveFader() const
 {
     auto height = nameRowHeight + rowGap + panRowHeight + rowGap;
 
+    if (! getEqRowBounds().isEmpty())
+        height += sendSlotHeight + rowGap;
+
     if (const auto inserts = getInsertSectionHeight(); inserts > 0)
         height += inserts + rowGap;
 
@@ -462,6 +600,10 @@ juce::Rectangle<int> MixerChannelStrip::getInsertRowBounds(int rowIndex) const
 
     auto area = getLocalBounds().reduced(stripPadding);
     area.removeFromTop(nameRowHeight + rowGap + panRowHeight + rowGap);
+
+    if (! getEqRowBounds().isEmpty())
+        area.removeFromTop(sendSlotHeight + rowGap);
+
     return area.withHeight(sendSlotHeight).translated(0, rowIndex * (sendSlotHeight + sendSlotGap));
 }
 
@@ -928,6 +1070,12 @@ void MixerChannelStrip::mouseDown(const juce::MouseEvent& event)
                 return;
             }
 
+            if (getEqRowBounds().contains(position))
+            {
+                showEqMenu();
+                return;
+            }
+
             if (const auto row = getInsertRowAt(position); row >= 0)
             {
                 const auto kind = getInsertRows()[(size_t) row];
@@ -963,6 +1111,17 @@ void MixerChannelStrip::mouseDown(const juce::MouseEvent& event)
         if (getRoutingBounds().expanded(2, 2).contains(position))
         {
             showRoutingMenu();
+            return;
+        }
+
+        // The EQ row: the dot switches it on and off, anywhere else opens it.
+        if (const auto eqRow = getEqRowBounds(); eqRow.contains(position))
+        {
+            if (getBypassDotArea(eqRow).contains(position))
+                setEqEnabled(! track->getChannelEq().getSettings().enabled);
+            else
+                showEqEditor();
+
             return;
         }
 
@@ -1157,6 +1316,9 @@ void MixerChannelStrip::timerCallback()
     {
         stateKey << "|" << track->getPluginNames().joinIntoString(",");
 
+        const auto eq = track->getChannelEq().getSettings();
+        stateKey << "|eq" << (int) eq.enabled << ":" << eq.lowDb << ":" << eq.midDb << ":" << eq.midHz << ":" << eq.highDb;
+
         for (int i = 0; i < track->getPluginCount(); ++i)
             stateKey << (int) track->isPluginBypassed(i);
     }
@@ -1184,7 +1346,17 @@ void MixerChannelStrip::timerCallback()
     }
 }
 
+int MixerChannelStrip::getMinimumHeight() const
+{
+    return getFixedRowsHeight() + minimumFaderHeight;
+}
+
 int MixerChannelStrip::getFaderRowHeight() const
+{
+    return juce::jmax(faderRowHeight, getHeight() - getFixedRowsHeight());
+}
+
+int MixerChannelStrip::getFixedRowsHeight() const
 {
     // Every row below the fader, in the order they are stacked. The send row
     // used to be measured from the bottom while the buttons were measured from
@@ -1202,7 +1374,7 @@ int MixerChannelStrip::getFaderRowHeight() const
     if (const auto sends = getSendSectionHeight(); sends > 0)
         fixed += sends + rowGap;
 
-    return juce::jmax(faderRowHeight, getHeight() - fixed);
+    return fixed;
 }
 
 juce::Rectangle<int> MixerChannelStrip::getRowsBelowFader() const

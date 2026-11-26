@@ -66,6 +66,7 @@ juce::var Project::toVar() const
         trackObject->setProperty("inputStereo", track.inputStereo);
         trackObject->setProperty("sends", track.sends);
         trackObject->setProperty("channelSettings", track.channelSettings);
+        trackObject->setProperty("channelEq", track.channelEq);
         trackObject->setProperty("previewSynth", track.previewSynth);
         trackObject->setProperty("frozenFile", track.frozenFile);
         trackObject->setProperty("laneHeight", track.laneHeight);
@@ -187,6 +188,7 @@ void Project::fromVar(const juce::var& value)
             track.inputChannel = static_cast<int>(getOr(*trackObject, "inputChannel", 0));
             track.inputStereo = static_cast<bool>(getOr(*trackObject, "inputStereo", true));
             track.channelSettings = trackObject->getProperty("channelSettings");
+            track.channelEq = trackObject->getProperty("channelEq");
             track.previewSynth = trackObject->getProperty("previewSynth");
 
             if (auto* sendArray = trackObject->getProperty("sends").getArray())
