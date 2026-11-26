@@ -264,6 +264,46 @@ juce::String PluginShell::getFallbackNoticeText() const
     return {};
 }
 
+//==============================================================================
+/** A detached plugin editor's own top-level window: a DocumentWindow, so its
+    close button actually does something (see PluginShell::detachedWindow).
+    The editor is shown, never owned - the shell keeps it, and takes it back
+    when the editor is embedded again.
+*/
+class DetachedEditorWindow final : public juce::DocumentWindow
+{
+public:
+    DetachedEditorWindow(const juce::String& name, juce::Component& editor, std::function<void()> onCloseToUse)
+        : DocumentWindow(name, Theme::panel(), DocumentWindow::closeButton),
+          onClose(std::move(onCloseToUse))
+    {
+        setUsingNativeTitleBar(true);
+
+        // Sized by the plugin: the window follows the editor (resizeToFit),
+        // and only a plugin that says it can be resized lets the frame resize it.
+        const auto* processorEditor = dynamic_cast<juce::AudioProcessorEditor*>(&editor);
+        setResizable(processorEditor != nullptr && processorEditor->isResizable(), false);
+        setContentNonOwned(&editor, true);
+        centreWithSize(getWidth(), getHeight());
+        setVisible(true);
+        toFront(true);
+    }
+
+    ~DetachedEditorWindow() override
+    {
+        clearContentComponent();
+    }
+
+    void closeButtonPressed() override
+    {
+        if (onClose)
+            onClose();
+    }
+
+private:
+    std::function<void()> onClose;
+};
+
 void PluginShell::showGeneratorEditorDetached()
 {
     if (generatorEditor == nullptr)
@@ -272,13 +312,16 @@ void PluginShell::showGeneratorEditorDetached()
     generatorEditor->removeComponentListener(this);
     generatorHolder.removeChildComponent(generatorEditor.get());
 
-    generatorEditor->setName(audioProcessor != nullptr ? audioProcessor->getName() : TRANS("Plugin"));
-    generatorEditor->addToDesktop(juce::ComponentPeer::windowHasTitleBar
-                                  | juce::ComponentPeer::windowHasCloseButton
-                                  | juce::ComponentPeer::windowIsResizable
-                                  | juce::ComponentPeer::windowAppearsOnTaskbar);
-    generatorEditor->setVisible(true);
-    generatorEditor->toFront(true);
+    detachedWindow = std::make_unique<DetachedEditorWindow>(
+        audioProcessor != nullptr ? audioProcessor->getName() : TRANS("Plugin"),
+        *generatorEditor,
+        [this]
+        {
+            if (onDetachedEditorClosed)
+                onDetachedEditorClosed();
+            else
+                setDetachedEditorVisible(false);
+        });
 
     auto notice = std::make_unique<DetachedEditorNotice>([this] { bringDetachedEditorToFront(); });
     notice->setSize(380, 180);
@@ -292,16 +335,26 @@ void PluginShell::showGeneratorEditorEmbedded()
         return;
 
     detachedNotice = nullptr;
+    detachedWindow = nullptr;
 
-    generatorEditor->removeFromDesktop();
     generatorHolder.addAndMakeVisible(generatorEditor.get());
     generatorEditor->addComponentListener(this);
 }
 
 void PluginShell::bringDetachedEditorToFront()
 {
-    if (generatorEditor != nullptr && generatorEditor->isOnDesktop())
-        generatorEditor->toFront(true);
+    setDetachedEditorVisible(true);
+}
+
+void PluginShell::setDetachedEditorVisible(bool shouldBeVisible)
+{
+    if (detachedWindow == nullptr)
+        return;
+
+    detachedWindow->setVisible(shouldBeVisible);
+
+    if (shouldBeVisible)
+        detachedWindow->toFront(true);
 }
 
 void PluginShell::setDetachedWindowActive(bool detached)
@@ -426,6 +479,9 @@ PluginShell::~PluginShell()
     // editor, and a pointer read back after the delete is already dangling.
     // Only editors that came from createEditorIfNeeded are registered; the
     // generic panel is ours alone, so the check covers both cases.
+    // A detached editor's window lets go of the editor before it is deleted.
+    detachedWindow = nullptr;
+
     if (generatorEditor != nullptr)
     {
         generatorEditor->removeComponentListener(this);
@@ -1417,6 +1473,10 @@ PluginWindow::PluginWindow(juce::AudioProcessor* processor, Track* track)
     auto content = std::make_unique<PluginShell>(processor, track);
     shell = content.get();
 
+    // The X on a detached editor's own window closes this window too, the
+    // same as this window's own X: one plugin, one thing to close.
+    shell->onDetachedEditorClosed = [this] { closeButtonPressed(); };
+
     // Switching tabs changes what the window should be: the generator page is
     // as big as the plugin asked for, the settings pages are a fixed layout.
     shell->onPageChanged = [this]
@@ -1490,6 +1550,14 @@ Track* PluginWindow::getTrack() noexcept
 void PluginWindow::closeButtonPressed()
 {
     setVisible(false);
+}
+
+void PluginWindow::visibilityChanged()
+{
+    DocumentWindow::visibilityChanged();
+
+    if (shell != nullptr)
+        shell->setDetachedEditorVisible(isVisible());
 }
 
 } // namespace djr

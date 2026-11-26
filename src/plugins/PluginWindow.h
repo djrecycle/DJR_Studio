@@ -28,6 +28,8 @@ class Track;
     and greyed rather than left out: the layout is what is being built, and a
     control that is missing cannot say "not yet".
 */
+class DetachedEditorWindow;
+
 class PluginShell final : public juce::Component,
                           private juce::Button::Listener,
                           private juce::Slider::Listener,
@@ -78,6 +80,12 @@ public:
         `detached` already matches the current state.
     */
     void setDetachedWindowActive(bool detached);
+    /** Shows or hides the detached editor's own window along with the
+        channel window it belongs to - a no-op while the editor is embedded.
+    */
+    void setDetachedEditorVisible(bool shouldBeVisible);
+    /** The detached editor's own close button was pressed. */
+    std::function<void()> onDetachedEditorClosed;
     bool isDetachedWindowActive() const noexcept { return detachedWindowActive; }
 
     /** The generator page's own plain-text notice, when it is showing one
@@ -241,6 +249,12 @@ private:
         back to it. Never both this and generatorEditor embedded at once.
     */
     std::unique_ptr<juce::Component> detachedNotice;
+    /** The real window a detached editor lives in. The editor used to be put
+        on the desktop by itself, with a native close button that did nothing:
+        a bare component ignores userTriedToCloseWindow(), so its X could never
+        close it, and hiding the channel window left it behind.
+    */
+    std::unique_ptr<DetachedEditorWindow> detachedWindow;
     /** Toggles setDetachedWindowActive() - shown only when hasNativeEditor
         and hasPluginIdentity both hold, since anything else has no native
         window worth detaching, or no stable identity to remember the choice
@@ -324,6 +338,8 @@ public:
     juce::AudioProcessor* getProcessor() noexcept;
     Track* getTrack() noexcept;
     void closeButtonPressed() override;
+    /** A detached editor's window comes and goes with this one. */
+    void visibilityChanged() override;
 
 private:
     /** Keeps the window from being dragged smaller than the page can survive. */
