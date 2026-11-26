@@ -20,7 +20,7 @@
 DAW native Linux berbasis C++20, JUCE 8, dan CMake. MIDI, audio, VST3, mixer,
 piano roll, dan step sequencer dalam satu shell panel mengambang ala FL Studio.
 
-> **Status: v1.3.0.** Sudah bisa dipakai membuat pattern, merekam, mixing
+> **Status: v1.4.0.** Sudah bisa dipakai membuat pattern, merekam, mixing
 > dengan automation dan bus routing, serta meng-export WAV — tapi belum diuji
 > di banyak distro. Simpan pekerjaan pentingmu sesering mungkin.
 
@@ -74,11 +74,12 @@ piano roll, dan step sequencer dalam satu shell panel mengambang ala FL Studio.
 - Time signature 4/4 sampai 12/8.
 - Undo/redo 64 langkah untuk semua edit clip dan note.
 - Export WAV, FLAC, atau AIFF (16/24-bit, WAV juga 32-bit float), dengan opsi normalisasi - offline, lebih cepat dari realtime.
+- Export stems: satu file per track lewat mixer lengkap, siap dibuka di DAW lain.
 
 ## Install dari `.deb`
 
 ```bash
-sudo apt install ./djr-studio-1.3.0-Linux.deb
+sudo apt install ./djr-studio-1.4.0-Linux.deb
 ```
 
 Jalankan lewat menu aplikasi (**DJR_Studio**) atau dari terminal:
