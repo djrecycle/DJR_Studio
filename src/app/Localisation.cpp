@@ -376,6 +376,13 @@ juce::String Localisation::getIndonesianTranslations()
         + "\"output\" = \"output\"\n"
         + "\"JACK under PipeWire: the buffer is shared by every audio app while DJR_Studio runs, and the previous size comes back when it closes. Crackles = pick a bigger one.\" = \"JACK lewat PipeWire: buffer ini dipakai semua aplikasi audio selama DJR_Studio jalan, dan ukuran sebelumnya kembali saat ditutup. Suara kresek = pilih yang lebih besar.\"\n"
         + "\"ALSA's default device goes through PipeWire with its own buffering on top. Switch to JACK for the lowest latency.\" = \"Device default ALSA lewat PipeWire dengan buffer tambahan. Pindah ke JACK untuk latensi terendah.\"\n"
+        + "\"Send to\" = \"Kirim ke\"\n"
+        + "\"Pre-fader (ignores the fader)\" = \"Pre-fader (tidak ikut fader)\"\n"
+        + "\"Reset to 0 dB\" = \"Kembalikan ke 0 dB\"\n"
+        + "\"Remove send\" = \"Hapus send\"\n"
+        + "\"No buses yet\" = \"Belum ada bus\"\n"
+        + "\"Send this channel to a bus as well (reverb, delay, parallel compression)\" = \"Kirim juga channel ini ke bus (reverb, delay, kompresi paralel)\"\n"
+        + "\"Drag or scroll: send level (Shift = fine) - double-click: 0 dB - right-click: bus, pre/post fader, remove\" = \"Drag atau scroll: level send (Shift = halus) - double-click: 0 dB - klik kanan: bus, pre/post fader, hapus\"\n"
         + "\"Smaller buffers answer faster but need more CPU; crackles mean the buffer is too small.\" = \"Buffer kecil lebih cepat merespons tapi butuh CPU lebih; suara kresek berarti buffer terlalu kecil.\"\n";
 }
 

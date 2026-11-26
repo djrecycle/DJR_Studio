@@ -4,6 +4,7 @@
 #include "app/UiScale.h"
 
 #include "Theme.h"
+#include "audio/BusTrack.h"
 #include "plugins/MidiSamplerProcessor.h"
 #include "plugins/StarterKitSamples.h"
 #include "project/ProjectTrackLayout.h"
@@ -398,6 +399,28 @@ MainComponent::MainComponent()
 
     mixerView.setTrackSelectedCallback([this] (int trackIndex) { selectTrack(trackIndex); });
     mixerView.setOpenChannelCallback([this] (int trackIndex) { openTrackPluginEditor(trackIndex); });
+
+    // "+ Send" > "New bus" on a strip: the bus is made the same way the
+    // playlist's "New bus" makes one, then the send is pointed at it. The
+    // track list change rebuilds every view, exactly as it does from there.
+    mixerView.setCreateBusForSendCallback([this] (int trackIndex, int slot)
+    {
+        auto& mixer = audioEngine.getMixer();
+
+        if (mixer.getTrack(trackIndex) == nullptr)
+            return;
+
+        if (mixer.addTrack(std::make_unique<BusTrack>("Bus " + juce::String(mixer.getNumTracks() + 1))) == nullptr)
+            return;
+
+        TrackSend send;
+        send.destination = mixer.getNumTracks() - 1;
+        send.level = 1.0f;
+        mixer.setTrackSend(trackIndex, slot, send);
+
+        arrangementView.notifyTrackListChanged();
+        setStatusMessage(TRANS("Send ") + juce::String(slot + 1) + " -> " + mixer.getTrack(send.destination)->getName());
+    });
 
     // A lane created from a mixer strip has to show up as a playlist row, and
     // counts as an unsaved change like any other edit.

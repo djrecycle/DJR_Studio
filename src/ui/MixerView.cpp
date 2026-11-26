@@ -134,6 +134,15 @@ void MixerView::refreshStrips()
                     automationChangedCallback();
             };
 
+            strip->onCreateBusForSend = [this, i] (int slot)
+            {
+                juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<MixerView>(this), i, slot]
+                {
+                    if (safeThis != nullptr && safeThis->createBusForSendCallback)
+                        safeThis->createBusForSendCallback(i, slot);
+                });
+            };
+
             strip->onOpenChannel = [this, i]
             {
                 if (openChannelCallback)
@@ -179,6 +188,11 @@ void MixerView::setSelectedTrack(int trackIndex)
 void MixerView::setTrackSelectedCallback(std::function<void(int)> callback)
 {
     trackSelectedCallback = std::move(callback);
+}
+
+void MixerView::setCreateBusForSendCallback(std::function<void(int, int)> callback)
+{
+    createBusForSendCallback = std::move(callback);
 }
 
 void MixerView::setOpenChannelCallback(std::function<void(int)> callback)

@@ -29,6 +29,11 @@ public:
     void setAutomationChangedCallback(std::function<void()> callback);
     /** Fired when a strip's name is double clicked: open that channel. */
     void setOpenChannelCallback(std::function<void(int)> callback);
+    /** A strip's "+ Send" > "New bus": add a bus and point (track, slot) at
+        it. Called on a later message-loop turn, after the strip's menu has
+        gone, because doing it rebuilds every strip.
+    */
+    void setCreateBusForSendCallback(std::function<void(int trackIndex, int slot)> callback);
 
 private:
     void timerCallback() override;
@@ -48,6 +53,7 @@ private:
     std::function<void(int)> trackSelectedCallback;
     std::function<void()> automationChangedCallback;
     std::function<void(int)> openChannelCallback;
+    std::function<void(int, int)> createBusForSendCallback;
     int selectedTrack = 0;
 
     int deviceInputCount = 0;
