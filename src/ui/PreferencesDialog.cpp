@@ -18,6 +18,8 @@ namespace
     constexpr int themeCardHeight = 74;
     /** Room under the MIDI device list for the typing keyboard settings. */
     constexpr int typingSectionHeight = 104;
+    constexpr int latencySectionHeight = 70;
+    constexpr int inputMeterHeight = 60;
     constexpr int toggleRowHeight = 38;
 
     const char* const toggleLabels[] = {
@@ -104,7 +106,25 @@ PreferencesDialog::PreferencesDialog(juce::AudioDeviceManager& deviceManagerToUs
 
     audioSelector = std::make_unique<juce::AudioDeviceSelectorComponent>(
         deviceManager, 0, AudioEngine::maxInputChannels, 0, 2, false, false, true, false);
-    addChildComponent(audioSelector.get());
+    audioViewport.setViewedComponent(audioSelector.get(), false);
+    audioViewport.setScrollBarsShown(true, false);
+    audioViewport.setScrollBarThickness(8);
+    addChildComponent(audioViewport);
+
+    for (const auto frames : AudioEngine::getBufferSizeChoices())
+    {
+        auto* chip = bufferChips.add(new TabChip(juce::String(frames)));
+        chip->setClickingTogglesState(true);
+        chip->setRadioGroupId(0xC25);
+        chip->addListener(this);
+        addChildComponent(chip);
+    }
+
+    useJackButton.addListener(this);
+    addChildComponent(useJackButton);
+
+    deviceManager.addChangeListener(this);
+    refreshLatencyControls();
 
     midiSelector = std::make_unique<juce::AudioDeviceSelectorComponent>(
         deviceManager, 0, 0, 0, 0, true, true, true, false);
@@ -116,6 +136,13 @@ PreferencesDialog::PreferencesDialog(juce::AudioDeviceManager& deviceManagerToUs
 
 PreferencesDialog::~PreferencesDialog()
 {
+    audioViewport.setViewedComponent(nullptr, false);
+    deviceManager.removeChangeListener(this);
+    useJackButton.removeListener(this);
+
+    for (auto* chip : bufferChips)
+        chip->removeListener(this);
+
     closeButton.removeListener(this);
     scanButton.removeListener(this);
 
@@ -341,10 +368,38 @@ void PreferencesDialog::paint(juce::Graphics& g)
         g.drawText(toggleLabels[i], row.withTrimmedRight(50), juce::Justification::centredLeft, true);
     }
 
+    // Latency block on the audio page
+    if (currentPage == 0)
+    {
+        auto latency = getLatencySectionBounds();
+        auto header = latency.removeFromTop(16);
+        Theme::drawCaption(g, header.withWidth(120), "Latency");
+
+        const auto usingJack = audioEngine.isUsingJack();
+        const auto status = (usingJack ? juce::String("JACK") : deviceManager.getCurrentAudioDeviceType())
+                          + " - " + juce::String(audioEngine.getCurrentSampleRate(), 0) + " Hz - "
+                          + juce::String(audioEngine.getDeviceBufferSize()) + " smp - "
+                          + TRANS("output") + " " + juce::String(audioEngine.getOutputLatencyMs(), 1) + " ms";
+
+        g.setColour(Theme::textSoft());
+        g.setFont(Theme::mono(10.5f));
+        g.drawText(status, header, juce::Justification::centredRight, false);
+
+        latency.removeFromTop(4 + 24 + 4);
+        g.setColour(Theme::faintText());
+        g.setFont(Theme::ui(10.5f));
+        g.drawFittedText(usingJack
+                             ? TRANS("JACK under PipeWire: the buffer is shared by every audio app while DJR_Studio runs, and the previous size comes back when it closes. Crackles = pick a bigger one.")
+                             : jackAvailable
+                                 ? TRANS("ALSA's default device goes through PipeWire with its own buffering on top. Switch to JACK for the lowest latency.")
+                                 : TRANS("Smaller buffers answer faster but need more CPU; crackles mean the buffer is too small."),
+                         latency, juce::Justification::topLeft, 2);
+    }
+
     // Input level meter pada audio page
     if (currentPage == 0)
     {
-        const auto meterArea = getContentBounds().withTrimmedTop(30 + 14).removeFromBottom(50).reduced(10, 10);
+        const auto meterArea = getContentBounds().withTrimmedTop(30 + 14).removeFromBottom(inputMeterHeight - 10).reduced(10, 10);
         
         // Smooth input level untuk visual yang lebih halus
         const auto inputLevel = Theme::meterPosition(audioEngine.getInputPeak());
@@ -373,9 +428,27 @@ void PreferencesDialog::resized()
 
     if (audioSelector != nullptr)
     {
-        // Leave 60px at bottom for input level meter
-        auto audioPage = page.withTrimmedBottom(60);
-        audioSelector->setBounds(audioPage);
+        // The latency block and the input meter sit under the device list,
+        // which scrolls when it is taller than what is left.
+        audioViewport.setBounds(page.withTrimmedBottom(inputMeterHeight + latencySectionHeight));
+        audioSelector->setSize(audioViewport.getWidth() - audioViewport.getScrollBarThickness() - 2,
+                               juce::jmax(audioSelector->getHeight(), 1));
+    }
+
+    {
+        auto latency = getLatencySectionBounds();
+        latency.removeFromTop(20);
+        auto chipRow = latency.removeFromTop(24);
+
+        for (auto* chip : bufferChips)
+        {
+            const auto width = chip->getPreferredWidth();
+            chip->setBounds(chipRow.removeFromLeft(width).withSizeKeepingCentre(width, 20));
+            chipRow.removeFromLeft(4);
+        }
+
+        const auto jackWidth = useJackButton.getPreferredWidth();
+        useJackButton.setBounds(chipRow.removeFromRight(jackWidth).withSizeKeepingCentre(jackWidth, 22));
     }
 
     if (midiSelector != nullptr)
@@ -476,6 +549,41 @@ void PreferencesDialog::mouseDown(const juce::MouseEvent& event)
     }
 }
 
+juce::Rectangle<int> PreferencesDialog::getLatencySectionBounds() const
+{
+    return getContentBounds().withTrimmedTop(30 + 14)
+                             .withTrimmedBottom(inputMeterHeight)
+                             .removeFromBottom(latencySectionHeight)
+                             .withTrimmedTop(6);
+}
+
+void PreferencesDialog::changeListenerCallback(juce::ChangeBroadcaster* source)
+{
+    if (source == &deviceManager)
+        refreshLatencyControls();
+}
+
+void PreferencesDialog::refreshLatencyControls()
+{
+    jackAvailable = audioEngine.isUsingJack() || audioEngine.isJackAvailable();
+
+    const auto& choices = AudioEngine::getBufferSizeChoices();
+    const auto current = audioEngine.getDeviceBufferSize();
+    const auto rate = audioEngine.getCurrentSampleRate();
+
+    for (int i = 0; i < bufferChips.size() && i < choices.size(); ++i)
+    {
+        auto* chip = bufferChips[i];
+        const auto frames = choices[i];
+        chip->setButtonText(juce::String(frames) + " (" + juce::String(rate > 0.0 ? 1000.0 * frames / rate : 0.0, 1) + " ms)");
+        chip->setToggleState(frames == current, juce::dontSendNotification);
+    }
+
+    refreshPageVisibility();
+    resized();
+    repaint();
+}
+
 void PreferencesDialog::showPage(int pageIndex)
 {
     currentPage = juce::jlimit(0, pageNames.size() - 1, pageIndex);
@@ -551,6 +659,23 @@ void PreferencesDialog::setScanRequestedCallback(std::function<void()> callback)
 
 void PreferencesDialog::buttonClicked(juce::Button* button)
 {
+    if (const auto bufferIndex = bufferChips.indexOf(dynamic_cast<TabChip*>(button)); bufferIndex >= 0)
+    {
+        // A radio group also notifies the chip it switched off.
+        if (button->getToggleState())
+            audioEngine.setBufferSize(AudioEngine::getBufferSizeChoices()[bufferIndex]);
+
+        refreshLatencyControls();
+        return;
+    }
+
+    if (button == &useJackButton)
+    {
+        audioEngine.switchToJack();
+        refreshLatencyControls();
+        return;
+    }
+
     // The path buttons are rebuilt whenever the list changes, so they are
     // matched by position rather than by a stored pointer.
     for (int i = 0; i < addPathButtons.size(); ++i)
@@ -804,8 +929,15 @@ void PreferencesDialog::chooseFolderForFormat(const juce::String& formatName)
 
 void PreferencesDialog::refreshPageVisibility()
 {
+    audioViewport.setVisible(currentPage == 0);
+
     if (audioSelector != nullptr)
-        audioSelector->setVisible(currentPage == 0);
+        audioSelector->setVisible(true);
+
+    for (auto* chip : bufferChips)
+        chip->setVisible(currentPage == 0);
+
+    useJackButton.setVisible(currentPage == 0 && jackAvailable && ! audioEngine.isUsingJack());
 
     if (midiSelector != nullptr)
         midiSelector->setVisible(currentPage == 1);

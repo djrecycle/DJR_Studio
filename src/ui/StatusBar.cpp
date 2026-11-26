@@ -46,8 +46,10 @@ void StatusBar::paint(juce::Graphics& g)
     area.removeFromLeft(11);
 
     const auto sampleRate = engine.getCurrentSampleRate();
-    const auto bufferSize = engine.getCurrentBufferSize();
-    const auto latencyMs = sampleRate > 0.0 ? bufferSize / sampleRate * 1000.0 : 0.0;
+    // The device's size, not the one the mixer was prepared at: under JACK
+    // the period can change while running (Preferences > Audio > Latency).
+    const auto bufferSize = engine.getDeviceBufferSize();
+    const auto latencyMs = engine.getBufferLatencyMs();
     auto formatText = juce::String(sampleRate, 0) + " Hz - "
                     + juce::String(bufferSize) + " smp - "
                     + juce::String(latencyMs, 1) + " ms";

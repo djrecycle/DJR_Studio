@@ -13,7 +13,8 @@
 namespace djr
 {
 
-class AudioEngine final : private juce::AudioIODeviceCallback
+class AudioEngine final : private juce::AudioIODeviceCallback,
+                          private juce::ChangeListener
 {
 public:
     /** How many input channels this app asks the device for - five stereo
@@ -44,6 +45,37 @@ public:
         maxInputChannels.
     */
     void switchToJack();
+
+    //==========================================================================
+    // Latency
+
+    /** Buffer sizes offered in Preferences, smallest (lowest latency) first. */
+    static const juce::Array<int>& getBufferSizeChoices();
+
+    bool isUsingJack() const;
+    /** True when a JACK server - PipeWire's JACK layer counts - can be reached. */
+    bool isJackAvailable();
+
+    /** The device's buffer right now. Under JACK this follows the server, so
+        it can differ from what the mixer was prepared for until the next
+        restart - the callback splits larger blocks to cope (see
+        audioDeviceIOCallbackWithContext).
+    */
+    int getDeviceBufferSize() const;
+
+    /** Asks for a new buffer size. Under JACK this changes the server's period
+        (system-wide under PipeWire) and the size found first is put back by
+        shutdown(); otherwise the device is reopened at that size. The choice
+        is saved and applied again on the next start. Message thread only.
+    */
+    bool setBufferSize(int frames);
+
+    /** One buffer of output, in milliseconds - what a played note waits for
+        before it can be heard, before the driver's own latency.
+    */
+    double getBufferLatencyMs() const;
+    /** Buffer plus the device's reported output latency, in milliseconds. */
+    double getOutputLatencyMs() const;
 
     juce::AudioDeviceManager& getDeviceManager() noexcept;
     Transport& getTransport() noexcept;
@@ -77,6 +109,20 @@ public:
     void renderOffline(const std::function<void()>& job);
 
 private:
+    void changeListenerCallback(juce::ChangeBroadcaster* source) override;
+    void saveDeviceState();
+    /** Points a JACK device at the server's real playback and capture
+        hardware rather than whichever client JUCE found first.
+    */
+    void connectJackToHardware();
+    void applySavedBufferSize();
+    /** One block, no larger than the size the mixer was prepared for. */
+    void renderBlock(const float* const* inputChannelData,
+                     int numInputChannels,
+                     float* const* outputChannelData,
+                     int numOutputChannels,
+                     int numSamples);
+
     void audioDeviceAboutToStart(juce::AudioIODevice* device) override;
     void audioDeviceStopped() override;
     void audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
@@ -103,6 +149,9 @@ private:
     std::atomic<int> outputChannelCount { 2 };
     std::atomic<float> masterPeak { 0.0f };
     std::atomic<float> inputPeak { 0.0f };
+    /** The JACK period found before this app changed it, restored on shutdown. */
+    int jackBufferSizeToRestore = 0;
+    bool initialised = false;
 };
 
 } // namespace djr

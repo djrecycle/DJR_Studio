@@ -37,6 +37,7 @@
 #include "app/UiScale.h"
 #include "ui/PanelHost.h"
 #include "ui/DJRLookAndFeel.h"
+#include "audio/BlockSplitter.h"
 
 #include <algorithm>
 #include <iostream>
@@ -6147,6 +6148,67 @@ int main()
         const auto nearCorner = lnf.getTooltipBounds("Mute - silence a clip", { 1360, 700 }, parent);
         check(parent.contains(nearCorner) && nearCorner.getBottom() <= 700,
               "tooltip: near the bottom-right corner it flips above and stays on screen");
+    }
+
+    // --- A device block bigger than the mixer was prepared for is split -----
+    // JUCE's JACK device keeps running when the server's period grows (another
+    // client, or this app putting back the size it found after lowering it for
+    // low latency), so the callback can be handed 1024 frames with everything
+    // prepared for 256. Rendered whole, that reallocates on the audio thread
+    // and gives plugins blocks past their maximum.
+    {
+        constexpr int frames = 1000;
+        std::vector<float> in0(frames), in1(frames), out0(frames, 1.0f), out1(frames, 1.0f);
+
+        for (int i = 0; i < frames; ++i)
+            in0[(size_t) i] = static_cast<float>(i);
+
+        const float* ins[] = { in0.data(), in1.data() };
+        float* outs[] = { out0.data(), out1.data() };
+
+        std::vector<int> sizes;
+        auto contiguous = true;
+        auto expectedOffset = 0;
+
+        djr::renderInBlocksOf(256, ins, 2, outs, 2, frames,
+                              [&] (const float* const* i, int numIns, float* const* o, int numOuts, int count)
+                              {
+                                  sizes.push_back(count);
+                                  contiguous = contiguous && numIns == 2 && numOuts == 2
+                                               && i[0] == in0.data() + expectedOffset
+                                               && o[1] == out1.data() + expectedOffset
+                                               && static_cast<int>(i[0][0]) == expectedOffset;
+                                  expectedOffset += count;
+                              });
+
+        check(sizes == std::vector<int> { 256, 256, 256, 232 },
+              "blocks: a 1000-frame block is rendered as 256+256+256+232 for a 256-frame mixer");
+        check(contiguous && expectedOffset == frames,
+              "blocks: each piece's channel pointers start where the previous piece ended");
+
+        auto calls = 0;
+        auto samePointers = false;
+        djr::renderInBlocksOf(1024, ins, 2, outs, 2, frames,
+                              [&] (const float* const* i, int, float* const* o, int, int count)
+                              {
+                                  ++calls;
+                                  samePointers = i == ins && o == outs && count == frames;
+                              });
+        check(calls == 1 && samePointers, "blocks: a block that fits is passed through untouched, in one call");
+
+        // More output channels than a piece carries: the extra ones are
+        // silenced rather than left holding whatever the driver had there.
+        std::vector<std::vector<float>> many(66, std::vector<float>(frames, 1.0f));
+        std::vector<float*> manyOuts;
+
+        for (auto& channel : many)
+            manyOuts.push_back(channel.data());
+
+        auto widest = 0;
+        djr::renderInBlocksOf(256, ins, 0, manyOuts.data(), 66, frames,
+                              [&] (const float* const*, int, float* const*, int numOuts, int) { widest = juce::jmax(widest, numOuts); });
+        check(widest == 64 && many[65][999] == 0.0f && many[64][0] == 0.0f && many[63][0] == 1.0f,
+              "blocks: output channels past 64 are cleared, the rest left to the renderer");
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
