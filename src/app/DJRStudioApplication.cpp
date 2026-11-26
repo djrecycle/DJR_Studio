@@ -6,6 +6,8 @@
 #include "UiScale.h"
 #include "utils/Logger.h"
 
+#include <cstdlib>
+
 namespace djr
 {
 
@@ -32,6 +34,30 @@ void DJRStudioApplication::initialise(const juce::String& commandLine)
 {
     juce::ignoreUnused(commandLine);
     Logger::write("Starting DJR_Studio " + getApplicationVersion());
+
+    // JUCE assumes there is always at least one screen: SplashScreen,
+    // centreWithSize() and the like dereference getPrimaryDisplay() without
+    // checking it. When XOpenDisplay fails, JUCE unloads X11 and the display
+    // list is empty, so the first window segfaults. The usual way to hit this
+    // is a terminal that outlived a KWin restart: it still has the old
+    // XAUTHORITY cookie path, which no longer exists, so the X server rejects
+    // the connection. Explain that and exit, instead of crashing.
+    if (juce::Desktop::getInstance().getDisplays().getPrimaryDisplay() == nullptr)
+    {
+        const auto env = [](const char* name)
+        {
+            const auto* value = std::getenv(name);
+            return juce::String(value != nullptr ? value : "(not set)");
+        };
+
+        Logger::write("Cannot open a window: no X display is reachable (DISPLAY=" + env("DISPLAY")
+                      + ", XAUTHORITY=" + env("XAUTHORITY")
+                      + "). If the desktop session or compositor restarted after this terminal "
+                        "was opened, open a new terminal and launch DJR_Studio from there.");
+        setApplicationReturnValue(1);
+        quit();
+        return;
+    }
 
     // Before the splash and the window, so both open at their final size
     // instead of appearing small and then jumping.
