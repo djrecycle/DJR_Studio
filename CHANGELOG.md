@@ -4,6 +4,30 @@ Semua perubahan penting ke DJR_Studio dicatat di sini. Format mengikuti
 gaya [Keep a Changelog](https://keepachangelog.com/), versi mengikuti
 [Semantic Versioning](https://semver.org/).
 
+## [v1.4.0] - 2026-11-26
+
+### Ditambahkan
+- **Export Stems** — *File → Export Stems...* menulis satu file audio per
+  track ke folder pilihan, dinamai sesuai posisi mixer ("03 Lead Synth.wav").
+  Tiap stem dirender lewat mixer lengkap (fader, pan, insert, dan efek bus
+  ikut), termasuk lewat send ke bus bersama, sehingga semua stem dijumlah
+  kembali sama dengan mixdown. Semua stem sama panjang agar sejajar di DAW
+  lain. Track yang di-mute, masuk ke bus yang di-mute, atau benar-benar sunyi
+  dilewati dan dilaporkan.
+
+### Diperbaiki
+- Angka **MASTER dB** di transport bar hampir tidak bergerak saat fader atau
+  velocity diturunkan — nilai meter dikonversi ke dB dua kali. Sekarang
+  turun 6 dB kalau fader diturunkan setengah, sesuai yang terdengar.
+- Render yang sama dua kali kini menghasilkan file yang identik: fader yang
+  digeser saat tidak ada audio diproses tidak lagi "ramp" dari posisi lama di
+  awal export.
+- Efek delay/reverb tidak lagi membawa ekor render sebelumnya ke awal render
+  berikutnya (plugin di-reset tiap render).
+- Aplikasi tidak lagi crash (SEGV di splash screen) saat dibuka dari terminal
+  yang tidak bisa terhubung ke X display, misalnya setelah KWin restart;
+  sekarang keluar dengan pesan yang menjelaskan penyebab dan solusinya.
+
 ## [v1.3.0] - 2026-11-23
 
 ### Ditambahkan
