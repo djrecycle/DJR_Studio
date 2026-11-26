@@ -1,6 +1,10 @@
 #include "AudioEngine.h"
 
+#include "BlockSplitter.h"
+#include "JackServer.h"
+#include "app/Settings.h"
 #include "utils/Logger.h"
+
 
 namespace djr
 {
@@ -12,28 +16,211 @@ AudioEngine::~AudioEngine()
     shutdown();
 }
 
+namespace
+{
+    constexpr auto deviceStateKey = "audioDeviceState";
+    constexpr auto bufferSizeKey = "audioBufferSize";
+}
+
 bool AudioEngine::initialise()
 {
-    const auto error = deviceManager.initialise(maxInputChannels, 2, nullptr, true);
+    // The device, rate and buffer picked in Preferences used to be forgotten
+    // on every start, which put the app back on ALSA's default at 512 samples.
+    std::unique_ptr<juce::XmlElement> saved;
+
+    if (const auto text = Settings::get(deviceStateKey); text.isNotEmpty())
+        saved = juce::parseXML(text);
+
+    auto error = deviceManager.initialise(maxInputChannels, 2, saved.get(), true);
+
+    if (error.isNotEmpty() && saved != nullptr)
+    {
+        // A saved device that has gone (unplugged, JACK not running): fall
+        // back to whatever the system offers rather than starting silent.
+        Logger::write("Saved audio device unavailable (" + error + "), using the default");
+        saved.reset();
+        error = deviceManager.initialise(maxInputChannels, 2, nullptr, true);
+    }
+
     if (error.isNotEmpty())
     {
         Logger::write("Audio device initialise failed: " + error);
         return false;
     }
 
+    // JACK is not chosen on a first run even though it is the low-latency
+    // path: under PipeWire, ALSA's default device follows the default sink -
+    // a Bluetooth headset connecting, say - and JACK does not. Preferences
+    // offers the switch instead, with the latency it buys.
+    //
+    // A saved JACK setup whose device has gone (that headset, unplugged)
+    // reopens on whichever JACK client sorts first, which can be PipeWire's
+    // "Dummy" sink: point it back at real hardware.
+    if (isUsingJack())
+        connectJackToHardware();
+
     deviceManager.addAudioCallback(this);
+    applySavedBufferSize();
+
+    if (saved == nullptr)
+        saveDeviceState();
+
+    deviceManager.addChangeListener(this);
+    initialised = true;
+
     Logger::write("Audio engine initialised: " + getAudioStatus());
     return true;
 }
 
 void AudioEngine::shutdown()
 {
+    if (initialised)
+        deviceManager.removeChangeListener(this);
+
     deviceManager.removeAudioCallback(this);
+
+    // The JACK period is the whole system's under PipeWire: give back what
+    // was there before this app lowered it.
+    if (jackBufferSizeToRestore > 0)
+    {
+        JackServer::setBufferSize(jackBufferSizeToRestore);
+        jackBufferSizeToRestore = 0;
+    }
+
+    initialised = false;
+}
+
+void AudioEngine::connectJackToHardware()
+{
+    if (! isUsingJack())
+        return;
+
+    auto setup = deviceManager.getAudioDeviceSetup();
+    const auto playback = JackServer::findHardwareClient(true);
+    const auto capture = JackServer::findHardwareClient(false);
+    auto changed = false;
+
+    if (playback.isNotEmpty() && setup.outputDeviceName != playback)
+    {
+        setup.outputDeviceName = playback;
+        changed = true;
+    }
+
+    if (capture.isNotEmpty() && setup.inputDeviceName != capture)
+    {
+        setup.inputDeviceName = capture;
+        changed = true;
+    }
+
+    if (changed)
+    {
+        const auto error = deviceManager.setAudioDeviceSetup(setup, true);
+        Logger::write("JACK connected to hardware (" + playback + " / " + capture + ")"
+                      + (error.isNotEmpty() ? ": " + error : juce::String()));
+    }
+}
+
+void AudioEngine::changeListenerCallback(juce::ChangeBroadcaster* source)
+{
+    if (source == &deviceManager)
+        saveDeviceState();
+}
+
+void AudioEngine::saveDeviceState()
+{
+    if (auto xml = deviceManager.createStateXml())
+        Settings::set(deviceStateKey, xml->toString(juce::XmlElement::TextFormat().singleLine().withoutHeader()));
+}
+
+void AudioEngine::applySavedBufferSize()
+{
+    // Only a JACK period needs applying by hand: an ALSA buffer size is part
+    // of the device state JUCE restores itself.
+    const auto saved = Settings::get(bufferSizeKey).getIntValue();
+
+    if (saved > 0 && isUsingJack() && getDeviceBufferSize() != saved)
+        setBufferSize(saved);
+}
+
+const juce::Array<int>& AudioEngine::getBufferSizeChoices()
+{
+    static const juce::Array<int> choices { 64, 128, 256, 512, 1024 };
+    return choices;
+}
+
+bool AudioEngine::isUsingJack() const
+{
+    const auto* device = deviceManager.getCurrentAudioDevice();
+    return device != nullptr && device->getTypeName() == "JACK";
+}
+
+bool AudioEngine::isJackAvailable()
+{
+    for (auto* type : deviceManager.getAvailableDeviceTypes())
+        if (type != nullptr && type->getTypeName() == "JACK")
+            return JackServer::getBufferSize().has_value();
+
+    return false;
+}
+
+int AudioEngine::getDeviceBufferSize() const
+{
+    if (auto* device = deviceManager.getCurrentAudioDevice())
+        return device->getCurrentBufferSizeSamples();
+
+    return getCurrentBufferSize();
+}
+
+bool AudioEngine::setBufferSize(int frames)
+{
+    if (frames <= 0)
+        return false;
+
+    auto ok = false;
+
+    if (isUsingJack())
+    {
+        if (jackBufferSizeToRestore <= 0)
+            if (const auto current = JackServer::getBufferSize())
+                jackBufferSizeToRestore = *current;
+
+        ok = JackServer::setBufferSize(frames);
+    }
+    else
+    {
+        auto setup = deviceManager.getAudioDeviceSetup();
+        setup.bufferSize = frames;
+        ok = deviceManager.setAudioDeviceSetup(setup, true).isEmpty();
+    }
+
+    if (ok)
+        Settings::set(bufferSizeKey, juce::String(frames));
+
+    Logger::write("Buffer size " + juce::String(frames) + (ok ? " set: " : " refused: ") + getAudioStatus());
+    return ok;
+}
+
+double AudioEngine::getBufferLatencyMs() const
+{
+    const auto rate = getCurrentSampleRate();
+    return rate > 0.0 ? 1000.0 * getDeviceBufferSize() / rate : 0.0;
+}
+
+double AudioEngine::getOutputLatencyMs() const
+{
+    const auto rate = getCurrentSampleRate();
+    auto samples = getDeviceBufferSize();
+
+    if (auto* device = deviceManager.getCurrentAudioDevice())
+        samples += juce::jmax(0, device->getOutputLatencyInSamples());
+
+    return rate > 0.0 ? 1000.0 * samples / rate : 0.0;
 }
 
 void AudioEngine::switchToJack()
 {
     deviceManager.setCurrentAudioDeviceType("JACK", true);
+    connectJackToHardware();
 
     auto setup = deviceManager.getAudioDeviceSetup();
     setup.useDefaultInputChannels = false;
@@ -95,7 +282,7 @@ juce::String AudioEngine::getAudioStatus() const
 {
     if (auto* device = deviceManager.getCurrentAudioDevice())
         return device->getName() + " / " + juce::String(getCurrentSampleRate(), 0) + " Hz / "
-             + juce::String(getCurrentBufferSize()) + " samples";
+             + juce::String(getDeviceBufferSize()) + " samples";
 
     return "No audio device";
 }
@@ -208,6 +395,23 @@ void AudioEngine::audioDeviceIOCallbackWithContext(const float* const* inputChan
 {
     juce::ignoreUnused(context);
     juce::ScopedNoDenormals noDenormals;
+
+    // Larger blocks than the mixer was prepared for are split - see
+    // renderInBlocksOf for when a JACK period grows under a running device.
+    renderInBlocksOf(getCurrentBufferSize(), inputChannelData, numInputChannels,
+                     outputChannelData, numOutputChannels, numSamples,
+                     [this] (const float* const* ins, int numIns, float* const* outs, int numOuts, int count)
+                     {
+                         renderBlock(ins, numIns, outs, numOuts, count);
+                     });
+}
+
+void AudioEngine::renderBlock(const float* const* inputChannelData,
+                              int numInputChannels,
+                              float* const* outputChannelData,
+                              int numOutputChannels,
+                              int numSamples)
+{
 
     // Copy the device input so tracks can monitor or record it without holding
     // onto driver-owned pointers.

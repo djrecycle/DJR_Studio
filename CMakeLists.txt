@@ -127,6 +127,7 @@ set(DJR_STUDIO_SOURCES
     src/app/TypingKeyboard.cpp
     src/app/UiScale.cpp
     src/audio/AudioEngine.cpp
+    src/audio/JackServer.cpp
     src/audio/ExternalAppBridge.cpp
     src/plugins/PluginManager.cpp
     src/plugins/AudioEditorProcessor.cpp

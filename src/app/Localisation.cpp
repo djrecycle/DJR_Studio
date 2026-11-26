@@ -371,7 +371,12 @@ juce::String Localisation::getIndonesianTranslations()
         + "\" bars before recording.\" = \" bar sebelum record.\"\n"
         + "\" plugins found.\" = \" plugin terdeteksi.\"\n"
         + "\"just now\" = \"baru saja\"\n"
-        + "\" does not exist\" = \" belum ada\"\n";
+        + "\" does not exist\" = \" belum ada\"\n"
+        + "\"Use JACK (lowest latency)\" = \"Pakai JACK (latensi terendah)\"\n"
+        + "\"output\" = \"output\"\n"
+        + "\"JACK under PipeWire: the buffer is shared by every audio app while DJR_Studio runs, and the previous size comes back when it closes. Crackles = pick a bigger one.\" = \"JACK lewat PipeWire: buffer ini dipakai semua aplikasi audio selama DJR_Studio jalan, dan ukuran sebelumnya kembali saat ditutup. Suara kresek = pilih yang lebih besar.\"\n"
+        + "\"ALSA's default device goes through PipeWire with its own buffering on top. Switch to JACK for the lowest latency.\" = \"Device default ALSA lewat PipeWire dengan buffer tambahan. Pindah ke JACK untuk latensi terendah.\"\n"
+        + "\"Smaller buffers answer faster but need more CPU; crackles mean the buffer is too small.\" = \"Buffer kecil lebih cepat merespons tapi butuh CPU lebih; suara kresek berarti buffer terlalu kecil.\"\n";
 }
 
 } // namespace djr

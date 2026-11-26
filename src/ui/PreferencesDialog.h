@@ -18,7 +18,8 @@ class AudioEngine;
     shortcut reference.
 */
 class PreferencesDialog final : public juce::Component,
-                                private juce::Button::Listener
+                                private juce::Button::Listener,
+                                private juce::ChangeListener
 {
 public:
     explicit PreferencesDialog(juce::AudioDeviceManager& deviceManager,
@@ -66,7 +67,18 @@ private:
     };
 
     void buttonClicked(juce::Button* button) override;
+    void changeListenerCallback(juce::ChangeBroadcaster* source) override;
     void refreshPageVisibility();
+
+    /** Re-reads the device so the buffer chips, their millisecond labels and
+        the JACK button match it - after a chip click, a device change in the
+        selector above, or switching to JACK.
+    */
+    void refreshLatencyControls();
+    /** The latency block on the Audio Device page, between the device
+        selector and the input meter.
+    */
+    juce::Rectangle<int> getLatencySectionBounds() const;
 
     /** Rebuilds the row list and the buttons that go with it, after a path is
         added or removed and once at construction.
@@ -113,6 +125,10 @@ private:
     SwitchButton autoOpenEditorSwitch { "autoOpenEditor" };
 
     std::unique_ptr<juce::AudioDeviceSelectorComponent> audioSelector;
+    /** One per AudioEngine::getBufferSizeChoices() entry, in that order. */
+    juce::OwnedArray<TabChip> bufferChips;
+    PillButton useJackButton { TRANS("Use JACK (lowest latency)"), std::nullopt, PillButton::Style::outline };
+    bool jackAvailable = false;
     std::unique_ptr<juce::AudioDeviceSelectorComponent> midiSelector;
 
     std::function<void()> closeCallback;
