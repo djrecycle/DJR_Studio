@@ -17,6 +17,12 @@ public:
 
     void process(juce::AudioBuffer<float>& buffer) noexcept;
 
+    /** Starts the next block at the current gain instead of ramping in from
+        the last block's. Call only where the audio thread cannot be inside
+        process(), such as Mixer::prepare under its track lock.
+    */
+    void resetGainRamp() noexcept;
+
 private:
     std::atomic<float> gain { 0.85f };
     std::atomic<float> peakLevel { 0.0f };

@@ -101,6 +101,8 @@ void Mixer::prepare(double sampleRate, int blockSize, int numChannels)
     for (auto& track : tracks)
         track->prepare(sampleRate, blockSize);
 
+    masterBus.resetGainRamp();
+
     rebuildProcessOrder();
 }
 
@@ -278,8 +280,11 @@ void Mixer::process(juce::AudioBuffer<float>& output, const TrackPlaybackContext
     scratchBuffer.setSize(numChannels, numSamples, false, false, true);
     preFaderBuffer.setSize(numChannels, numSamples, false, false, true);
 
-    const auto anySolo = std::any_of(tracks.begin(), tracks.end(),
-                                    [] (const auto& track) { return track->isSoloed(); });
+    const auto isolated = isolatedTrack.load(std::memory_order_acquire);
+    const auto isolating = juce::isPositiveAndBelow(isolated, trackCount);
+    const auto anySolo = isolating
+                      || std::any_of(tracks.begin(), tracks.end(),
+                                     [] (const auto& track) { return track->isSoloed(); });
 
     // Armed tracks capture live playing; with nothing armed it follows the
     // selected track, which is what makes the keyboard audible by default.
@@ -292,7 +297,8 @@ void Mixer::process(juce::AudioBuffer<float>& output, const TrackPlaybackContext
     if (anySolo)
     {
         for (int index = 0; index < trackCount; ++index)
-            audible[static_cast<size_t>(index)] = tracks[static_cast<size_t>(index)]->isSoloed();
+            audible[static_cast<size_t>(index)] = isolating ? index == isolated
+                                                            : tracks[static_cast<size_t>(index)]->isSoloed();
 
         // A soloed track routed to a bus needs that bus open too, or soloing it
         // would silence the very thing being soloed. The process order is
@@ -389,6 +395,16 @@ void Mixer::process(juce::AudioBuffer<float>& output, const TrackPlaybackContext
     }
 
     masterBus.process(output);
+}
+
+void Mixer::setIsolatedTrack(int index) noexcept
+{
+    isolatedTrack.store(index, std::memory_order_release);
+}
+
+int Mixer::getIsolatedTrack() const noexcept
+{
+    return isolatedTrack.load(std::memory_order_acquire);
 }
 
 int Mixer::collectDestinations(int trackIndex, int* destinationsOut) const

@@ -118,6 +118,17 @@ public:
     MasterBus& getMasterBus() noexcept;
     const MasterBus& getMasterBus() const noexcept;
 
+    /** Plays only the track at `index` - and the buses it feeds, so its sound
+        still goes through them - as though it were the one soloed track. The
+        user's own solo buttons are ignored while this is set; -1 switches it off.
+
+        This is what stem export renders each stem with: the mixer itself does
+        the routing, so a stem carries its fader, pan, inserts and bus effects
+        exactly as the mix does, and the stems add back up to the mixdown.
+    */
+    void setIsolatedTrack(int index) noexcept;
+    int getIsolatedTrack() const noexcept;
+
 private:
     /** Recomputes the process order. The caller must hold `trackLock`.
 
@@ -184,6 +195,7 @@ private:
     */
     mutable juce::SpinLock trackLock;
     std::atomic<int> liveMidiTarget { 0 };
+    std::atomic<int> isolatedTrack { -1 };
     double preparedSampleRate = 44100.0;
     int preparedBlockSize = 512;
     int preparedNumChannels = 2;

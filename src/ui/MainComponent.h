@@ -142,9 +142,14 @@ private:
     void saveProject(bool forceChooser);
     void openProject();
     void openProjectFile(const juce::File& file);
-    /** Asks for format, bit depth and normalising, then where to save. */
-    void exportAudio();
+    /** Asks for format and bit depth, then for where to put the result: one
+        mixdown file, or with `stems` a folder of one file per track.
+    */
+    void exportAudio(bool stems = false);
     void exportAudioTo(const ExportManager::Options& choices);
+    void exportStemsTo(const ExportManager::Options& choices);
+    /** Format, depth and length the device and transport dictate right now. */
+    ExportManager::Options withSessionSettings(ExportManager::Options options);
     /** Last beat any track has content on, so exports cover the whole song. */
     double getSongLengthBeats();
     void showError(const juce::String& title, const juce::String& message);

@@ -83,6 +83,183 @@ bool ExportManager::render(Mixer& mixer,
                            juce::String& errorOut,
                            std::function<void(double)> onProgress) const
 {
+    auto peak = 0.0f;
+    return renderWithPeak(mixer, outputFile, options, errorOut, peak, std::move(onProgress));
+}
+
+std::vector<int> ExportManager::stemTrackIndices(const Mixer& mixer)
+{
+    std::vector<int> indices;
+    const auto count = mixer.getNumTracks();
+
+    // A track is heard if any of its routes - the main output or an active
+    // send - reaches master without passing through a muted track: a track
+    // whose group is muted but which still sends to an open reverb bus is in
+    // the mix through that reverb. Each bus is visited once, so a bad file
+    // with a routing loop cannot hang the export.
+    const auto reachesMasterUnmuted = [&mixer, count] (int start)
+    {
+        std::vector<bool> seen(static_cast<size_t>(count), false);
+        std::vector<int> pending { start };
+
+        while (! pending.empty())
+        {
+            const auto index = pending.back();
+            pending.pop_back();
+
+            if (! juce::isPositiveAndBelow(index, count))
+                return true;            // past the last bus: master
+
+            if (seen[static_cast<size_t>(index)])
+                continue;
+
+            seen[static_cast<size_t>(index)] = true;
+            const auto* track = mixer.getTrack(index);
+
+            if (track == nullptr || track->isMuted())
+                continue;
+
+            pending.push_back(track->getOutputDestination());
+
+            for (int slot = 0; slot < Track::maxSends; ++slot)
+                // A send only ever feeds a bus; one pointing nowhere is dropped
+                // by the mixer, not played to master.
+                if (const auto send = track->getSend(slot);
+                    send.isActive() && juce::isPositiveAndBelow(send.destination, count))
+                    pending.push_back(send.destination);
+        }
+
+        return false;
+    };
+
+    for (int index = 0; index < count; ++index)
+    {
+        const auto* track = mixer.getTrack(index);
+
+        if (track != nullptr && track->getKind() != TrackKind::bus && reachesMasterUnmuted(index))
+            indices.push_back(index);
+    }
+
+    return indices;
+}
+
+juce::String ExportManager::stemFileName(int trackIndex, const juce::String& trackName, Format format)
+{
+    auto name = juce::File::createLegalFileName(trackName.trim());
+
+    if (name.isEmpty())
+        name = "Track";
+
+    return juce::String(trackIndex + 1).paddedLeft('0', 2) + " " + name + extensionFor(format);
+}
+
+bool ExportManager::renderStems(Mixer& mixer,
+                                const juce::File& folder,
+                                const Options& options,
+                                std::vector<Stem>& stemsOut,
+                                juce::StringArray& skippedOut,
+                                juce::String& errorOut,
+                                std::function<void(double)> onProgress) const
+{
+    stemsOut.clear();
+    skippedOut.clear();
+
+    const auto indices = stemTrackIndices(mixer);
+
+    if (indices.empty())
+    {
+        errorOut = TRANS("There is no audible track to export as a stem.");
+        return false;
+    }
+
+    // Created only now there is something to put in it, and removed again
+    // below if every stem turns out silent - but only if this call made it.
+    const auto folderExisted = folder.isDirectory();
+
+    if (! folder.createDirectory())
+    {
+        errorOut = TRANS("The destination folder could not be created: ") + folder.getFullPathName();
+        return false;
+    }
+
+    auto stemOptions = options;
+    stemOptions.normalise = false;
+    stemOptions.trimSilentTail = false;
+
+    // Whatever happens below, the mixer must not be left playing one track.
+    struct IsolationReset
+    {
+        Mixer& mixer;
+        ~IsolationReset() { mixer.setIsolatedTrack(-1); }
+    } isolationReset { mixer };
+
+    const auto total = static_cast<double>(indices.size());
+
+    for (size_t i = 0; i < indices.size(); ++i)
+    {
+        const auto index = indices[i];
+        const auto* track = mixer.getTrack(index);
+
+        if (track == nullptr)
+            continue;
+
+        const auto name = track->getName();
+        const auto file = folder.getChildFile(stemFileName(index, name, options.format));
+
+        mixer.setIsolatedTrack(index);
+
+        auto peak = 0.0f;
+        juce::String error;
+        const auto rendered = renderWithPeak(mixer, file, stemOptions, error, peak,
+            [&onProgress, i, total] (double p)
+            {
+                if (onProgress)
+                    onProgress((static_cast<double>(i) + p) / total);
+            });
+
+        if (! rendered)
+        {
+            errorOut = name + ": " + error;
+            return false;
+        }
+
+        // An empty track in the mixer would otherwise turn up as a file of
+        // nothing, which is clutter at best and confusing at worst.
+        if (peak <= 1.0e-5f)
+        {
+            file.deleteFile();
+            skippedOut.add(name);
+            continue;
+        }
+
+        stemsOut.push_back({ index, name, file });
+    }
+
+    if (onProgress)
+        onProgress(1.0);
+
+    if (stemsOut.empty())
+    {
+        if (! folderExisted && folder.getNumberOfChildFiles(juce::File::findFilesAndDirectories
+                                                             | juce::File::ignoreHiddenFiles) == 0)
+            folder.deleteRecursively();
+
+        errorOut = TRANS("Every track rendered silent, so no stem was written.");
+        return false;
+    }
+
+    return true;
+}
+
+bool ExportManager::renderWithPeak(Mixer& mixer,
+                                   const juce::File& outputFile,
+                                   const Options& options,
+                                   juce::String& errorOut,
+                                   float& peakOut,
+                                   std::function<void(double)> onProgress) const
+{
+    peakOut = 0.0f;
+
     if (options.sampleRate <= 0.0 || options.blockSize <= 0 || options.tempoBpm <= 0.0)
     {
         errorOut = TRANS("The export settings are not valid.");
@@ -198,11 +375,12 @@ bool ExportManager::render(Mixer& mixer,
 
         tailWritten += samplesThisBlock;
 
-        if (blockPeak <= 1.0e-5f)
+        if (options.trimSilentTail && blockPeak <= 1.0e-5f)
             break;
     }
 
     scratchWriter.reset();
+    peakOut = peak;
 
     // --- Pass 2: the scratch file, scaled if asked, in the chosen format.
     std::unique_ptr<juce::AudioFormatReader> reader(

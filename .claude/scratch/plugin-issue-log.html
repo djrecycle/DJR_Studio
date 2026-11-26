@@ -1,0 +1,528 @@
+<title>Plugin Issue Log</title>
+<style>
+  :root {
+    --bg: #0a0f1c;
+    --panel: #121a2e;
+    --panel-alt: #182440;
+    --border: #26314f;
+    --border-soft: #1d2740;
+    --text: #eef2fb;
+    --muted: #8592ad;
+    --faint: #57628a;
+    --accent: #22d8ff;
+    --accent2: #a06bff;
+    --warn: #ffc857;
+    --critical: #ff5c82;
+    --ok: #49dd9e;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 40px 20px 80px;
+  }
+
+  header {
+    margin-bottom: 28px;
+  }
+
+  .eyebrow {
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 8px;
+  }
+
+  h1 {
+    font-family: "Barlow Condensed", "Inter", sans-serif;
+    font-weight: 700;
+    font-size: 34px;
+    letter-spacing: 0.01em;
+    margin: 0 0 10px;
+    text-wrap: balance;
+  }
+
+  header p {
+    color: var(--muted);
+    font-size: 14.5px;
+    line-height: 1.55;
+    max-width: 60ch;
+    margin: 0;
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+  }
+
+  form.panel {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-bottom: 36px;
+  }
+
+  .field { display: flex; flex-direction: column; gap: 7px; }
+
+  .field label {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  input[type="text"], textarea {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--text);
+    font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+    font-size: 14px;
+    padding: 10px 12px;
+    outline: none;
+    transition: border-color 0.15s ease;
+  }
+
+  textarea {
+    font-family: "Inter", sans-serif;
+    resize: vertical;
+    min-height: 64px;
+    line-height: 1.5;
+  }
+
+  input[type="text"]:focus, textarea:focus {
+    border-color: var(--accent);
+  }
+
+  input::placeholder, textarea::placeholder { color: var(--faint); }
+
+  .segmented {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .segmented button {
+    appearance: none;
+    border: 1px solid var(--border);
+    background: var(--panel-alt);
+    color: var(--muted);
+    font-family: "Inter", sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 8px 13px;
+    border-radius: 7px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+
+  .segmented button:hover { color: var(--text); border-color: var(--faint); }
+
+  .segmented button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .segmented button.active {
+    background: color-mix(in srgb, var(--accent) 16%, var(--panel-alt));
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  .segmented button.active[data-tone="critical"] {
+    background: color-mix(in srgb, var(--critical) 18%, var(--panel-alt));
+    border-color: var(--critical);
+  }
+
+  .segmented button.active[data-tone="warn"] {
+    background: color-mix(in srgb, var(--warn) 18%, var(--panel-alt));
+    border-color: var(--warn);
+  }
+
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+  @media (max-width: 520px) {
+    .row2 { grid-template-columns: 1fr; }
+  }
+
+  .submit-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 4px;
+  }
+
+  .hint { font-size: 12px; color: var(--faint); }
+
+  button.primary {
+    appearance: none;
+    border: none;
+    background: var(--accent);
+    color: #04121c;
+    font-family: "Inter", sans-serif;
+    font-weight: 700;
+    font-size: 14px;
+    padding: 11px 22px;
+    border-radius: 7px;
+    cursor: pointer;
+    transition: filter 0.12s ease, transform 0.06s ease;
+    white-space: nowrap;
+  }
+
+  button.primary:hover { filter: brightness(1.08); }
+  button.primary:active { transform: translateY(1px); }
+  button.primary:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
+  button.primary:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+  .list-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+
+  .list-head h2 {
+    font-family: "Barlow Condensed", sans-serif;
+    font-weight: 700;
+    font-size: 18px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    margin: 0;
+    color: var(--muted);
+  }
+
+  .count {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px;
+    color: var(--faint);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .empty {
+    border: 1px dashed var(--border);
+    border-radius: 10px;
+    padding: 28px 20px;
+    text-align: center;
+    color: var(--faint);
+    font-size: 13.5px;
+    line-height: 1.6;
+  }
+
+  ul.entries { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+
+  .entry {
+    display: flex;
+    gap: 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--faint);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+
+  .entry[data-issue="window_kosong"], .entry[data-issue="window_autoclose"] { border-left-color: var(--warn); }
+  .entry[data-issue="knob"] { border-left-color: var(--critical); }
+  .entry[data-issue="lainnya"] { border-left-color: var(--accent2); }
+
+  .entry-body { flex: 1; min-width: 0; }
+
+  .entry-top {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    margin-bottom: 6px;
+  }
+
+  .plugin-name {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 14.5px;
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .badge {
+    font-family: "Inter", sans-serif;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 2.5px 7px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+
+  .badge.fmt { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+
+  .badge.issue-window_kosong, .badge.issue-window_autoclose {
+    color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+  }
+
+  .badge.issue-knob { color: var(--critical); border-color: color-mix(in srgb, var(--critical) 45%, var(--border)); }
+  .badge.issue-lainnya { color: var(--accent2); border-color: color-mix(in srgb, var(--accent2) 45%, var(--border)); }
+
+  .notes { font-size: 13.5px; color: var(--muted); line-height: 1.55; white-space: pre-wrap; }
+  .notes:empty { display: none; }
+
+  .meta { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--faint); margin-top: 8px; }
+
+  .del {
+    appearance: none;
+    background: none;
+    border: none;
+    color: var(--faint);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 6px;
+    align-self: flex-start;
+  }
+
+  .del:hover { color: var(--critical); background: color-mix(in srgb, var(--critical) 12%, transparent); }
+
+  .status-line {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11.5px;
+    color: var(--faint);
+    margin-top: 10px;
+    min-height: 14px;
+  }
+
+  .status-line.err { color: var(--critical); }
+  .status-line.ok { color: var(--ok); }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">DJR_Studio &middot; QA</p>
+    <h1>Plugin Issue Log</h1>
+    <p>Coba plugin satu-satu, catat di sini kalau ada yang bermasalah - window kosong, window nutup sendiri, atau knop/slider yang tidak berpengaruh ke suara. Semua catatan tersimpan di sini, tidak hilang walau halaman ditutup.</p>
+  </header>
+
+  <form class="panel" id="report-form">
+    <div class="row2">
+      <div class="field">
+        <label for="plugin-name">Nama plugin</label>
+        <input type="text" id="plugin-name" placeholder="cth. drumkv1, TAL-Reverb-4" autocomplete="off" required />
+      </div>
+      <div class="field">
+        <label>Format</label>
+        <div class="segmented" id="format-group" role="group" aria-label="Format plugin">
+          <button type="button" data-value="VST3">VST3</button>
+          <button type="button" data-value="LV2">LV2</button>
+          <button type="button" data-value="?" class="active">Tidak yakin</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Jenis masalah</label>
+      <div class="segmented" id="issue-group" role="group" aria-label="Jenis masalah">
+        <button type="button" data-value="window_kosong" data-tone="warn" class="active">Window kosong</button>
+        <button type="button" data-value="window_autoclose" data-tone="warn">Window nutup sendiri</button>
+        <button type="button" data-value="knob" data-tone="critical">Knop/slider tidak berpengaruh</button>
+        <button type="button" data-value="lainnya">Lainnya</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="notes">Catatan <span style="text-transform:none; font-weight:400;">(opsional - knop mana, kapan terjadi, dst)</span></label>
+      <textarea id="notes" placeholder="cth. knob Cutoff digerakkan full kiri-kanan, suara tidak berubah sama sekali"></textarea>
+    </div>
+
+    <div class="submit-row">
+      <span class="hint">Klik jenis masalah &amp; format di atas dulu, baru isi nama plugin.</span>
+      <button type="submit" class="primary" id="submit-btn">Catat masalah</button>
+    </div>
+    <div class="status-line" id="form-status"></div>
+  </form>
+
+  <div class="list-head">
+    <h2>Tercatat</h2>
+    <span class="count" id="entry-count">-</span>
+  </div>
+
+  <div id="list-container">
+    <div class="empty">Memuat...</div>
+  </div>
+</div>
+
+<script>
+  const ISSUE_LABELS = {
+    window_kosong: "Window kosong",
+    window_autoclose: "Window nutup sendiri",
+    knob: "Knop tidak berpengaruh",
+    lainnya: "Lainnya",
+  };
+
+  let selectedFormat = "?";
+  let selectedIssue = "window_kosong";
+  let db = null;
+
+  function wireSegmented(containerId, onPick) {
+    const el = document.getElementById(containerId);
+    el.querySelectorAll("button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        el.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        onPick(btn.dataset.value);
+      });
+    });
+  }
+
+  wireSegmented("format-group", (v) => { selectedFormat = v; });
+  wireSegmented("issue-group", (v) => { selectedIssue = v; });
+
+  function escapeHtml(s) {
+    const d = document.createElement("div");
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function formatTime(iso) {
+    try {
+      const d = new Date(iso);
+      return d.toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function renderList(docs) {
+    const container = document.getElementById("list-container");
+    const count = document.getElementById("entry-count");
+    count.textContent = docs.length + (docs.length === 1 ? " catatan" : " catatan");
+
+    if (docs.length === 0) {
+      container.innerHTML = '<div class="empty">Belum ada yang dicatat. Isi form di atas begitu nemu plugin yang bermasalah.</div>';
+      return;
+    }
+
+    const ul = document.createElement("ul");
+    ul.className = "entries";
+
+    for (const snap of docs) {
+      const data = snap.data();
+      if (!data) continue;
+
+      const li = document.createElement("li");
+      li.className = "entry";
+      li.dataset.issue = data.issueType || "lainnya";
+
+      const issueLabel = ISSUE_LABELS[data.issueType] || "Lainnya";
+      const fmtBadge = data.format && data.format !== "?"
+        ? '<span class="badge fmt">' + escapeHtml(data.format) + '</span>' : "";
+
+      li.innerHTML =
+        '<div class="entry-body">' +
+          '<div class="entry-top">' +
+            '<span class="plugin-name">' + escapeHtml(data.pluginName || "(tanpa nama)") + '</span>' +
+            fmtBadge +
+            '<span class="badge issue-' + escapeHtml(data.issueType || "lainnya") + '">' + escapeHtml(issueLabel) + '</span>' +
+          '</div>' +
+          (data.notes ? '<div class="notes">' + escapeHtml(data.notes) + '</div>' : '') +
+          '<div class="meta">' + formatTime(data.createdAt) + '</div>' +
+        '</div>' +
+        '<button class="del" title="Hapus catatan" data-id="' + snap.id + '">&times;</button>';
+
+      ul.appendChild(li);
+    }
+
+    container.innerHTML = "";
+    container.appendChild(ul);
+
+    container.querySelectorAll(".del").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!db) return;
+        btn.disabled = true;
+        try {
+          await db.collection("reports").doc(btn.dataset.id).delete();
+        } catch (e) {
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+
+  function setStatus(msg, tone) {
+    const el = document.getElementById("form-status");
+    el.textContent = msg || "";
+    el.className = "status-line" + (tone ? " " + tone : "");
+  }
+
+  async function init() {
+    if (!window.claude || typeof window.claude.use !== "function") {
+      setStatus("Fitur simpan-data tidak tersedia di tampilan ini.", "err");
+      document.getElementById("list-container").innerHTML =
+        '<div class="empty">Penyimpanan tidak tersedia di sini. Buka halaman ini lewat link artifact langsung.</div>';
+      return;
+    }
+
+    db = await window.claude.use("db");
+
+    if (!db) {
+      setStatus("Fitur simpan-data tidak tersedia di tampilan ini.", "err");
+      document.getElementById("list-container").innerHTML =
+        '<div class="empty">Penyimpanan tidak tersedia di sini. Buka halaman ini lewat link artifact langsung.</div>';
+      return;
+    }
+
+    db.collection("reports").orderBy("createdAt", "desc").onSnapshot(
+      (qs) => renderList(qs.docs),
+      (err) => {
+        document.getElementById("list-container").innerHTML =
+          '<div class="empty">Gagal memuat catatan (' + err.code + ').</div>';
+      }
+    );
+  }
+
+  document.getElementById("report-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!db) { setStatus("Penyimpanan belum siap, coba lagi sebentar.", "err"); return; }
+
+    const nameInput = document.getElementById("plugin-name");
+    const name = nameInput.value.trim();
+    if (!name) { nameInput.focus(); return; }
+
+    const notes = document.getElementById("notes").value.trim();
+    const submitBtn = document.getElementById("submit-btn");
+    submitBtn.disabled = true;
+    setStatus("Menyimpan...");
+
+    try {
+      await db.collection("reports").add({
+        pluginName: name,
+        format: selectedFormat,
+        issueType: selectedIssue,
+        notes: notes,
+        createdAt: new Date().toISOString(),
+      });
+      nameInput.value = "";
+      document.getElementById("notes").value = "";
+      nameInput.focus();
+      setStatus("Tersimpan.", "ok");
+      setTimeout(() => setStatus(""), 2000);
+    } catch (err) {
+      setStatus("Gagal menyimpan (" + err.code + "). Coba lagi.", "err");
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+
+  init();
+</script>
