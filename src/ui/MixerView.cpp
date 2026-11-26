@@ -1,5 +1,6 @@
 #include "MixerView.h"
 
+#include "PanelWindow.h"
 #include "Theme.h"
 
 namespace djr
@@ -32,6 +33,7 @@ MixerView::MixerView(Mixer& mixerToUse)
     addAndMakeVisible(viewport);
 
     refreshStrips();
+    startTimerHz(10);
 }
 
 void MixerView::paint(juce::Graphics& g)
@@ -64,13 +66,31 @@ void MixerView::paint(juce::Graphics& g)
                juce::Justification::centredLeft,
                false);
 
+    g.setColour(Theme::mutedText());
+    g.setFont(Theme::mono(10.0f));
+    g.drawText(getMasterReadout(), content, juce::Justification::centredRight, false);
+}
+
+juce::String MixerView::getMasterReadout() const
+{
     const auto masterPeak = mixer.getMasterBus().getPeakLevel();
     const auto db = masterPeak <= 0.0001f ? juce::String("-inf")
                                           : juce::String(juce::Decibels::gainToDecibels(masterPeak), 1);
+    return "MASTER " + db + " dB";
+}
 
-    g.setColour(Theme::mutedText());
-    g.setFont(Theme::mono(10.0f));
-    g.drawText("MASTER " + db + " dB", content, juce::Justification::centredRight, false);
+void MixerView::timerCallback()
+{
+    // The header used to be painted only when the strips were rebuilt, so it
+    // said "-inf" through a whole song. Only its own row is repainted, and only
+    // when the text it shows has changed.
+    const auto readout = getMasterReadout();
+
+    if (readout == lastMasterReadout || isCoveredByPanelAbove(*this))
+        return;
+
+    lastMasterReadout = readout;
+    repaint(getLocalBounds().withHeight(mixerHeaderHeight));
 }
 
 void MixerView::resized()

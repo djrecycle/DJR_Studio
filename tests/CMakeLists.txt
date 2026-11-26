@@ -45,6 +45,9 @@ target_sources(djr_studio_engine_tests PRIVATE
     # it is headless-testable the same way.
     ${CMAKE_SOURCE_DIR}/src/ui/PanelWindow.cpp
     ${CMAKE_SOURCE_DIR}/src/ui/PanelHost.cpp
+    # Where a tooltip lands relative to the pointer (getTooltipBounds) is plain
+    # rectangle arithmetic - no tooltip window is ever shown.
+    ${CMAKE_SOURCE_DIR}/src/ui/DJRLookAndFeel.cpp
     ${CMAKE_SOURCE_DIR}/src/plugins/PluginScanner.cpp
     # ExternalAppBridge::parseJackLspOutput() (see its test block in
     # engine_tests.cpp) is plain text parsing with no process ever started

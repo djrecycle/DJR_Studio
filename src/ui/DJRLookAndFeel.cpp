@@ -152,6 +152,31 @@ void DJRLookAndFeel::drawPopupMenuBackground(juce::Graphics& g, int width, int h
     g.drawRoundedRectangle(bounds, 8.0f, 1.0f);
 }
 
+juce::Rectangle<int> DJRLookAndFeel::getTooltipBounds(const juce::String& tipText,
+                                                     juce::Point<int> screenPos,
+                                                     juce::Rectangle<int> parentArea)
+{
+    // JUCE's default sits the tip 24 px to the right of the pointer and sizes
+    // it with its own font, not the one drawTooltip() uses - so it floated
+    // well away from the arrow and was wider than its text. Here it hangs
+    // just under the cursor's tip, sized to the text it actually draws.
+    const auto font = Theme::ui(12.0f);
+    const auto width = juce::jmin(360, Theme::textWidth(font, tipText) + 18);
+    const auto height = 22;
+    constexpr int cursorHeight = 20;
+
+    auto x = screenPos.x - 4;
+    auto y = screenPos.y + cursorHeight;
+
+    if (y + height > parentArea.getBottom())
+        y = screenPos.y - height - 4;
+
+    if (x + width > parentArea.getRight())
+        x = screenPos.x - width + 4;
+
+    return juce::Rectangle<int>(x, y, width, height).constrainedWithin(parentArea);
+}
+
 void DJRLookAndFeel::drawTooltip(juce::Graphics& g, const juce::String& text, int width, int height)
 {
     const auto bounds = juce::Rectangle<float>(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height)).reduced(0.5f);

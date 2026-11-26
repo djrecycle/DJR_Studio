@@ -102,6 +102,8 @@ private:
 
     float smoothedLeft = 0.0f;
     float smoothedRight = 0.0f;
+    /** Everything but the meters, as last painted - see timerCallback. */
+    juce::String lastStateKey;
     bool draggingFader = false;
     bool draggingPan = false;
     bool selected = false;

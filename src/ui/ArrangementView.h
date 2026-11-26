@@ -463,6 +463,13 @@ private:
         around it.
     */
     juce::Image watermarkImage;
+    /** watermarkImage scaled to the grid and faded, rebuilt only on resize. */
+    juce::Image watermarkCache;
+
+    /** What the timer last saw - see timerCallback(). */
+    juce::String lastRowsKey;
+    int lastPlayheadX = -1;
+    int timerTicks = 0;
 
     std::function<void(int)> trackSelectedCallback;
     std::function<void()> trackListChangedCallback;

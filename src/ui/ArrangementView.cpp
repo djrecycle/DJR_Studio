@@ -2,6 +2,7 @@
 
 #include "BinaryData.h"
 #include "BrowserPanel.h"
+#include "PanelWindow.h"
 #include "Theme.h"
 #include "audio/AudioTrack.h"
 #include "audio/BusTrack.h"
@@ -142,11 +143,22 @@ void ArrangementView::paint(juce::Graphics& g)
     // empty regardless of layout.
     if (watermarkImage.isValid())
     {
-        const auto side = juce::jmin(grid.getWidth(), grid.getHeight()) * 0.6f;
-        const auto imageBounds = juce::Rectangle<float>(side, side).withCentre(grid.toFloat().getCentre());
+        // Scaled and faded once per size, not per frame: resampling the full
+        // 1254 px logo with an opacity on every repaint was a quarter of what
+        // a maximised playlist cost to draw.
+        const auto side = juce::roundToInt(juce::jmin(grid.getWidth(), grid.getHeight()) * 0.6f);
 
-        g.setOpacity(0.18f);
-        g.drawImage(watermarkImage, imageBounds, juce::RectanglePlacement::centred);
+        if (side > 0)
+        {
+            if (watermarkCache.getWidth() != side)
+            {
+                watermarkCache = watermarkImage.rescaled(side, side, juce::Graphics::highResamplingQuality);
+                watermarkCache.multiplyAllAlphas(0.18f);
+            }
+
+            const auto imageBounds = juce::Rectangle<int>(side, side).withCentre(grid.getCentre());
+            g.drawImageAt(watermarkCache, imageBounds.getX(), imageBounds.getY());
+        }
     }
 
     // Bar ruler + vertical grid ---------------------------------------------
@@ -201,7 +213,10 @@ void ArrangementView::paint(juce::Graphics& g)
             continue;
 
         const auto row = getRowBoundsAt(rowIndex);
-        if (! row.intersects(lanes))
+        // The timer usually asks for a thin strip around the playhead, not the
+        // whole view: rows outside what is being repainted are skipped rather
+        // than drawn into a clip region that throws all of it away.
+        if (! row.intersects(lanes) || ! row.intersects(g.getClipBounds()))
             continue;
 
         if (rowEntry.automationLane >= 0)
@@ -276,6 +291,9 @@ void ArrangementView::paint(juce::Graphics& g)
             const auto left = beatToX(clip.startBeat);
             const auto width = juce::jmax(20, beatToX(clip.startBeat + clip.lengthBeats) - left);
             auto clipBounds = juce::Rectangle<int>(left, row.getY() + 3, width, row.getHeight() - 6);
+
+            if (! clipBounds.intersects(g.getClipBounds()))
+                continue;
 
             // A muted clip stays visible but drains of colour, like FL.
             const auto clipColour = clip.muted ? colour.withSaturation(0.12f).withBrightness(0.45f) : colour;
@@ -1306,7 +1324,10 @@ void ArrangementView::timerCallback()
 {
     rebuildRows();
 
-    if (followPlayhead && transport.isPlaying())
+    const auto playing = transport.isPlaying();
+    const auto previousScroll = scrollBeats;
+
+    if (followPlayhead && playing)
     {
         const auto grid = getGridArea();
         const auto pixelsPerBeat = pixelsPerBar / transport.getBeatsPerBar();
@@ -1317,7 +1338,44 @@ void ArrangementView::timerCallback()
             scrollBeats = juce::jmax(0.0, position - visibleBeats * 0.15);
     }
 
-    repaint();
+    // This used to repaint the whole view thirty times a second, playing or
+    // not. Maximised, that alone kept the message thread so busy the mouse
+    // fell behind: tooltips and clicks landed where the pointer had been.
+    // Now only the playhead's old and new columns are redrawn each tick; the
+    // rest is redrawn when the rows or the scroll change, and a few times a
+    // second regardless, for edits made elsewhere (piano roll, mixer M/S,
+    // a recording growing) that never call repaint() here.
+    auto rowsKey = juce::String(rows.size());
+
+    for (const auto& row : rows)
+        rowsKey << "|" << row.trackIndex << ":" << row.automationLane << ":" << row.top << ":" << row.height
+                << ":" << (int) row.laneEnabled << ":" << (int) row.points.size();
+
+    const auto playheadX = beatToX(transport.getPositionBeats());
+    const auto fullRefreshDue = ++timerTicks % (playing ? 6 : 8) == 0;
+    const auto covered = isCoveredByPanelAbove(*this);
+
+    if (! covered)
+    {
+        const auto lanes = getLocalBounds().withTrimmedTop(panelHeaderHeight);
+
+        if (scrollBeats != previousScroll || rowsKey != lastRowsKey || fullRefreshDue || lastPlayheadX < 0)
+        {
+            repaint();
+        }
+        else if (playheadX != lastPlayheadX)
+        {
+            repaint(lastPlayheadX - 6, lanes.getY(), 13, lanes.getHeight());
+            repaint(playheadX - 6, lanes.getY(), 13, lanes.getHeight());
+
+            // Automation lanes print the value under the playhead in their header.
+            if (std::any_of(rows.begin(), rows.end(), [] (const Row& r) { return r.automationLane >= 0; }))
+                repaint(lanes.withWidth(headerWidth));
+        }
+    }
+
+    lastRowsKey = rowsKey;
+    lastPlayheadX = covered ? -1 : playheadX;
 }
 
 void ArrangementView::buttonClicked(juce::Button* button)

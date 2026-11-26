@@ -11,7 +11,8 @@ namespace djr
 {
 
 /** Horizontal mixer rack with one strip per track plus the master bus. */
-class MixerView final : public juce::Component
+class MixerView final : public juce::Component,
+                        private juce::Timer
 {
 public:
     explicit MixerView(Mixer& mixer);
@@ -30,6 +31,10 @@ public:
     void setOpenChannelCallback(std::function<void(int)> callback);
 
 private:
+    void timerCallback() override;
+    /** The header's live master readout - "MASTER -12.3 dB". */
+    juce::String getMasterReadout() const;
+
     class StripHolder final : public juce::Component
     {
     public:
@@ -46,6 +51,7 @@ private:
     int selectedTrack = 0;
 
     int deviceInputCount = 0;
+    juce::String lastMasterReadout;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MixerView)
 };
