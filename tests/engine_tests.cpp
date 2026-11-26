@@ -6245,6 +6245,27 @@ int main()
               "sends: the row fills in proportion to the level, 0 dB at two thirds");
     }
 
+    // --- Insert slots on the mixer strip -------------------------------------
+    // Each insert gets a row, "+ FX" always comes last, and a chain longer
+    // than the strip can show folds into "... N more" instead of squeezing
+    // the fader out.
+    {
+        using Strip = djr::MixerChannelStrip;
+        const auto add = Strip::addInsertRow;
+        const auto more = Strip::moreInsertsRow;
+
+        check(Strip::insertRowsFor(0) == std::vector<int> { add },
+              "inserts: an empty chain shows only + FX");
+        check(Strip::insertRowsFor(2) == std::vector<int> { 0, 1, add },
+              "inserts: each insert gets a row, in chain order, before + FX");
+        check(Strip::insertRowsFor(Strip::maxVisibleInserts) == std::vector<int> { 0, 1, 2, 3, add },
+              "inserts: a chain that fits is shown whole");
+        check(Strip::insertRowsFor(Strip::maxVisibleInserts + 3) == std::vector<int> { 0, 1, 2, more, add },
+              "inserts: a longer chain shows the first three and folds the rest into one row");
+        check(Strip::insertRowsFor(-1) == std::vector<int> { add },
+              "inserts: a nonsense count is treated as empty");
+    }
+
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"
                                 : "\n" + std::to_string(failures) + " engine test(s) failed\n");
     return failures == 0 ? 0 : 1;

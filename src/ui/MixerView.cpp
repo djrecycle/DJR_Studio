@@ -143,6 +143,11 @@ void MixerView::refreshStrips()
                 });
             };
 
+            strip->onAddInsert = [this, i] { if (insertCallbacks.add) insertCallbacks.add(i); };
+            strip->onOpenInsert = [this, i] (int insert) { if (insertCallbacks.open) insertCallbacks.open(i, insert); };
+            strip->onInsertsChanged = [this, i] { if (insertCallbacks.changed) insertCallbacks.changed(i); };
+            strip->onShowInsertChain = [this, i] { if (insertCallbacks.showChain) insertCallbacks.showChain(i); };
+
             strip->onOpenChannel = [this, i]
             {
                 if (openChannelCallback)
@@ -188,6 +193,11 @@ void MixerView::setSelectedTrack(int trackIndex)
 void MixerView::setTrackSelectedCallback(std::function<void(int)> callback)
 {
     trackSelectedCallback = std::move(callback);
+}
+
+void MixerView::setInsertCallbacks(InsertCallbacks callbacks)
+{
+    insertCallbacks = std::move(callbacks);
 }
 
 void MixerView::setCreateBusForSendCallback(std::function<void(int, int)> callback)

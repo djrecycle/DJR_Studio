@@ -12,6 +12,7 @@
 #include "utils/Logger.h"
 
 #include <algorithm>
+#include <map>
 
 namespace djr
 {
@@ -399,6 +400,27 @@ MainComponent::MainComponent()
 
     mixerView.setTrackSelectedCallback([this] (int trackIndex) { selectTrack(trackIndex); });
     mixerView.setOpenChannelCallback([this] (int trackIndex) { openTrackPluginEditor(trackIndex); });
+
+    // A strip's insert slots: the same loading, windows and refreshes the
+    // Insert Chain panel uses, reached from the channel itself.
+    MixerView::InsertCallbacks insertCallbacks;
+    insertCallbacks.add = [this] (int trackIndex) { showAddInsertMenu(trackIndex); };
+    insertCallbacks.open = [this] (int trackIndex, int insertIndex)
+    {
+        openTrackPlugin(trackIndex, PluginSlot::insert, insertIndex);
+    };
+    insertCallbacks.changed = [this] (int)
+    {
+        insertChainPanel.refresh();
+        pluginBrowserView.refreshTrackList();
+        markDirty();
+    };
+    insertCallbacks.showChain = [this] (int trackIndex)
+    {
+        selectTrack(trackIndex);
+        panelHost.setPanelOpen(insertPanelId, true);
+    };
+    mixerView.setInsertCallbacks(std::move(insertCallbacks));
 
     // "+ Send" > "New bus" on a strip: the bus is made the same way the
     // playlist's "New bus" makes one, then the send is pointed at it. The
@@ -1957,6 +1979,76 @@ void MainComponent::loadSelectedPluginIntoTrack(int pluginIndex, int trackIndex)
                 markDirty();
                 synchroniseProjectState();
             }
+        });
+}
+
+void MainComponent::showAddInsertMenu(int trackIndex)
+{
+    if (getTrack(trackIndex) == nullptr)
+        return;
+
+    // Effects only: an instrument belongs in the channel's instrument slot,
+    // not in its insert chain. The menu item ids are indices into
+    // getKnownPlugins() (offset by one, as 0 means "dismissed"), which is
+    // what loadSelectedPluginIntoTrack takes.
+    const auto plugins = pluginManager.getKnownPlugins();
+    constexpr int idOffset = 1;
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader(TRANS("Add effect"));
+
+    const auto selected = pluginBrowserView.getSelectedPluginIndex();
+
+    if (juce::isPositiveAndBelow(selected, plugins.size()) && ! plugins[selected].isInstrument)
+    {
+        menu.addItem(idOffset + selected, TRANS("Selected: ") + plugins[selected].name);
+        menu.addSeparator();
+    }
+
+    std::map<juce::String, std::map<juce::String, juce::PopupMenu>> byFormat;
+    auto anyEffect = false;
+
+    for (int i = 0; i < plugins.size(); ++i)
+    {
+        const auto& description = plugins.getReference(i);
+
+        if (description.isInstrument)
+            continue;
+
+        anyEffect = true;
+
+        if (PluginManager::isBuiltIn(description))
+        {
+            menu.addItem(idOffset + i, description.name);
+            continue;
+        }
+
+        const auto maker = description.manufacturerName.isNotEmpty() ? description.manufacturerName
+                                                                     : TRANS("Unknown maker");
+        byFormat[description.pluginFormatName][maker].addItem(idOffset + i, description.name);
+    }
+
+    for (auto& [format, makers] : byFormat)
+    {
+        juce::PopupMenu formatMenu;
+
+        for (auto& [maker, makerMenu] : makers)
+            formatMenu.addSubMenu(maker, makerMenu);
+
+        menu.addSubMenu(format, formatMenu);
+    }
+
+    if (! anyEffect)
+        menu.addItem(-1, TRANS("No effect plugins found - scan in Preferences > Plugins"), false);
+
+    menu.showMenuAsync(juce::PopupMenu::Options()
+                           .withMousePosition()
+                           .withMinimumWidth(200)
+                           .withStandardItemHeight(21),
+        [this, trackIndex] (int result)
+        {
+            if (result >= idOffset)
+                loadSelectedPluginIntoTrack(result - idOffset, trackIndex);
         });
 }
 

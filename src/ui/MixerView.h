@@ -35,6 +35,16 @@ public:
     */
     void setCreateBusForSendCallback(std::function<void(int trackIndex, int slot)> callback);
 
+    /** A strip's insert section, reported with the strip's track index. */
+    struct InsertCallbacks
+    {
+        std::function<void(int trackIndex)> add;
+        std::function<void(int trackIndex, int insertIndex)> open;
+        std::function<void(int trackIndex)> changed;
+        std::function<void(int trackIndex)> showChain;
+    };
+    void setInsertCallbacks(InsertCallbacks callbacks);
+
 private:
     void timerCallback() override;
     /** The header's live master readout - "MASTER -12.3 dB". */
@@ -54,6 +64,7 @@ private:
     std::function<void()> automationChangedCallback;
     std::function<void(int)> openChannelCallback;
     std::function<void(int, int)> createBusForSendCallback;
+    InsertCallbacks insertCallbacks;
     int selectedTrack = 0;
 
     int deviceInputCount = 0;

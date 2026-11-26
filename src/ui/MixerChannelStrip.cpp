@@ -64,6 +64,24 @@ float MixerChannelStrip::sendLevelAfterWheel(float level, float wheelDelta) noex
     return juce::jlimit(0.0f, maxSendLevel, juce::Decibels::decibelsToGain(next));
 }
 
+std::vector<int> MixerChannelStrip::insertRowsFor(int pluginCount)
+{
+    std::vector<int> rows;
+    pluginCount = juce::jmax(0, pluginCount);
+
+    // A long chain folds rather than squeezing the fader out of the strip.
+    const auto shown = pluginCount > maxVisibleInserts ? maxVisibleInserts - 1 : pluginCount;
+
+    for (int i = 0; i < shown; ++i)
+        rows.push_back(i);
+
+    if (shown < pluginCount)
+        rows.push_back(moreInsertsRow);
+
+    rows.push_back(addInsertRow);
+    return rows;
+}
+
 MixerChannelStrip::MixerChannelStrip(Track& trackToUse, int colourIndex)
     : track(&trackToUse), colour(Theme::trackColour(colourIndex))
 {
@@ -188,6 +206,54 @@ void MixerChannelStrip::paint(juce::Graphics& g)
         drawButton(getArmBounds(), "R", track->isRecordArmed(), Theme::pink(), true);
     }
 
+    // Inserts ----------------------------------------------------------------
+    // Above the fader, in the order the signal meets them: plugin, then fader,
+    // then sends. A dot per insert says on (track colour) or bypassed.
+    if (track != nullptr && ! isMaster())
+    {
+        const auto rows = getInsertRows();
+        const auto names = track->getPluginNames();
+
+        for (size_t row = 0; row < rows.size(); ++row)
+        {
+            const auto kind = rows[row];
+            const auto area = getInsertRowBounds(static_cast<int>(row));
+            const auto hovered = area.contains(hoverPosition);
+
+            if (kind == addInsertRow || kind == moreInsertsRow)
+            {
+                g.setColour(Theme::control().withAlpha(hovered ? 0.75f : 0.45f));
+                g.fillRoundedRectangle(area.toFloat(), 2.5f);
+                g.setColour(Theme::outline().withAlpha(0.8f));
+                g.drawRoundedRectangle(area.toFloat().reduced(0.5f), 2.5f, 1.0f);
+                g.setColour(hovered ? Theme::text() : Theme::mutedText());
+                g.setFont(Theme::mono(8.5f));
+                g.drawText(kind == addInsertRow ? juce::String("+ FX")
+                                                : "... " + juce::String(track->getPluginCount() - (maxVisibleInserts - 1)) + TRANS(" more"),
+                           area, juce::Justification::centred, false);
+                continue;
+            }
+
+            const auto bypassed = track->isPluginBypassed(kind);
+
+            g.setColour(Theme::inset().brighter(hovered ? 0.15f : 0.0f));
+            g.fillRoundedRectangle(area.toFloat(), 2.5f);
+
+            const auto dot = getBypassDotArea(area).toFloat().withSizeKeepingCentre(5.0f, 5.0f);
+            g.setColour(bypassed ? Theme::faintText() : colour);
+
+            if (bypassed)
+                g.drawEllipse(dot, 1.0f);
+            else
+                g.fillEllipse(dot);
+
+            g.setFont(Theme::mono(8.0f, ! bypassed));
+            g.setColour(bypassed ? Theme::faintText() : Theme::textSoft());
+            g.drawText(kind < names.size() ? names[kind] : juce::String("?"),
+                       area.withTrimmedLeft(12).withTrimmedRight(2), juce::Justification::centredLeft, true);
+        }
+    }
+
     // Sends ------------------------------------------------------------------
     // Always there on a channel, so a send is something you see and reach for
     // rather than something buried in the routing menu: one line per send with
@@ -277,19 +343,20 @@ void MixerChannelStrip::paint(juce::Graphics& g)
 
 void MixerChannelStrip::mouseMove(const juce::MouseEvent& event)
 {
-    const auto before = getSendRowAt(hoverPosition);
+    const auto sendBefore = getSendRowAt(hoverPosition);
+    const auto insertBefore = getInsertRowAt(hoverPosition);
     hoverPosition = event.getPosition();
 
-    if (getSendRowAt(hoverPosition) != before)
-        repaint(getRowsBelowFader().withHeight(getSendSectionHeight()));
+    if (getSendRowAt(hoverPosition) != sendBefore || getInsertRowAt(hoverPosition) != insertBefore)
+        repaint();
 }
 
 void MixerChannelStrip::mouseExit(const juce::MouseEvent& event)
 {
     juce::ignoreUnused(event);
 
-    if (getSendRowAt(hoverPosition) >= 0)
-        repaint(getRowsBelowFader().withHeight(getSendSectionHeight()));
+    if (getSendRowAt(hoverPosition) >= 0 || getInsertRowAt(hoverPosition) >= 0)
+        repaint();
 
     hoverPosition = { -1, -1 };
 }
@@ -315,6 +382,19 @@ void MixerChannelStrip::mouseWheelMove(const juce::MouseEvent& event, const juce
 
 juce::String MixerChannelStrip::getTooltip()
 {
+    if (const auto row = getInsertRowAt(hoverPosition); row >= 0 && track != nullptr)
+    {
+        const auto kind = getInsertRows()[(size_t) row];
+
+        if (kind == addInsertRow)
+            return TRANS("Add an effect plugin to this channel");
+
+        if (kind == moreInsertsRow)
+            return TRANS("Show the whole insert chain");
+
+        return TRANS("Click: open - dot: on/off (bypass) - right-click: move, remove");
+    }
+
     if (const auto row = getSendRowAt(hoverPosition); row >= 0 && track != nullptr)
     {
         if (track->getSend(getSendRows()[(size_t) row]).destination < 0)
@@ -349,6 +429,112 @@ std::vector<int> MixerChannelStrip::getAssignedSends() const
             assigned.push_back(slot);
 
     return assigned;
+}
+
+std::vector<int> MixerChannelStrip::getInsertRows() const
+{
+    if (track == nullptr || isMaster())
+        return {};
+
+    return insertRowsFor(track->getPluginCount());
+}
+
+int MixerChannelStrip::getInsertSectionHeight() const
+{
+    const auto count = static_cast<int>(getInsertRows().size());
+    return count == 0 ? 0 : count * sendSlotHeight + (count - 1) * sendSlotGap;
+}
+
+int MixerChannelStrip::getHeightAboveFader() const
+{
+    auto height = nameRowHeight + rowGap + panRowHeight + rowGap;
+
+    if (const auto inserts = getInsertSectionHeight(); inserts > 0)
+        height += inserts + rowGap;
+
+    return height;
+}
+
+juce::Rectangle<int> MixerChannelStrip::getInsertRowBounds(int rowIndex) const
+{
+    if (! juce::isPositiveAndBelow(rowIndex, static_cast<int>(getInsertRows().size())))
+        return {};
+
+    auto area = getLocalBounds().reduced(stripPadding);
+    area.removeFromTop(nameRowHeight + rowGap + panRowHeight + rowGap);
+    return area.withHeight(sendSlotHeight).translated(0, rowIndex * (sendSlotHeight + sendSlotGap));
+}
+
+int MixerChannelStrip::getInsertRowAt(juce::Point<int> position) const
+{
+    const auto count = static_cast<int>(getInsertRows().size());
+
+    for (int row = 0; row < count; ++row)
+        if (getInsertRowBounds(row).contains(position))
+            return row;
+
+    return -1;
+}
+
+juce::Rectangle<int> MixerChannelStrip::getBypassDotArea(juce::Rectangle<int> row)
+{
+    return row.withWidth(12);
+}
+
+void MixerChannelStrip::notifyInsertsChanged()
+{
+    if (onInsertsChanged)
+        onInsertsChanged();
+
+    repaint();
+}
+
+void MixerChannelStrip::showInsertMenu(int insertIndex)
+{
+    if (track == nullptr || ! juce::isPositiveAndBelow(insertIndex, track->getPluginCount()))
+        return;
+
+    const auto count = track->getPluginCount();
+    const auto names = track->getPluginNames();
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader(insertIndex < names.size() ? names[insertIndex] : juce::String("Insert"));
+    menu.addItem(1, TRANS("Open plugin editor"));
+    menu.addItem(2, TRANS("Bypass"), true, track->isPluginBypassed(insertIndex));
+    menu.addSeparator();
+    menu.addItem(3, TRANS("Move up"), insertIndex > 0);
+    menu.addItem(4, TRANS("Move down"), insertIndex < count - 1);
+    menu.addSeparator();
+    menu.addItem(5, TRANS("Remove"));
+
+    menu.showMenuAsync(juce::PopupMenu::Options()
+                           .withMousePosition()
+                           .withMinimumWidth(170)
+                           .withStandardItemHeight(21),
+        [this, insertIndex] (int result)
+        {
+            if (result == 0 || track == nullptr || ! juce::isPositiveAndBelow(insertIndex, track->getPluginCount()))
+                return;
+
+            if (result == 1)
+            {
+                if (onOpenInsert)
+                    onOpenInsert(insertIndex);
+
+                return;
+            }
+
+            if (result == 2)
+                track->setPluginBypassed(insertIndex, ! track->isPluginBypassed(insertIndex));
+            else if (result == 3)
+                track->movePlugin(insertIndex, insertIndex - 1);
+            else if (result == 4)
+                track->movePlugin(insertIndex, insertIndex + 1);
+            else if (result == 5)
+                track->removePlugin(insertIndex);
+
+            notifyInsertsChanged();
+        });
 }
 
 std::vector<int> MixerChannelStrip::getSendRows() const
@@ -742,6 +928,20 @@ void MixerChannelStrip::mouseDown(const juce::MouseEvent& event)
                 return;
             }
 
+            if (const auto row = getInsertRowAt(position); row >= 0)
+            {
+                const auto kind = getInsertRows()[(size_t) row];
+
+                if (kind >= 0)
+                    showInsertMenu(kind);
+                else if (kind == addInsertRow && onAddInsert)
+                    onAddInsert();
+                else if (kind == moreInsertsRow && onShowInsertChain)
+                    onShowInsertChain();
+
+                return;
+            }
+
             if (const auto row = getSendRowAt(position); row >= 0)
             {
                 const auto slot = getSendRows()[(size_t) row];
@@ -763,6 +963,34 @@ void MixerChannelStrip::mouseDown(const juce::MouseEvent& event)
         if (getRoutingBounds().expanded(2, 2).contains(position))
         {
             showRoutingMenu();
+            return;
+        }
+
+        // Inserts: the dot switches one on and off, the name opens it.
+        if (const auto row = getInsertRowAt(position); row >= 0)
+        {
+            const auto kind = getInsertRows()[(size_t) row];
+
+            if (kind == addInsertRow)
+            {
+                if (onAddInsert)
+                    onAddInsert();
+            }
+            else if (kind == moreInsertsRow)
+            {
+                if (onShowInsertChain)
+                    onShowInsertChain();
+            }
+            else if (getBypassDotArea(getInsertRowBounds(row)).contains(position))
+            {
+                track->setPluginBypassed(kind, ! track->isPluginBypassed(kind));
+                notifyInsertsChanged();
+            }
+            else if (onOpenInsert)
+            {
+                onOpenInsert(kind);
+            }
+
             return;
         }
 
@@ -926,6 +1154,14 @@ void MixerChannelStrip::timerCallback()
                  << (int) track->isVolumeAutomated() << "|" << getOutputDestinationName();
 
     if (track != nullptr)
+    {
+        stateKey << "|" << track->getPluginNames().joinIntoString(",");
+
+        for (int i = 0; i < track->getPluginCount(); ++i)
+            stateKey << (int) track->isPluginBypassed(i);
+    }
+
+    if (track != nullptr)
         for (int slot = 0; slot < Track::maxSends; ++slot)
         {
             const auto send = track->getSend(slot);
@@ -955,8 +1191,7 @@ int MixerChannelStrip::getFaderRowHeight() const
     // the top, and neither knew about the other: assigning a send put the send
     // bar straight on top of the M and S buttons.
     auto fixed = stripPadding * 2
-               + nameRowHeight + rowGap
-               + panRowHeight + rowGap
+               + getHeightAboveFader()
                + rowGap
                + buttonRowHeight + rowGap
                + dbRowHeight;
@@ -973,7 +1208,7 @@ int MixerChannelStrip::getFaderRowHeight() const
 juce::Rectangle<int> MixerChannelStrip::getRowsBelowFader() const
 {
     auto area = getLocalBounds().reduced(stripPadding);
-    area.removeFromTop(nameRowHeight + rowGap + panRowHeight + rowGap
+    area.removeFromTop(getHeightAboveFader()
                            + getFaderRowHeight() + rowGap);
     return area;
 }
@@ -981,7 +1216,7 @@ juce::Rectangle<int> MixerChannelStrip::getRowsBelowFader() const
 juce::Rectangle<int> MixerChannelStrip::getFaderColumn() const
 {
     auto area = getLocalBounds().reduced(stripPadding);
-    area.removeFromTop(nameRowHeight + rowGap + panRowHeight + rowGap);
+    area.removeFromTop(getHeightAboveFader());
     return area.removeFromTop(getFaderRowHeight()).withWidth(faderColumnWidth);
 }
 
@@ -996,7 +1231,7 @@ juce::Rectangle<int> MixerChannelStrip::getFaderHandle() const
 juce::Rectangle<int> MixerChannelStrip::getMeterArea() const
 {
     auto area = getLocalBounds().reduced(stripPadding);
-    area.removeFromTop(nameRowHeight + rowGap + panRowHeight + rowGap);
+    area.removeFromTop(getHeightAboveFader());
     auto row = area.removeFromTop(getFaderRowHeight());
     row.removeFromLeft(faderColumnWidth + 4);
     return row;
