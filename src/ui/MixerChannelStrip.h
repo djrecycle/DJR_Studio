@@ -11,10 +11,11 @@
 namespace djr
 {
 
-/** One mixer channel: pan knob, fader, stereo meters, mute/solo/arm and the
-    level readout. Also renders the master bus when constructed with one.
+/** One mixer channel: pan knob, fader, stereo meters, its sends, mute/solo/arm
+    and the level readout. Also renders the master bus when constructed with one.
 */
 class MixerChannelStrip final : public juce::Component,
+                                public juce::TooltipClient,
                                 private juce::Timer
 {
 public:
@@ -27,6 +28,10 @@ public:
     void mouseDrag(const juce::MouseEvent& event) override;
     void mouseUp(const juce::MouseEvent& event) override;
     void mouseDoubleClick(const juce::MouseEvent& event) override;
+    void mouseMove(const juce::MouseEvent& event) override;
+    void mouseExit(const juce::MouseEvent& event) override;
+    void mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
+    juce::String getTooltip() override;
 
     bool isMaster() const noexcept;
 
@@ -51,6 +56,23 @@ public:
     */
     std::function<void()> onOpenChannel;
 
+    /** "New bus" from a send slot's menu: the owner adds a bus and points
+        `slot` at it. Called after the menu has closed; the owner rebuilds the
+        strips, this one included, so it must not call back into the strip.
+    */
+    std::function<void(int slot)> onCreateBusForSend;
+
+    /** Send level limits: 1.5 is +3.5 dB, the same headroom as the fader. */
+    static constexpr float maxSendLevel = 1.5f;
+    /** Where a send row of `width` pixels fills up to for `level`, 0..1. */
+    static float sendFillRatio(float level) noexcept;
+    /** A drag of `deltaPixels` from `startLevel`: the full range is
+        `pixelsForFullRange` (four times finer with `fine`), clamped to it.
+    */
+    static float sendLevelAfterDrag(float startLevel, int deltaPixels, bool fine) noexcept;
+    /** One mouse-wheel notch: half a dB up or down, from silence up to unity. */
+    static float sendLevelAfterWheel(float level, float wheelDelta) noexcept;
+
     /** The strip needs the mixer to change routing: only the mixer can see the
         whole graph and refuse a route that would feed back.
     */
@@ -66,11 +88,22 @@ private:
     void showAutomationMenu(bool forPan);
     /** Where this track's audio goes, and what its sends are doing. */
     void showRoutingMenu();
-    /** The row of send level bars, empty when nothing is assigned. */
-    juce::Rectangle<int> getSendRowBounds() const;
-    juce::Rectangle<int> getSendBarBounds(int slot) const;
     /** Slots that actually point somewhere, in slot order. */
     std::vector<int> getAssignedSends() const;
+    /** What the send section lists, top to bottom: each assigned slot, then
+        the first free slot as the "+ Send" row while one is left. Empty for
+        the master strip.
+    */
+    std::vector<int> getSendRows() const;
+    int getSendSectionHeight() const;
+    juce::Rectangle<int> getSendRowBounds(int rowIndex) const;
+    /** Index into getSendRows() under `position`, or -1. */
+    int getSendRowAt(juce::Point<int> position) const;
+    /** Destination, pre/post fader and remove, for an assigned slot. */
+    void showSendMenu(int slot);
+    /** Pick a bus (or make one) for the free slot behind "+ Send". */
+    void showAddSendMenu(int slot);
+    void applySend(int slot, const TrackSend& send);
 
     /** The fader/meter block absorbs whatever height the strip has spare. */
     int getFaderRowHeight() const;
@@ -114,6 +147,8 @@ private:
     int trackIndex = -1;
     /** Send slot being dragged, or -1. */
     int draggingSend = -1;
+    float sendDragStartLevel = 0.0f;
+    juce::Point<int> hoverPosition { -1, -1 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MixerChannelStrip)
 };

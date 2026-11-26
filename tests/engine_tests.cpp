@@ -38,6 +38,7 @@
 #include "ui/PanelHost.h"
 #include "ui/DJRLookAndFeel.h"
 #include "audio/BlockSplitter.h"
+#include "ui/MixerChannelStrip.h"
 
 #include <algorithm>
 #include <iostream>
@@ -6209,6 +6210,39 @@ int main()
                               [&] (const float* const*, int, float* const*, int numOuts, int) { widest = juce::jmax(widest, numOuts); });
         check(widest == 64 && many[65][999] == 0.0f && many[64][0] == 0.0f && many[63][0] == 1.0f,
               "blocks: output channels past 64 are cleared, the rest left to the renderer");
+    }
+
+    // --- Send controls on the mixer strip ------------------------------------
+    // Sends used to be thin bars that only appeared once assigned from a menu,
+    // set by where on the bar you clicked. They are rows now, dragged
+    // relatively, scrolled in half-dB steps, and drawn filled to their level.
+    {
+        using Strip = djr::MixerChannelStrip;
+
+        check(std::abs(Strip::sendLevelAfterDrag(1.0f, 0, false) - 1.0f) < 1.0e-6f,
+              "sends: a press without movement leaves the level alone");
+        check(Strip::sendLevelAfterDrag(1.0f, 30, false) > 1.0f && Strip::sendLevelAfterDrag(1.0f, -30, false) < 1.0f,
+              "sends: dragging right/up raises, left/down lowers");
+        check(Strip::sendLevelAfterDrag(0.0f, 150, false) == Strip::maxSendLevel
+                  && Strip::sendLevelAfterDrag(1.0f, -1000, false) == 0.0f,
+              "sends: 150 px covers silence to full, and the level stays in range");
+
+        const auto coarse = Strip::sendLevelAfterDrag(1.0f, 20, false) - 1.0f;
+        const auto fine = Strip::sendLevelAfterDrag(1.0f, 20, true) - 1.0f;
+        check(std::abs(coarse - 4.0f * fine) < 1.0e-5f, "sends: Shift makes the drag four times finer");
+
+        const auto upOneNotch = juce::Decibels::gainToDecibels(Strip::sendLevelAfterWheel(1.0f, 0.1f));
+        check(std::abs(upOneNotch - 0.5f) < 0.01f, "sends: one wheel notch is half a dB");
+        check(Strip::sendLevelAfterWheel(0.0f, 0.1f) > 0.0f, "sends: scrolling up from -inf brings the send in");
+        check(Strip::sendLevelAfterWheel(juce::Decibels::decibelsToGain(-59.8f), -0.1f) == 0.0f,
+              "sends: scrolling down past -60 dB silences it rather than creeping towards zero");
+        check(Strip::sendLevelAfterWheel(Strip::maxSendLevel, 0.1f) <= Strip::maxSendLevel,
+              "sends: scrolling up stops at the maximum");
+
+        check(std::abs(Strip::sendFillRatio(Strip::maxSendLevel) - 1.0f) < 1.0e-6f
+                  && Strip::sendFillRatio(0.0f) == 0.0f
+                  && std::abs(Strip::sendFillRatio(1.0f) - 1.0f / Strip::maxSendLevel) < 1.0e-6f,
+              "sends: the row fills in proportion to the level, 0 dB at two thirds");
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

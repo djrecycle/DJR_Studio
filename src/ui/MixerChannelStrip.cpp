@@ -21,12 +21,47 @@ namespace
     constexpr int dbRowHeight = 13;
     constexpr int routingRowHeight = 13;
     constexpr float maxLevel = 1.5f;
-    /** The send row only exists when something is assigned, so an unrouted
-        strip looks exactly as it always did.
+    /** One line per send, name and level: tall enough for 8.5 pt text. */
+    constexpr int sendSlotHeight = 14;
+    constexpr int sendSlotGap = 2;
+    /** Pixels of drag for silence to full; the strip is only ~60 px wide, so a
+        drag is relative and may leave it, rather than an absolute position.
     */
-    constexpr int sendRowHeight = 15;
-    constexpr int sendBarGap = 2;
-    constexpr float maxSendLevel = 1.5f;
+    constexpr int sendDragRange = 150;
+    constexpr float minWheelDb = -60.0f;
+
+    juce::String describeSendLevel(float level)
+    {
+        return level <= 0.0001f ? juce::String("-inf")
+                                : juce::String(juce::Decibels::gainToDecibels(level), 1);
+    }
+}
+
+float MixerChannelStrip::sendFillRatio(float level) noexcept
+{
+    return juce::jlimit(0.0f, 1.0f, level / maxSendLevel);
+}
+
+float MixerChannelStrip::sendLevelAfterDrag(float startLevel, int deltaPixels, bool fine) noexcept
+{
+    const auto range = static_cast<float>(fine ? sendDragRange * 4 : sendDragRange);
+    return juce::jlimit(0.0f, maxSendLevel, startLevel + maxSendLevel * static_cast<float>(deltaPixels) / range);
+}
+
+float MixerChannelStrip::sendLevelAfterWheel(float level, float wheelDelta) noexcept
+{
+    if (wheelDelta == 0.0f)
+        return level;
+
+    // In dB, so a notch sounds the same at -30 as at -3; from silence the first
+    // notch up lands at -60 rather than staying at -inf for ever.
+    const auto db = level <= 0.0001f ? minWheelDb : juce::Decibels::gainToDecibels(level);
+    const auto next = db + (wheelDelta > 0.0f ? 0.5f : -0.5f);
+
+    if (next <= minWheelDb)
+        return 0.0f;
+
+    return juce::jlimit(0.0f, maxSendLevel, juce::Decibels::decibelsToGain(next));
 }
 
 MixerChannelStrip::MixerChannelStrip(Track& trackToUse, int colourIndex)
@@ -154,34 +189,60 @@ void MixerChannelStrip::paint(juce::Graphics& g)
     }
 
     // Sends ------------------------------------------------------------------
-    // Only drawn when something is assigned, so a strip with no sends looks
-    // exactly as it did before routing existed.
+    // Always there on a channel, so a send is something you see and reach for
+    // rather than something buried in the routing menu: one line per send with
+    // its bus and level, then "+ Send" while a slot is free.
     if (track != nullptr && mixer != nullptr)
     {
-        for (const auto slot : getAssignedSends())
+        const auto rows = getSendRows();
+
+        for (size_t row = 0; row < rows.size(); ++row)
         {
-            const auto bar = getSendBarBounds(slot);
-
-            if (bar.isEmpty())
-                continue;
-
+            const auto slot = rows[row];
+            const auto area = getSendRowBounds(static_cast<int>(row));
             const auto send = track->getSend(slot);
+            const auto hovered = area.contains(hoverPosition);
+
+            if (send.destination < 0)
+            {
+                g.setColour(Theme::control().withAlpha(hovered ? 0.75f : 0.45f));
+                g.fillRoundedRectangle(area.toFloat(), 2.5f);
+                g.setColour(Theme::outline().withAlpha(0.8f));
+                g.drawRoundedRectangle(area.toFloat().reduced(0.5f), 2.5f, 1.0f);
+                g.setColour(hovered ? Theme::text() : Theme::mutedText());
+                g.setFont(Theme::mono(8.5f));
+                g.drawText("+ Send", area, juce::Justification::centred, false);
+                continue;
+            }
+
             // Pre-fader reads amber, post-fader takes the track colour: the one
             // thing you cannot afford to misread about a send is which it is.
             const auto sendColour = send.preFader ? Theme::amber() : colour;
 
             g.setColour(Theme::inset());
-            g.fillRoundedRectangle(bar.toFloat(), 2.0f);
+            g.fillRoundedRectangle(area.toFloat(), 2.5f);
 
-            const auto ratio = juce::jlimit(0.0f, 1.0f, send.level / maxSendLevel);
-            auto filled = bar.reduced(1);
-            filled = filled.withHeight(juce::roundToInt(ratio * filled.getHeight()))
-                           .withBottomY(bar.getBottom() - 1);
+            auto filled = area.reduced(1);
+            filled.setWidth(juce::roundToInt(sendFillRatio(send.level) * static_cast<float>(filled.getWidth())));
+            g.setColour(sendColour.withAlpha(draggingSend == slot || hovered ? 0.55f : 0.38f));
+            g.fillRoundedRectangle(filled.toFloat(), 2.0f);
 
-            g.setColour(sendColour.withAlpha(0.85f));
-            g.fillRoundedRectangle(filled.toFloat(), 1.5f);
+            auto text = area.reduced(3, 0);
+            const auto levelText = describeSendLevel(send.level);
+            g.setFont(Theme::mono(8.0f));
+            g.setColour(Theme::text());
+            const auto levelWidth = Theme::textWidth(Theme::mono(8.0f), levelText);
+            g.drawText(levelText, text.removeFromRight(levelWidth), juce::Justification::centredRight, false);
+            text.removeFromRight(2);
 
-            g.setColour(Theme::windowBackground().withAlpha(0.85f));
+            juce::String name = "?";
+
+            if (const auto* destination = mixer->getTrack(send.destination))
+                name = destination->getName();
+
+            g.setFont(Theme::mono(8.0f, true));
+            g.setColour(send.preFader ? Theme::amber() : Theme::textSoft());
+            g.drawText(name, text, juce::Justification::centredLeft, true);
         }
     }
 
@@ -214,6 +275,57 @@ void MixerChannelStrip::paint(juce::Graphics& g)
     g.drawText(db, bounds.withTrimmedBottom(3).removeFromBottom(10), juce::Justification::centred, false);
 }
 
+void MixerChannelStrip::mouseMove(const juce::MouseEvent& event)
+{
+    const auto before = getSendRowAt(hoverPosition);
+    hoverPosition = event.getPosition();
+
+    if (getSendRowAt(hoverPosition) != before)
+        repaint(getRowsBelowFader().withHeight(getSendSectionHeight()));
+}
+
+void MixerChannelStrip::mouseExit(const juce::MouseEvent& event)
+{
+    juce::ignoreUnused(event);
+
+    if (getSendRowAt(hoverPosition) >= 0)
+        repaint(getRowsBelowFader().withHeight(getSendSectionHeight()));
+
+    hoverPosition = { -1, -1 };
+}
+
+void MixerChannelStrip::mouseWheelMove(const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
+{
+    if (const auto row = getSendRowAt(event.getPosition()); row >= 0 && track != nullptr)
+    {
+        const auto slot = getSendRows()[(size_t) row];
+        auto send = track->getSend(slot);
+
+        if (send.destination >= 0)
+        {
+            send.level = sendLevelAfterWheel(send.level, wheel.deltaY);
+            applySend(slot, send);
+            return;
+        }
+    }
+
+    // Not on a send: let the mixer's viewport scroll the strips.
+    juce::Component::mouseWheelMove(event, wheel);
+}
+
+juce::String MixerChannelStrip::getTooltip()
+{
+    if (const auto row = getSendRowAt(hoverPosition); row >= 0 && track != nullptr)
+    {
+        if (track->getSend(getSendRows()[(size_t) row]).destination < 0)
+            return TRANS("Send this channel to a bus as well (reverb, delay, parallel compression)");
+
+        return TRANS("Drag or scroll: send level (Shift = fine) - double-click: 0 dB - right-click: bus, pre/post fader, remove");
+    }
+
+    return {};
+}
+
 void MixerChannelStrip::setMixer(Mixer* mixerToRouteThrough, int indexInMixer) noexcept
 {
     mixer = mixerToRouteThrough;
@@ -239,32 +351,158 @@ std::vector<int> MixerChannelStrip::getAssignedSends() const
     return assigned;
 }
 
-juce::Rectangle<int> MixerChannelStrip::getSendRowBounds() const
+std::vector<int> MixerChannelStrip::getSendRows() const
 {
-    if (getAssignedSends().empty())
+    auto rows = getAssignedSends();
+
+    if (track == nullptr || mixer == nullptr || isMaster())
         return {};
 
-    return getRowsBelowFader().removeFromTop(sendRowHeight);
+    for (int slot = 0; slot < Track::maxSends; ++slot)
+    {
+        if (track->getSend(slot).destination < 0)
+        {
+            rows.push_back(slot);
+            break;
+        }
+    }
+
+    return rows;
 }
 
-juce::Rectangle<int> MixerChannelStrip::getSendBarBounds(int slot) const
+int MixerChannelStrip::getSendSectionHeight() const
 {
-    const auto assigned = getAssignedSends();
-    const auto row = getSendRowBounds();
+    const auto count = static_cast<int>(getSendRows().size());
+    return count == 0 ? 0 : count * sendSlotHeight + (count - 1) * sendSlotGap;
+}
 
-    if (assigned.empty() || row.isEmpty())
+juce::Rectangle<int> MixerChannelStrip::getSendRowBounds(int rowIndex) const
+{
+    if (! juce::isPositiveAndBelow(rowIndex, static_cast<int>(getSendRows().size())))
         return {};
 
-    const auto position = std::find(assigned.begin(), assigned.end(), slot);
+    return getRowsBelowFader().withHeight(sendSlotHeight)
+                              .translated(0, rowIndex * (sendSlotHeight + sendSlotGap));
+}
 
-    if (position == assigned.end())
-        return {};
+int MixerChannelStrip::getSendRowAt(juce::Point<int> position) const
+{
+    const auto count = static_cast<int>(getSendRows().size());
 
-    const auto count = static_cast<int>(assigned.size());
-    const auto index = static_cast<int>(std::distance(assigned.begin(), position));
-    const auto width = (row.getWidth() - sendBarGap * (count - 1)) / count;
+    for (int row = 0; row < count; ++row)
+        if (getSendRowBounds(row).contains(position))
+            return row;
 
-    return { row.getX() + index * (width + sendBarGap), row.getY(), width, row.getHeight() };
+    return -1;
+}
+
+void MixerChannelStrip::applySend(int slot, const TrackSend& send)
+{
+    if (mixer == nullptr)
+        return;
+
+    mixer->setTrackSend(trackIndex, slot, send);
+
+    if (onRoutingChanged)
+        onRoutingChanged();
+
+    repaint();
+}
+
+void MixerChannelStrip::showSendMenu(int slot)
+{
+    if (track == nullptr || mixer == nullptr)
+        return;
+
+    const auto send = track->getSend(slot);
+
+    juce::PopupMenu destinations;
+
+    for (int i = 0; i < mixer->getNumTracks(); ++i)
+        if (const auto* candidate = mixer->getTrack(i); candidate != nullptr && candidate->getKind() == TrackKind::bus)
+            destinations.addItem(100 + i, candidate->getName(), mixer->canRoute(trackIndex, i), send.destination == i);
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader("Send " + juce::String(slot + 1) + " - " + describeSendLevel(send.level) + " dB");
+    menu.addSubMenu(TRANS("Send to"), destinations);
+    menu.addItem(1, TRANS("Pre-fader (ignores the fader)"), true, send.preFader);
+    menu.addItem(2, TRANS("Reset to 0 dB"), send.level != 1.0f);
+    menu.addSeparator();
+    menu.addItem(3, TRANS("Remove send"));
+
+    menu.showMenuAsync(juce::PopupMenu::Options()
+                           .withMousePosition()
+                           .withMinimumWidth(190)
+                           .withStandardItemHeight(21),
+        [this, slot] (int result)
+        {
+            if (result == 0 || track == nullptr)
+                return;
+
+            auto updated = track->getSend(slot);
+
+            if (result == 1)
+                updated.preFader = ! updated.preFader;
+            else if (result == 2)
+                updated.level = 1.0f;
+            else if (result == 3)
+                updated = {};
+            else if (result >= 100)
+                updated.destination = result - 100;
+
+            applySend(slot, updated);
+        });
+}
+
+void MixerChannelStrip::showAddSendMenu(int slot)
+{
+    if (track == nullptr || mixer == nullptr)
+        return;
+
+    juce::PopupMenu menu;
+    menu.addSectionHeader(TRANS("Send to"));
+    auto anyBus = false;
+
+    for (int i = 0; i < mixer->getNumTracks(); ++i)
+    {
+        if (const auto* candidate = mixer->getTrack(i); candidate != nullptr && candidate->getKind() == TrackKind::bus)
+        {
+            anyBus = true;
+            menu.addItem(100 + i, candidate->getName(), mixer->canRoute(trackIndex, i));
+        }
+    }
+
+    if (! anyBus)
+        menu.addItem(99, TRANS("No buses yet"), false);
+
+    menu.addSeparator();
+    menu.addItem(1, TRANS("New bus"), onCreateBusForSend != nullptr);
+
+    menu.showMenuAsync(juce::PopupMenu::Options()
+                           .withMousePosition()
+                           .withMinimumWidth(170)
+                           .withStandardItemHeight(21),
+        [this, slot] (int result)
+        {
+            if (result == 0 || track == nullptr)
+                return;
+
+            if (result == 1)
+            {
+                // The owner rebuilds every strip after adding the bus - this one
+                // included - so nothing here may touch `this` afterwards.
+                if (auto callback = onCreateBusForSend)
+                    callback(slot);
+
+                return;
+            }
+
+            // A new send starts at unity so it is heard straight away.
+            TrackSend send;
+            send.destination = result - 100;
+            send.level = 1.0f;
+            applySend(slot, send);
+        });
 }
 
 void MixerChannelStrip::showRoutingMenu()
@@ -504,6 +742,18 @@ void MixerChannelStrip::mouseDown(const juce::MouseEvent& event)
                 return;
             }
 
+            if (const auto row = getSendRowAt(position); row >= 0)
+            {
+                const auto slot = getSendRows()[(size_t) row];
+
+                if (track->getSend(slot).destination >= 0)
+                    showSendMenu(slot);
+                else
+                    showAddSendMenu(slot);
+
+                return;
+            }
+
             // Anywhere else on the strip is where the audio goes.
             showRoutingMenu();
             return;
@@ -516,22 +766,21 @@ void MixerChannelStrip::mouseDown(const juce::MouseEvent& event)
             return;
         }
 
-        // Sends are dragged like little faders of their own.
-        for (const auto slot : getAssignedSends())
+        // A send is dragged like a small fader of its own - relative, since
+        // the row is far narrower than the travel it needs. "+ Send" opens the
+        // list of buses instead.
+        if (const auto row = getSendRowAt(position); row >= 0)
         {
-            if (! getSendBarBounds(slot).contains(position))
-                continue;
+            const auto slot = getSendRows()[(size_t) row];
+
+            if (track->getSend(slot).destination < 0)
+            {
+                showAddSendMenu(slot);
+                return;
+            }
 
             draggingSend = slot;
-            auto send = track->getSend(slot);
-            const auto bar = getSendBarBounds(slot);
-            const auto ratio = 1.0f - static_cast<float>(position.y - bar.getY())
-                                          / static_cast<float>(juce::jmax(1, bar.getHeight()));
-            send.level = juce::jlimit(0.0f, 1.0f, ratio) * maxSendLevel;
-
-            if (mixer != nullptr)
-                mixer->setTrackSend(trackIndex, slot, send);
-
+            sendDragStartLevel = track->getSend(slot).level;
             repaint();
             return;
         }
@@ -579,17 +828,11 @@ void MixerChannelStrip::mouseDrag(const juce::MouseEvent& event)
 {
     if (draggingSend >= 0 && track != nullptr && mixer != nullptr)
     {
-        const auto bar = getSendBarBounds(draggingSend);
-
-        if (! bar.isEmpty())
-        {
-            auto send = track->getSend(draggingSend);
-            const auto ratio = 1.0f - static_cast<float>(event.getPosition().y - bar.getY())
-                                          / static_cast<float>(juce::jmax(1, bar.getHeight()));
-            send.level = juce::jlimit(0.0f, 1.0f, ratio) * maxSendLevel;
-            mixer->setTrackSend(trackIndex, draggingSend, send);
-        }
-
+        // Right or up raises it, like every other control on the strip.
+        const auto delta = event.getDistanceFromDragStartX() - event.getDistanceFromDragStartY();
+        auto send = track->getSend(draggingSend);
+        send.level = sendLevelAfterDrag(sendDragStartLevel, delta, event.mods.isShiftDown());
+        mixer->setTrackSend(trackIndex, draggingSend, send);
         repaint();
         return;
     }
@@ -613,6 +856,19 @@ void MixerChannelStrip::mouseDrag(const juce::MouseEvent& event)
 
 void MixerChannelStrip::mouseDoubleClick(const juce::MouseEvent& event)
 {
+    if (const auto row = getSendRowAt(event.getPosition()); row >= 0 && track != nullptr)
+    {
+        const auto slot = getSendRows()[(size_t) row];
+        auto send = track->getSend(slot);
+
+        if (send.destination >= 0)
+        {
+            send.level = 1.0f;
+            applySend(slot, send);
+        }
+
+        return;
+    }
 
     // The name is the channel, so double clicking it opens the channel window -
     // whatever the channel holds, including nothing but the preview synth.
@@ -669,6 +925,13 @@ void MixerChannelStrip::timerCallback()
         stateKey << "|" << (int) track->isMuted() << (int) track->isSoloed() << (int) track->isRecordArmed()
                  << (int) track->isVolumeAutomated() << "|" << getOutputDestinationName();
 
+    if (track != nullptr)
+        for (int slot = 0; slot < Track::maxSends; ++slot)
+        {
+            const auto send = track->getSend(slot);
+            stateKey << "|" << send.destination << ":" << juce::String(send.level, 3) << ":" << (int) send.preFader;
+        }
+
     const auto metersMoved = std::abs(newLeft - smoothedLeft) > 0.002f || std::abs(newRight - smoothedRight) > 0.002f;
 
     smoothedLeft = newLeft;
@@ -701,8 +964,8 @@ int MixerChannelStrip::getFaderRowHeight() const
     if (! isMaster() && track != nullptr)
         fixed += routingRowHeight + rowGap;
 
-    if (! getAssignedSends().empty())
-        fixed += sendRowHeight + rowGap;
+    if (const auto sends = getSendSectionHeight(); sends > 0)
+        fixed += sends + rowGap;
 
     return juce::jmax(faderRowHeight, getHeight() - fixed);
 }
@@ -755,8 +1018,8 @@ juce::Rectangle<int> MixerChannelStrip::getButtonRow() const
 {
     auto area = getRowsBelowFader();
 
-    if (! getAssignedSends().empty())
-        area.removeFromTop(sendRowHeight + rowGap);
+    if (const auto sends = getSendSectionHeight(); sends > 0)
+        area.removeFromTop(sends + rowGap);
 
     return area.removeFromTop(buttonRowHeight);
 }
@@ -821,8 +1084,9 @@ juce::Rectangle<int> MixerChannelStrip::getRoutingBounds() const
         return {};
 
     auto area = getRowsBelowFader();
-    if (! getAssignedSends().empty())
-        area.removeFromTop(sendRowHeight + rowGap);
+
+    if (const auto sends = getSendSectionHeight(); sends > 0)
+        area.removeFromTop(sends + rowGap);
 
     area.removeFromTop(buttonRowHeight + rowGap);
     return area.removeFromTop(routingRowHeight);
