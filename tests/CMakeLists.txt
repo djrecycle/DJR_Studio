@@ -51,6 +51,7 @@ target_sources(djr_studio_engine_tests PRIVATE
     # The send controls' level arithmetic (drag, wheel, fill) - static
     # helpers, no strip is ever shown.
     ${CMAKE_SOURCE_DIR}/src/ui/MixerChannelStrip.cpp
+    ${CMAKE_SOURCE_DIR}/src/ui/ChannelEqEditor.cpp
     ${CMAKE_SOURCE_DIR}/src/plugins/PluginScanner.cpp
     # ExternalAppBridge::parseJackLspOutput() (see its test block in
     # engine_tests.cpp) is plain text parsing with no process ever started

@@ -68,6 +68,9 @@ private:
     int selectedTrack = 0;
 
     int deviceInputCount = 0;
+    /** The tallest strip's minimum, as the strips were last laid out for. */
+    int laidOutMinimumHeight = 0;
+    int getStripsMinimumHeight() const;
     juce::String lastMasterReadout;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MixerView)

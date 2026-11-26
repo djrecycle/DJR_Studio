@@ -575,9 +575,20 @@ const ChannelSettings& Track::getChannelSettings() const noexcept
     return channelSettings;
 }
 
+ChannelEq& Track::getChannelEq() noexcept
+{
+    return channelEq;
+}
+
+const ChannelEq& Track::getChannelEq() const noexcept
+{
+    return channelEq;
+}
+
 void Track::prepare(double sampleRate, int blockSize)
 {
     channelSettings.prepare(sampleRate);
+    channelEq.prepare(sampleRate);
     preparedSampleRate.store(sampleRate, std::memory_order_release);
     preparedBlockSize.store(blockSize, std::memory_order_release);
     instrumentScratch.setSize(PluginChain::maxPluginChannels, juce::jmax(1, blockSize), false, false, true);
@@ -689,9 +700,13 @@ void Track::processAudio(juce::AudioBuffer<float>& buffer,
 
             pluginChain.process(buffer, midi);
         }
+
+        // The channel EQ, after the inserts like a console's. Inside the
+        // frozen check with them: a frozen render already went through it.
+        channelEq.process(buffer);
     }
 
-    // Taken here, between the inserts and the fader: that is what "pre-fader"
+    // Taken here, between the inserts (and the EQ) and the fader: that is what "pre-fader"
     // means, and it is why riding the fader does not also ride the send.
     if (preFaderOut != nullptr)
     {

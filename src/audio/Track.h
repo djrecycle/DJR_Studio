@@ -2,6 +2,7 @@
 
 #include "AudioClip.h"
 #include "AutomationLane.h"
+#include "ChannelEq.h"
 #include "ChannelSettings.h"
 #include "plugins/PluginChain.h"
 
@@ -159,6 +160,12 @@ public:
     ChannelSettings& getChannelSettings() noexcept;
     const ChannelSettings& getChannelSettings() const noexcept;
 
+    /** The three-band channel EQ, after the inserts and before the fader. */
+    ChannelEq& getChannelEq() noexcept;
+    const ChannelEq& getChannelEq() const noexcept;
+    /** The rate prepare() last ran at - what the EQ curve is drawn for. */
+    double getPreparedSampleRate() const noexcept { return preparedSampleRate.load(std::memory_order_acquire); }
+
     /** Prepares the plugin on the calling thread, then swaps it in under a short lock. */
     void addPlugin(std::unique_ptr<juce::AudioPluginInstance> plugin);
     void clearPlugins();
@@ -287,6 +294,7 @@ private:
     juce::String name;
     TrackKind trackKind;
     ChannelSettings channelSettings;
+    ChannelEq channelEq;
     juce::SpinLock pluginLock;
     PluginChain pluginChain;
     juce::SpinLock instrumentLock;

@@ -39,6 +39,7 @@
 #include "ui/DJRLookAndFeel.h"
 #include "audio/BlockSplitter.h"
 #include "ui/MixerChannelStrip.h"
+#include "audio/ChannelEq.h"
 
 #include <algorithm>
 #include <iostream>
@@ -6264,6 +6265,166 @@ int main()
               "inserts: a longer chain shows the first three and folds the rest into one row");
         check(Strip::insertRowsFor(-1) == std::vector<int> { add },
               "inserts: a nonsense count is treated as empty");
+    }
+
+    // --- Channel EQ -----------------------------------------------------------
+    // Three bands after the inserts. Flat or off it must not touch a single
+    // sample; turned up, the sound has to do what the curve says it does.
+    {
+        constexpr double rate = 48000.0;
+
+        const auto sineGainDb = [] (djr::ChannelEq& eq, double hz)
+        {
+            constexpr int length = 48000;
+            juce::AudioBuffer<float> buffer(2, length);
+
+            for (int i = 0; i < length; ++i)
+            {
+                const auto value = 0.25f * static_cast<float>(std::sin(juce::MathConstants<double>::twoPi * hz * i / rate));
+                buffer.setSample(0, i, value);
+                buffer.setSample(1, i, value);
+            }
+
+            const auto before = buffer.getRMSLevel(0, length / 2, length / 2);
+
+            for (int start = 0; start < length; start += 512)
+            {
+                juce::AudioBuffer<float> block(buffer.getArrayOfWritePointers(), 2, start, juce::jmin(512, length - start));
+                eq.process(block);
+            }
+
+            // The second half only: the filters have long settled by then.
+            const auto after = buffer.getRMSLevel(0, length / 2, length / 2);
+            return juce::Decibels::gainToDecibels(after / before);
+        };
+
+        {
+            djr::ChannelEq eq;
+            eq.prepare(rate);
+            check(eq.getSettings().isNeutral() && eq.getSettings().enabled,
+                  "eq: a new channel EQ is on and flat");
+
+            juce::AudioBuffer<float> buffer(2, 256);
+            juce::Random random(7);
+
+            for (int channel = 0; channel < 2; ++channel)
+                for (int i = 0; i < 256; ++i)
+                    buffer.setSample(channel, i, random.nextFloat() * 2.0f - 1.0f);
+
+            juce::AudioBuffer<float> original;
+            original.makeCopyOf(buffer);
+            eq.process(buffer);
+
+            auto identical = true;
+            for (int channel = 0; channel < 2; ++channel)
+                for (int i = 0; i < 256; ++i)
+                    identical = identical && buffer.getSample(channel, i) == original.getSample(channel, i);
+
+            check(identical, "eq: flat, the EQ leaves every sample exactly as it was");
+
+            auto boosted = eq.getSettings();
+            boosted.lowDb = 12.0f;
+            boosted.enabled = false;
+            eq.setSettings(boosted);
+            eq.process(buffer);
+
+            identical = true;
+            for (int channel = 0; channel < 2; ++channel)
+                for (int i = 0; i < 256; ++i)
+                    identical = identical && buffer.getSample(channel, i) == original.getSample(channel, i);
+
+            check(identical, "eq: switched off, a boosted EQ still passes the signal untouched");
+        }
+
+        djr::ChannelEq::Settings low;
+        low.lowDb = 6.0f;
+        check(std::abs(djr::ChannelEq::magnitudeDb(low, rate, 30.0) - 6.0f) < 0.5f
+                  && std::abs(djr::ChannelEq::magnitudeDb(low, rate, 10000.0)) < 0.2f,
+              "eq: the low shelf lifts the bass by its gain and leaves the treble alone");
+
+        djr::ChannelEq::Settings high;
+        high.highDb = -6.0f;
+        check(std::abs(djr::ChannelEq::magnitudeDb(high, rate, 18000.0) + 6.0f) < 1.0f
+                  && std::abs(djr::ChannelEq::magnitudeDb(high, rate, 100.0)) < 0.2f,
+              "eq: the high shelf cuts the treble and leaves the bass alone");
+
+        djr::ChannelEq::Settings mid;
+        mid.midDb = 9.0f;
+        mid.midHz = 2000.0f;
+        check(std::abs(djr::ChannelEq::magnitudeDb(mid, rate, 2000.0) - 9.0f) < 0.05f
+                  && djr::ChannelEq::magnitudeDb(mid, rate, 100.0) < 1.0f
+                  && djr::ChannelEq::magnitudeDb(mid, rate, 18000.0) < 1.5f,
+              "eq: the mid bell peaks at its frequency by its gain, and falls away either side");
+
+        {
+            djr::ChannelEq eq;
+            eq.prepare(rate);
+            djr::ChannelEq::Settings settings;
+            settings.midDb = 6.0f;
+            settings.midHz = 1000.0f;
+            eq.setSettings(settings);
+            const auto measured = sineGainDb(eq, 1000.0);
+            check(std::abs(measured - 6.0f) < 0.2f,
+                  "eq: a 1 kHz tone through +6 dB at 1 kHz really comes out 6 dB louder");
+
+            settings.midDb = 0.0f;
+            settings.lowDb = -12.0f;
+            eq.setSettings(settings);
+            const auto lowCut = sineGainDb(eq, 40.0);
+            check(lowCut < -10.0f && lowCut > -12.5f,
+                  "eq: a change made while running reaches the audio on the next block");
+        }
+
+        {
+            djr::ChannelEq eq;
+            djr::ChannelEq::Settings wild;
+            wild.lowDb = 40.0f;
+            wild.highDb = -99.0f;
+            wild.midHz = 5.0f;
+            eq.setSettings(wild);
+            const auto stored = eq.getSettings();
+            check(stored.lowDb == djr::ChannelEq::maxGainDb && stored.highDb == djr::ChannelEq::minGainDb
+                      && stored.midHz == djr::ChannelEq::minMidHz,
+                  "eq: out-of-range settings are clamped, not stored as given");
+        }
+
+        {
+            djr::ChannelEq saved;
+            djr::ChannelEq::Settings settings;
+            settings.enabled = false;
+            settings.lowDb = 3.5f;
+            settings.midDb = -4.0f;
+            settings.midHz = 2500.0f;
+            settings.highDb = 1.5f;
+            saved.setSettings(settings);
+
+            djr::ChannelEq restored;
+            restored.fromVar(juce::JSON::parse(juce::JSON::toString(saved.toVar())));
+            check(restored.getSettings() == settings, "eq: settings survive a save and reload");
+
+            djr::ChannelEq fromOld;
+            fromOld.setSettings(settings);
+            fromOld.fromVar(juce::var());
+            check(fromOld.getSettings() == djr::ChannelEq::Settings {},
+                  "eq: a project saved before the EQ existed opens flat and on");
+        }
+
+        {
+            djr::Project project;
+            djr::ProjectTrackState track;
+            djr::ChannelEq eq;
+            djr::ChannelEq::Settings settings;
+            settings.highDb = -3.0f;
+            eq.setSettings(settings);
+            track.channelEq = eq.toVar();
+            project.tracks.add(track);
+
+            djr::Project reopened;
+            reopened.fromVar(project.toVar());
+            djr::ChannelEq back;
+            back.fromVar(reopened.tracks.isEmpty() ? juce::var() : reopened.tracks[0].channelEq);
+            check(back.getSettings() == settings, "eq: the project file carries each track's EQ");
+        }
     }
 
     std::cout << (failures == 0 ? "\nAll engine tests passed\n"

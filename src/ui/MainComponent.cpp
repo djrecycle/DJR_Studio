@@ -2598,6 +2598,7 @@ void MainComponent::synchroniseProjectState()
         state.inputChannel = track->getInputChannel();
         state.inputStereo = track->isInputStereo();
         state.channelSettings = track->getChannelSettings().toVar();
+        state.channelEq = track->getChannelEq().toVar();
 
         // Only when it is the thing making the sound, and only when it has been
         // shaped: a track with an instrument loaded has no preview to describe.
@@ -3166,6 +3167,7 @@ void MainComponent::restoreRoutingFromProject()
             restored->setInputChannel(projectTrack.inputChannel);
             restored->setInputStereo(projectTrack.inputStereo);
             restored->getChannelSettings().fromVar(projectTrack.channelSettings);
+            restored->getChannelEq().fromVar(projectTrack.channelEq);
 
             if (auto* midi = dynamic_cast<MidiTrack*>(restored))
                 midi->getPreviewSynth().fromVar(projectTrack.previewSynth);

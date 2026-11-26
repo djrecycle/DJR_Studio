@@ -28,7 +28,9 @@ MixerView::MixerView(Mixer& mixerToUse)
     : mixer(mixerToUse)
 {
     viewport.setViewedComponent(&holder, false);
-    viewport.setScrollBarsShown(false, true, false, true);
+    // Vertical too, when the panel is shorter than a strip can be: inserts,
+    // EQ and sends added rows, and squeezed they stacked onto each other.
+    viewport.setScrollBarsShown(true, true);
     viewport.setScrollBarThickness(8);
     addAndMakeVisible(viewport);
 
@@ -84,6 +86,13 @@ void MixerView::timerCallback()
     // The header used to be painted only when the strips were rebuilt, so it
     // said "-inf" through a whole song. Only its own row is repainted, and only
     // when the text it shows has changed.
+    // A send or insert added on a strip changes how tall it needs to be.
+    if (getStripsMinimumHeight() != laidOutMinimumHeight)
+    {
+        resized();
+        holder.resized();
+    }
+
     const auto readout = getMasterReadout();
 
     if (readout == lastMasterReadout || isCoveredByPanelAbove(*this))
@@ -93,13 +102,24 @@ void MixerView::timerCallback()
     repaint(getLocalBounds().withHeight(mixerHeaderHeight));
 }
 
+int MixerView::getStripsMinimumHeight() const
+{
+    auto minimum = 1;
+
+    for (auto* strip : holder.strips)
+        minimum = juce::jmax(minimum, strip->getMinimumHeight());
+
+    return minimum;
+}
+
 void MixerView::resized()
 {
     viewport.setBounds(getLocalBounds().withTrimmedTop(mixerHeaderHeight).reduced(6, 5));
 
     const auto count = holder.strips.size();
-    holder.setSize(juce::jmax(viewport.getWidth(), count * (stripWidth + stripGap)),
-                   juce::jmax(1, viewport.getHeight() - 7));
+    laidOutMinimumHeight = getStripsMinimumHeight();
+    holder.setSize(juce::jmax(1, count * (stripWidth + stripGap)),
+                   juce::jmax(laidOutMinimumHeight, viewport.getHeight() - 9));
 }
 
 void MixerView::setDeviceInputCount(int count)
@@ -141,6 +161,12 @@ void MixerView::refreshStrips()
                     if (safeThis != nullptr && safeThis->createBusForSendCallback)
                         safeThis->createBusForSendCallback(i, slot);
                 });
+            };
+
+            strip->onEqChanged = [this]
+            {
+                if (automationChangedCallback)
+                    automationChangedCallback();
             };
 
             strip->onAddInsert = [this, i] { if (insertCallbacks.add) insertCallbacks.add(i); };
