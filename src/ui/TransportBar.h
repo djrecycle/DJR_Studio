@@ -7,6 +7,7 @@
 #include "audio/AudioEngine.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <array>
 #include <functional>
 
 namespace djr
@@ -35,6 +36,13 @@ public:
     */
     void setTimeSignatureChangeCallback(std::function<void(int, int)> callback);
     void setUndoCallback(std::function<void()> callback);
+
+    /** The panel shortcuts, left to right. */
+    enum class PanelShortcut { playlist, editor, mixer, plugins, insertChain, count };
+    /** A shortcut was clicked: show the panel if hidden, hide it if shown. */
+    void setPanelShortcutCallback(std::function<void(PanelShortcut)> callback);
+    /** Which panels are open, so each shortcut lights up while its panel is. */
+    void setPanelShortcutState(PanelShortcut shortcut, bool panelOpen);
     void setRedoCallback(std::function<void()> callback);
     void setMetronomeToggleCallback(std::function<void()> callback);
     /** Lights the metronome button while the click is on. */
@@ -117,6 +125,19 @@ private:
     HitAreaButton snapButton { "Snap grid" };
     IconChipButton undoButton { "Undo", Icon::undo };
     IconChipButton redoButton { "Redo", Icon::redo };
+    /** One per PanelShortcut, in its order: the View menu's panel items, one
+        click away instead of two.
+    */
+    IconChipButton playlistShortcut { "Playlist", Icon::lines };
+    IconChipButton editorShortcut { "Editor", Icon::notes };
+    IconChipButton mixerShortcut { "Mixer", Icon::waveform };
+    IconChipButton pluginsShortcut { "Plugins", Icon::plug };
+    IconChipButton insertChainShortcut { "Insert Chain", Icon::panel };
+    std::array<IconChipButton*, static_cast<size_t>(PanelShortcut::count)> panelShortcuts {
+        &playlistShortcut, &editorShortcut, &mixerShortcut, &pluginsShortcut, &insertChainShortcut
+    };
+    std::function<void(PanelShortcut)> panelShortcutCallback;
+    juce::Rectangle<int> panelPod;
 
     juce::Rectangle<int> transportPod;
     juce::Rectangle<int> tempoPod;
