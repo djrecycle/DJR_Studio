@@ -389,6 +389,7 @@ juce::String Localisation::getIndonesianTranslations()
         + "\"EQ on\" = \"EQ nyala\"\n"
         + "\"Reset to flat\" = \"Kembalikan ke datar\"\n"
         + "\"Channel EQ - click: edit - dot: on/off - right-click: reset\" = \"EQ channel - klik: edit - titik: nyala/mati - klik kanan: reset\"\n"
+        + "\" - show / hide\" = \" - tampilkan / sembunyikan\"\n"
         + "\"Send to\" = \"Kirim ke\"\n"
         + "\"Pre-fader (ignores the fader)\" = \"Pre-fader (tidak ikut fader)\"\n"
         + "\"Reset to 0 dB\" = \"Kembalikan ke 0 dB\"\n"

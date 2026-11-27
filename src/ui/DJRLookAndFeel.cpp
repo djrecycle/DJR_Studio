@@ -144,12 +144,16 @@ juce::Font DJRLookAndFeel::getPopupMenuFont()
 
 void DJRLookAndFeel::drawPopupMenuBackground(juce::Graphics& g, int width, int height)
 {
-    const auto bounds = juce::Rectangle<float>(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height)).reduced(0.5f);
+    // Every pixel, corners included. A popup menu is its own desktop window,
+    // and JUCE makes it opaque because this background colour is: the corners
+    // a rounded fill left out were never painted at all, and showed whatever
+    // the X server had there - white or black specks on all four corners.
+    const auto bounds = juce::Rectangle<int>(0, 0, width, height);
 
     g.setColour(Theme::panel());
-    g.fillRoundedRectangle(bounds, 8.0f);
+    g.fillRect(bounds);
     g.setColour(Theme::outlineStrong());
-    g.drawRoundedRectangle(bounds, 8.0f, 1.0f);
+    g.drawRect(bounds, 1);
 }
 
 juce::Rectangle<int> DJRLookAndFeel::getTooltipBounds(const juce::String& tipText,

@@ -31,6 +31,18 @@ namespace
     const juce::String pluginsPanelId = "plugins";
     const juce::String insertPanelId = "inserts";
     const juce::String samplePanelId = "sample";
+
+    /** JUCE builds every TooltipWindow opaque, which tells it nothing behind
+        the tip needs painting - but DJRLookAndFeel draws the tip with rounded
+        corners, so those corners showed black. It lives inside this window,
+        not on the desktop, so it can simply let the panel behind show through.
+    */
+    std::unique_ptr<juce::TooltipWindow> makeTooltipWindow(juce::Component& parent)
+    {
+        auto window = std::make_unique<juce::TooltipWindow>(&parent, 600);
+        window->setOpaque(false);
+        return window;
+    }
 }
 
 MainComponent::MainComponent()
@@ -45,7 +57,7 @@ MainComponent::MainComponent()
       preferencesDialog(audioEngine.getDeviceManager(), audioEngine)
 {
     juce::LookAndFeel::setDefaultLookAndFeel(&lookAndFeel);
-    tooltipWindow = std::make_unique<juce::TooltipWindow>(this, 600);
+    tooltipWindow = makeTooltipWindow(*this);
     audioFormats.registerBasicFormats();
 
     workspace.onResized = [this] { layoutWorkspace(); };
@@ -380,7 +392,7 @@ MainComponent::MainComponent()
     preferencesDialog.setScanRequestedCallback([this] { handleCommand(AppCommand::scanPlugins); });
     preferencesDialog.setTooltipsChangedCallback([this] (bool enabled)
     {
-        tooltipWindow = enabled ? std::make_unique<juce::TooltipWindow>(this, 600) : nullptr;
+        tooltipWindow = enabled ? makeTooltipWindow(*this) : nullptr;
     });
     preferencesDialog.setAutoScrollChangedCallback([this] (bool enabled)
     {
@@ -397,6 +409,19 @@ MainComponent::MainComponent()
     preferencesDialog.setTypingKeyboardState(typingKeyboard.isEnabled(),
                                              typingKeyboard.getKeymap() == TypingKeyboard::Keymap::simple ? 1 : 0,
                                              typingKeyboard.getBaseOctave());
+
+    // The header's panel shortcuts toggle exactly what View > Playlist and the
+    // rest toggle; refreshMenuState() lights them, via onPanelStateChanged.
+    transportBar.setPanelShortcutCallback([this] (TransportBar::PanelShortcut shortcut)
+    {
+        using Shortcut = TransportBar::PanelShortcut;
+        const auto& id = shortcut == Shortcut::playlist ? playlistPanelId
+                       : shortcut == Shortcut::editor   ? editorPanelId
+                       : shortcut == Shortcut::mixer    ? mixerPanelId
+                       : shortcut == Shortcut::plugins  ? pluginsPanelId
+                                                        : insertPanelId;
+        panelHost.togglePanel(id);
+    });
 
     mixerView.setTrackSelectedCallback([this] (int trackIndex) { selectTrack(trackIndex); });
     mixerView.setOpenChannelCallback([this] (int trackIndex) { openTrackPluginEditor(trackIndex); });
@@ -552,7 +577,16 @@ void MainComponent::buildDefaultPanelLayout(PanelHost& host, juce::Rectangle<int
 {
     // Familiar DAW tiling: playlist over editor on the left, plugin rack on the
     // right, mixer across the bottom. Every panel is free to move from here.
-    const auto mixerHeight = juce::jlimit(120, 220, area.getHeight() / 3);
+    //
+    // The mixer gets the height its strips need to show whole - EQ, inserts,
+    // fader, sends, M/S/R and the output - rather than a fixed third of the
+    // window: since the strips grew those rows, a third of a laptop screen cut
+    // them off at the sends. Playlist and editor share what is left, but
+    // never less than a usable 120 px each.
+    const auto mixerWanted = mixerView.getPreferredHeight() + Metrics::panelTitleHeight + 1;
+    const auto mixerCeiling = juce::jmax(120, area.getHeight() - 2 * 120 - 2 * gap);
+    const auto mixerHeight = juce::jlimit(120, mixerCeiling,
+                                          juce::jmax(juce::jlimit(120, 220, area.getHeight() / 3), mixerWanted));
     const auto rightWidth = juce::jlimit(200, 320, area.getWidth() / 4);
 
     auto remaining = area;
@@ -808,6 +842,13 @@ void MainComponent::refreshMenuState()
 
     // The header buttons follow the same state as the menu items.
     transportBar.setUndoState(state.canUndo, state.canRedo, state.undoName, state.redoName);
+
+    using Shortcut = TransportBar::PanelShortcut;
+    transportBar.setPanelShortcutState(Shortcut::playlist, state.playlistVisible);
+    transportBar.setPanelShortcutState(Shortcut::editor, state.editorVisible);
+    transportBar.setPanelShortcutState(Shortcut::mixer, state.mixerVisible);
+    transportBar.setPanelShortcutState(Shortcut::plugins, state.pluginsVisible);
+    transportBar.setPanelShortcutState(Shortcut::insertChain, state.insertChainVisible);
 }
 
 void MainComponent::syncBrowserPluginLibrary()

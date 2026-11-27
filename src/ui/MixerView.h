@@ -23,6 +23,11 @@ public:
     /** Passed down to every strip so the input menu matches the real device. */
     void setDeviceInputCount(int count);
 
+    /** How tall the view needs to be for every strip to show whole - its
+        header, padding and the tallest strip's minimum - without scrolling.
+    */
+    int getPreferredHeight() const;
+
     void setSelectedTrack(int trackIndex);
     void setTrackSelectedCallback(std::function<void(int)> callback);
     /** Fired when a strip creates or removes an automation lane. */

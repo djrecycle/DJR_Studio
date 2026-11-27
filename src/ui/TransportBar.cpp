@@ -225,6 +225,14 @@ TransportBar::TransportBar(AudioEngine& audioEngine)
         addAndMakeVisible(button);
     }
 
+    for (auto* button : panelShortcuts)
+    {
+        button->setIconInset(4.5f);
+        button->setTooltip(button->getName() + TRANS(" - show / hide"));
+        button->addListener(this);
+        addAndMakeVisible(button);
+    }
+
     transport.setLoopEnabled(patternMode);
     transport.setLoopRangeBeats(0.0, 16.0);
 
@@ -240,6 +248,9 @@ TransportBar::~TransportBar()
     };
 
     for (auto* button : buttons)
+        button->removeListener(this);
+
+    for (auto* button : panelShortcuts)
         button->removeListener(this);
 }
 
@@ -299,6 +310,9 @@ void TransportBar::paint(juce::Graphics& g)
     Icons::draw(g, Icon::caretDown, snapContent.removeFromLeft(8).toFloat().withSizeKeepingCentre(8.0f, 5.0f));
 
     drawPod(g, historyPod, Theme::panelAlt());
+
+    if (! panelPod.isEmpty())
+        drawPod(g, panelPod, Theme::panelAlt());
 
     // Master meter -----------------------------------------------------------
     drawPod(g, masterPod, Theme::panelAlt());
@@ -375,6 +389,27 @@ void TransportBar::resized()
     auto masterRow = masterPod.reduced(6, 0);
     masterRow.removeFromLeft(36 + 5);
     masterMeterArea = masterRow.removeFromLeft(masterMeterWidth).withSizeKeepingCentre(masterMeterWidth, 12);
+
+    // The panel shortcuts take what is left between undo/redo and the master
+    // meter - and step aside on a window too narrow for them, rather than
+    // sliding under the meter.
+    constexpr int shortcutSize = 23;
+    constexpr int shortcutGap = 3;
+    const auto count = static_cast<int>(panelShortcuts.size());
+    const auto podWidth = 10 + count * shortcutSize + (count - 1) * shortcutGap;
+    area.removeFromLeft(podGap);
+    area.removeFromRight(podGap);
+    const auto fits = area.getWidth() >= podWidth;
+
+    panelPod = fits ? podRow(area.removeFromLeft(podWidth)) : juce::Rectangle<int>();
+    auto shortcutRow = panelPod.reduced(5, 0);
+
+    for (auto* button : panelShortcuts)
+    {
+        button->setVisible(fits);
+        button->setBounds(shortcutRow.removeFromLeft(shortcutSize).withSizeKeepingCentre(shortcutSize, shortcutSize));
+        shortcutRow.removeFromLeft(shortcutGap);
+    }
 }
 
 void TransportBar::mouseDown(const juce::MouseEvent& event)
@@ -449,6 +484,17 @@ void TransportBar::mouseWheelMove(const juce::MouseEvent& event, const juce::Mou
 
 void TransportBar::buttonClicked(juce::Button* button)
 {
+    for (size_t i = 0; i < panelShortcuts.size(); ++i)
+    {
+        if (button == panelShortcuts[i])
+        {
+            if (panelShortcutCallback)
+                panelShortcutCallback(static_cast<PanelShortcut>(i));
+
+            return;
+        }
+    }
+
     if (button == &playButton)
         transport.togglePlayStop();
     else if (button == &stopButton)
@@ -601,6 +647,19 @@ void TransportBar::setMetronomeActive(bool isActive)
 void TransportBar::setTimeSignatureChangeCallback(std::function<void(int, int)> callback)
 {
     timeSignatureChangeCallback = std::move(callback);
+}
+
+void TransportBar::setPanelShortcutCallback(std::function<void(PanelShortcut)> callback)
+{
+    panelShortcutCallback = std::move(callback);
+}
+
+void TransportBar::setPanelShortcutState(PanelShortcut shortcut, bool panelOpen)
+{
+    const auto index = static_cast<size_t>(shortcut);
+
+    if (index < panelShortcuts.size())
+        panelShortcuts[index]->setHighlighted(panelOpen);
 }
 
 void TransportBar::setUndoCallback(std::function<void()> callback)

@@ -102,6 +102,13 @@ void MixerView::timerCallback()
     repaint(getLocalBounds().withHeight(mixerHeaderHeight));
 }
 
+int MixerView::getPreferredHeight() const
+{
+    // Header, the viewport's 5 px inset top and bottom, and the strips with
+    // the few pixels resized() keeps clear under them.
+    return mixerHeaderHeight + 10 + getStripsMinimumHeight() + 9;
+}
+
 int MixerView::getStripsMinimumHeight() const
 {
     auto minimum = 1;
