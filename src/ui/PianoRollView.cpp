@@ -249,6 +249,28 @@ void PianoRollView::paint(juce::Graphics& g)
                                             : juce::Colour::fromString("ffc79bff"));
             g.drawRoundedRectangle(noteBounds.toFloat().reduced(0.5f), 2.0f,
                                    isNoteSelected(i) ? 1.8f : 1.0f);
+
+            // The note's own name written on it, as FL does, so a part can be
+            // read without tracing every note back to the keyboard. Same
+            // spelling as the keyboard labels; left out when the note is too
+            // short or the rows too thin for the text to be legible.
+            if (keyHeight >= 8)
+            {
+                const auto label = juce::MidiMessage::getMidiNoteName(notes[i].pitch, true, true, 3);
+                const auto font = Theme::mono(juce::jmin(10.0f, static_cast<float>(keyHeight - 2)));
+
+                // A note that starts left of the view keeps its name at the
+                // visible edge, instead of scrolling it out of sight.
+                const auto textArea = noteBounds.withLeft(juce::jmax(noteBounds.getX(), keyboardWidth))
+                                                .reduced(3, 0);
+
+                if (juce::GlyphArrangement::getStringWidth(font, label) <= static_cast<float>(textArea.getWidth()))
+                {
+                    g.setFont(font);
+                    g.setColour(notes[i].muted ? Theme::mutedText() : Theme::text().withAlpha(0.92f));
+                    g.drawText(label, textArea, juce::Justification::centredLeft, false);
+                }
+            }
         }
     }
 
